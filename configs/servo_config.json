@@ -1,0 +1,202 @@
+{
+  "m1_ch0": {
+    "name": "Left Eye Focus",
+    "maestro": 1,
+    "channel": 0,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Eye Focus",
+    "group_type": "Same",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m1_ch1": {
+    "name": "Right Eye Focus",
+    "maestro": 1,
+    "channel": 1,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Eye Focus",
+    "group_type": "Same",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m1_ch2": {
+    "name": "Left Eyebrow",
+    "maestro": 1,
+    "channel": 2,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Eyebrow",
+    "group_type": "Same",
+    "control_type": "Analog Button",
+    "control_action": "control"
+  },
+  "m1_ch3": {
+    "name": "Right Eyebrow",
+    "maestro": 1,
+    "channel": 3,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Eyebrow",
+    "group_type": "Same",
+    "control_type": "Analog Button",
+    "control_action": "control"
+  },
+  "m1_ch4": {
+    "name": "Left Eye Tilt",
+    "maestro": 1,
+    "channel": 4,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Eye Tilt",
+    "group_type": "Invert",
+    "control_type": "Stick",
+    "control_action": "control",
+    "min": 892,
+    "max": 2020
+  },
+  "m1_ch5": {
+    "name": "Right Eye Tilt",
+    "maestro": 1,
+    "channel": 5,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Eye Tilt",
+    "group_type": "Invert",
+    "control_type": "Stick",
+    "control_action": "control",
+    "min": 992,
+    "max": 2000
+  },
+  "m1_ch6": {
+    "name": "Head Pan",
+    "maestro": 1,
+    "channel": 6,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Head Pan/Tilt",
+    "group_type": "Stick",
+    "control_type": "Stick",
+    "control_action": "control"
+  },
+  "m1_ch7": {
+    "name": "Head Tilt",
+    "maestro": 1,
+    "channel": 7,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Head Pan/Tilt",
+    "group_type": "Stick",
+    "control_type": "Stick",
+    "control_action": "control",
+    "min": 798,
+    "max": 1800
+  },
+  "m1_ch8": {
+    "name": "Neck Lift",
+    "maestro": 1,
+    "channel": 8,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "",
+    "group_type": "",
+    "control_type": "Button",
+    "control_action": "trigger toggle",
+    "min": 976
+  },
+  "m2_ch0": {
+    "name": "Left Arm Raise",
+    "maestro": 2,
+    "channel": 0,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Arm Raise",
+    "group_type": "Same",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m2_ch1": {
+    "name": "Right Arm Raise",
+    "maestro": 2,
+    "channel": 1,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Arm Raise",
+    "group_type": "Same",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m2_ch2": {
+    "name": "Left Arm Out",
+    "maestro": 2,
+    "channel": 2,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Arm Extend",
+    "group_type": "Invert",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m2_ch3": {
+    "name": "Right Arm Out",
+    "maestro": 2,
+    "channel": 3,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Arm Extend",
+    "group_type": "Invert",
+    "control_type": "Button",
+    "control_action": "trigger"
+  },
+  "m2_ch4": {
+    "name": "Left Wrist",
+    "maestro": 2,
+    "channel": 4,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Wrist",
+    "group_type": "Invert",
+    "control_type": "Stick",
+    "control_action": "control"
+  },
+  "m2_ch5": {
+    "name": "Right Wrist",
+    "maestro": 2,
+    "channel": 5,
+    "type": "Servo",
+    "default_position": "centre",
+    "group": "Wrist",
+    "group_type": "Invert",
+    "control_type": "Stick",
+    "control_action": "control"
+  },
+  "m2_ch6": {
+    "name": "Left Hand Open",
+    "maestro": 2,
+    "channel": 6,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Hand",
+    "group_type": "Same",
+    "control_type": "Analog Button",
+    "control_action": "control"
+  },
+  "m2_ch7": {
+    "name": "Right Hand Open",
+    "maestro": 2,
+    "channel": 7,
+    "type": "Servo",
+    "default_position": "Min",
+    "group": "Hand",
+    "group_type": "Same",
+    "control_type": "Analog Button",
+    "control_action": "control"
+  },
+  "m1_ch10": {
+    "min": 1500
+  },
+  "m1_ch11": {
+    "min": 988
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "current": {
+    "websocket_url": "10.1.1.230:8765",
+    "esp32_cam_url": "http://10.1.1.10/stream",
+    "wave_detection": {
+      "sample_duration": 3,
+      "sample_rate": 5,
+      "confidence_threshold": 0.7,
+      "stand_down_time": 30
+    }
+  },
+  "defaults": {
+    "esp32_cam_url": "http://10.1.1.10/stream",
+    "websocket_url": "localhost:8765",
+    "wave_detection": {
+      "sample_duration": 3,
+      "sample_rate": 5,
+      "confidence_threshold": 0.7,
+      "stand_down_time": 30
+    }
+  }
+}

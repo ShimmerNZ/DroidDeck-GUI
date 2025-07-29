@@ -1,0 +1,28 @@
+{
+  "steam_controls": [
+    "A",
+    "B",
+    "X",
+    "Y",
+    "L1",
+    "R1",
+    "L2",
+    "R2",
+    "L3",
+    "R3",
+    "DPad Up",
+    "DPad Down",
+    "DPad Left",
+    "DPad Right",
+    "Left Stick X",
+    "Left Stick Y",
+    "Right Stick X",
+    "Right Stick Y",
+    "Left Touchpad",
+    "Right Touchpad"
+  ],
+  "nema_movements": [
+    "Arm Forward",
+    "Arm Backward"
+  ]
+}

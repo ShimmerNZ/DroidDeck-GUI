@@ -1,0 +1,40 @@
+{
+  "groups": {
+    "Eyebrow": [
+      "Left Eyebrow",
+      "Right Eyebrow"
+    ],
+    "Track": [
+      "Left Track",
+      "Right Track"
+    ],
+    "Arm Raise": [
+      "Left Arm Raise",
+      "Right Arm Raise"
+    ],
+    "Eye Focus": [
+      "Left Eye Focus",
+      "Right Eye Focus"
+    ]
+  },
+  "emotions": [
+    "Happy",
+    "Sad",
+    "Curious",
+    "Excited",
+    "Angry",
+    "Surprised"
+  ],
+  "movements": {
+    "Left Eye Focus": "maestro 1 channel 0",
+    "Right Eye Focus": "maestro 1 channel 1",
+    "Left Eyebrow": "maestro 1 channel 2",
+    "Right Eyebrow": "maestro 1 channel 3",
+    "Left Track": "maestro 1 channel 4",
+    "Right Track": "maestro 1 channel 5",
+    "Left Arm Raise": "maestro 1 channel 6",
+    "Right Arm Raise": "maestro 1 channel 7",
+    "toggle Lights": "maestro 1 channel 8",
+    "toggle Sound": "maestro 1 channel 9"
+  }
+}
