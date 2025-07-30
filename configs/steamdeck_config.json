@@ -1,7 +1,7 @@
 {
   "current": {
     "websocket_url": "10.1.1.230:8765",
-    "esp32_cam_url": "http://10.1.1.10/stream",
+    "esp32_cam_url": "http://10.1.1.199:8081/stream",
     "wave_detection": {
       "sample_duration": 3,
       "sample_rate": 5,

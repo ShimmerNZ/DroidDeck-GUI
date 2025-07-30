@@ -804,7 +804,9 @@ class CameraFeedScreen(QWidget):
         self.last_sample_time = 0
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.tracking_enabled = False
-        self.cap = cv2.VideoCapture(0)
+        
+        self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
+
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self.timer = QTimer()
@@ -870,7 +872,7 @@ class CameraFeedScreen(QWidget):
 
     def reconnect_stream(self):
         self.cap.release()
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
         self.stats_label.setText("Stream Stats: Reconnected")
 
     def toggle_tracking(self):
