@@ -470,47 +470,39 @@ class HealthScreen(QWidget):
 
 
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_stats)
-        self.timer.start(5000)
+        self.websocket.textMessageReceived.connect(self.handle_telemetry)
 
-    def update_stats(self):
-        timestamp = time.time()
-        voltage = round(random.uniform(6.5, 15.5), 2)
-        current = round(random.uniform(0.5, 100.0), 2)
-        cpu = psutil.cpu_percent()
-        mem = psutil.virtual_memory().percent
-        temp = round(random.uniform(40.0, 60.0), 1)
-        fps = random.randint(15, 30)
-        res = "640x480"
-        latency = random.randint(50, 150)
-        df_connected = random.choice([True, False])
-        df_files = random.randint(0, 100)
-        maestro1_connected = random.choice([True, False])
-        maestro2_connected = random.choice([True, False])
-        maestro1_channels = random.randint(0, 18)
-        maestro2_channels = random.randint(0, 18)
 
-        self.cpu_label.setText(f"CPU: {cpu}%")
-        self.mem_label.setText(f"Memory: {mem}%")
-        self.temp_label.setText(f"Temp: {temp}°C")
-        self.stream_label.setText(f"Stream: {fps} FPS, {res}, {latency}ms")
-        self.dfplayer_label.setText(f"DFPlayer: {'Connected' if df_connected else 'Disconnected'}, {df_files} files")
-        self.maestro1_label.setText(f"Maestro 1: {'Connected' if maestro1_connected else 'Disconnected'}, {maestro1_channels} channels")
-        self.maestro2_label.setText(f"Maestro 2: {'Connected' if maestro2_connected else 'Disconnected'}, {maestro2_channels} channels")
+    def handle_telemetry(self, message):
+        try:
+            data = json.loads(message)
+            if data.get("type") != "telemetry":
+                return
 
-        if not self.time_data:
-            self.start_time = timestamp
-        self.time_data.append(timestamp - self.start_time)
+            self.cpu_label.setText(f"CPU: {data['cpu']}%")
+            self.mem_label.setText(f"Memory: {data['memory']}%")
+            self.temp_label.setText(f"Temp: {data['temperature']}°C")
 
-        self.voltage_data.append(voltage)
-        self.current_data.append(current)
-        if len(self.time_data) > 60:
-            self.time_data = self.time_data[-60:]
-            self.voltage_data = self.voltage_data[-60:]
-            self.current_data = self.current_data[-60:]
-        self.voltage_curve.setData(self.time_data, self.voltage_data)
-        self.current_plot.setData(self.time_data, self.current_data)
+            stream = data.get("stream", {})
+            self.stream_label.setText(
+                f"Stream: {stream.get('fps', 0)} FPS, {stream.get('resolution', '0x0')}, {stream.get('latency', 0)}ms"
+            )
 
+            df = data.get("dfplayer", {})
+            self.dfplayer_label.setText(
+                f"DFPlayer: {'Connected' if df.get('connected') else 'Disconnected'}, {df.get('file_count', 0)} files"
+            )
+
+            m1 = data.get("maestro1", {})
+            m2 = data.get("maestro2", {})
+            self.maestro1_label.setText(
+                f"Maestro 1: {'Connected' if m1.get('connected') else 'Disconnected'}, {m1.get('channels', 0)} channels"
+            )
+            self.maestro2_label.setText(
+                f"Maestro 2: {'Connected' if m2.get('connected') else 'Disconnected'}, {m2.get('channels', 0)} channels"
+            )
+        except Exception as e:
+            print(f"Telemetry parse error: {e}")
     def send_failsafe(self):
         self.websocket.sendTextMessage(json.dumps({"type": "failsafe"}))
 
@@ -804,9 +796,7 @@ class CameraFeedScreen(QWidget):
         self.last_sample_time = 0
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.tracking_enabled = False
-        
         self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
-
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self.timer = QTimer()
@@ -873,6 +863,7 @@ class CameraFeedScreen(QWidget):
     def reconnect_stream(self):
         self.cap.release()
         self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
+
         self.stats_label.setText("Stream Stats: Reconnected")
 
     def toggle_tracking(self):
