@@ -358,9 +358,15 @@ class DynamicHeader(QFrame):
 
 
 class HealthScreen(QWidget):
-    def __init__(self, websocket):
+    def __init__(self):
         super().__init__()
-        self.websocket = websocket
+        self.setStyleSheet("background-color: #1e1e1e; color: white;")
+        self.setFixedWidth(1180)
+        self.config_path = "configs/steamdeck_config.json"
+        self.websocket = None
+
+        self.load_telemetry_websocket()
+
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         
         self.graph_widget = pg.PlotWidget()
@@ -473,15 +479,41 @@ class HealthScreen(QWidget):
         self.websocket.textMessageReceived.connect(self.handle_telemetry)
 
 
+    def load_telemetry_websocket(self):
+        try:
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
+            url = config.get("current", {}).get("telemetry_websocket_url", "localhost:8765")
+            if not url.startswith("ws://"):
+                url = f"ws://{url}"
+            self.websocket = QWebSocket()
+            self.websocket.textMessageReceived.connect(self.handle_telemetry)
+            self.websocket.open(QUrl(url))
+
+            self.websocket.error.connect(lambda err: print(f"[ERROR] WebSocket error: {err}"))
+            print(f"[ERROR] Failed to load telemetry WebSocket: {url}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to load telemetry WebSocket: {e}")
+
+
+
     def handle_telemetry(self, message):
+
+
+        print(f"[DEBUG] Received telemetry message: {message}")  # Debug print
+
+
         try:
             data = json.loads(message)
-            if data.get("type") != "telemetry":
-                return
+            if data.get("type") == "telemetry":
+                cpu = data.get("cpu", "--")
+                mem = data.get("memory", "--")
+                temp = data.get("temperature", "--")
+                self.cpu_label.setText(f"CPU: {cpu}%")
+                self.mem_label.setText(f"Memory: {mem}%")
+                self.temp_label.setText(f"Temperature: {temp}°C")
 
-            self.cpu_label.setText(f"CPU: {data['cpu']}%")
-            self.mem_label.setText(f"Memory: {data['memory']}%")
-            self.temp_label.setText(f"Temp: {data['temperature']}°C")
 
             stream = data.get("stream", {})
             self.stream_label.setText(
@@ -1124,7 +1156,6 @@ class HomeScreen(QWidget):
         }))
 
 
-
 class SettingsScreen(QWidget):
     def __init__(self):
         super().__init__()
@@ -1141,12 +1172,28 @@ class SettingsScreen(QWidget):
         self.grid = QGridLayout()
         self.grid.setVerticalSpacing(20)
 
+        # ESP32 Cam Stream URL
         self.url_label = QLabel("ESP32 Cam Stream URL:")
         self.url_label.setFont(font)
         self.url_input = QLineEdit()
         self.url_input.setFont(font)
         self.url_input.setPlaceholderText("http://10.1.1.10/stream")
 
+        # Telemetry WebSocket
+        self.telemetry_label = QLabel("Telemetry WebSocket URL:")
+        self.telemetry_label.setFont(font)
+        self.telemetry_input = QLineEdit()
+        self.telemetry_input.setFont(font)
+        self.telemetry_input.setPlaceholderText("localhost:8765")
+
+        # Control WebSocket
+        self.control_label = QLabel("Control WebSocket URL:")
+        self.control_label.setFont(font)
+        self.control_input = QLineEdit()
+        self.control_input.setFont(font)
+        self.control_input.setPlaceholderText("localhost:8766")
+
+        # Wave detection settings
         self.sample_duration_label = QLabel("Wave Sample Duration (sec):")
         self.sample_duration_label.setFont(font)
         self.sample_duration_spin = QSpinBox()
@@ -1177,27 +1224,26 @@ class SettingsScreen(QWidget):
         self.stand_down_spin.setFont(font)
         self.stand_down_spin.setRange(0, 300)
 
+        # Add widgets to grid
         self.grid.addWidget(self.url_label, 0, 0)
         self.grid.addWidget(self.url_input, 0, 1)
-        self.grid.addWidget(self.sample_duration_label, 1, 0)
-        self.grid.addWidget(self.sample_duration_spin, 1, 1)
-        self.grid.addWidget(self.sample_rate_label, 2, 0)
-        self.grid.addWidget(self.sample_rate_spin, 2, 1)
-        self.grid.addWidget(self.confidence_label, 3, 0)
-        self.grid.addWidget(self.confidence_slider, 3, 1)
-        self.grid.addWidget(self.confidence_value, 3, 2)
-        self.grid.addWidget(self.stand_down_label, 4, 0)
-        self.grid.addWidget(self.stand_down_spin, 4, 1)
-        self.ws_label = QLabel("WebSocket IP:Port:")
-        self.ws_label.setFont(font)
-        self.ws_input = QLineEdit()
-        self.ws_input.setFont(font)
-        self.ws_input.setPlaceholderText("localhost:8765")
-        self.grid.addWidget(self.ws_label, 5, 0)
-        self.grid.addWidget(self.ws_input, 5, 1)
+        self.grid.addWidget(self.telemetry_label, 1, 0)
+        self.grid.addWidget(self.telemetry_input, 1, 1)
+        self.grid.addWidget(self.control_label, 2, 0)
+        self.grid.addWidget(self.control_input, 2, 1)
+        self.grid.addWidget(self.sample_duration_label, 3, 0)
+        self.grid.addWidget(self.sample_duration_spin, 3, 1)
+        self.grid.addWidget(self.sample_rate_label, 4, 0)
+        self.grid.addWidget(self.sample_rate_spin, 4, 1)
+        self.grid.addWidget(self.confidence_label, 5, 0)
+        self.grid.addWidget(self.confidence_slider, 5, 1)
+        self.grid.addWidget(self.confidence_value, 5, 2)
+        self.grid.addWidget(self.stand_down_label, 6, 0)
+        self.grid.addWidget(self.stand_down_spin, 6, 1)
 
         self.layout.addLayout(self.grid)
 
+        # Buttons
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("💾 Update")
         self.save_btn.setFont(font)
@@ -1218,7 +1264,8 @@ class SettingsScreen(QWidget):
             current = config.get("current", {})
             wave = current.get("wave_detection", {})
             self.url_input.setText(current.get("esp32_cam_url", ""))
-            self.ws_input.setText(current.get("websocket_url", "localhost:8765"))
+            self.telemetry_input.setText(current.get("telemetry_websocket_url", "localhost:8765"))
+            self.control_input.setText(current.get("control_websocket_url", "localhost:8766"))
             self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
             self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
             self.confidence_slider.setValue(int(wave.get("confidence_threshold", 0.7) * 100))
@@ -1234,8 +1281,9 @@ class SettingsScreen(QWidget):
             config = {}
 
         config["current"] = {
-        "websocket_url": self.ws_input.text(),
             "esp32_cam_url": self.url_input.text(),
+            "telemetry_websocket_url": self.telemetry_input.text(),
+            "control_websocket_url": self.control_input.text(),
             "wave_detection": {
                 "sample_duration": self.sample_duration_spin.value(),
                 "sample_rate": self.sample_rate_spin.value(),
@@ -1247,13 +1295,12 @@ class SettingsScreen(QWidget):
         try:
             with open(self.config_path, "w") as f:
                 json.dump(config, f, indent=2)
-            QMessageBox.information(self, "Update", "Wave detection configuration updated successfully.")
+            QMessageBox.information(self, "Update", "Configuration updated successfully.")
             app = QApplication.instance()
             if app:
                 for widget in app.allWidgets():
                     if hasattr(widget, "reload_wave_settings"):
                         widget.reload_wave_settings()
-
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
 
@@ -1408,7 +1455,7 @@ class MainWindow(QMainWindow):
         try:
             with open("configs/steamdeck_config.json", "r") as f:
                 config = json.load(f)
-            ws_url = config.get("current", {}).get("websocket_url", "localhost:8765")
+            ws_url = config.get("current", {}).get("control_websocket_url", "localhost:8766")
         except:
             ws_url = "localhost:8765"
         self.websocket.open(QUrl(f"ws://{ws_url}"))
@@ -1419,7 +1466,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.nav_buttons = {}
 
-        self.health_screen = HealthScreen(self.websocket)
+        self.health_screen = HealthScreen()
         self.servo_screen = ServoConfigScreen(self.websocket)
         self.camera_screen = CameraFeedScreen(self.websocket)
         self.controller_screen = ControllerConfigScreen(self.websocket)
