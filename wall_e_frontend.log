@@ -1,0 +1,32 @@
+2025-08-17 19:32:54,894 - __main__ - INFO - Loaded config: steamdeck from configs/steamdeck_config.json
+2025-08-17 19:32:54,900 - __main__ - INFO - Loaded config: servo from configs/servo_config.json
+2025-08-17 19:32:54,907 - __main__ - INFO - Loaded config: emotions from configs/emotion_buttons.json
+2025-08-17 19:32:54,915 - __main__ - INFO - Loaded config: controller from configs/controller_config.json
+2025-08-17 19:32:54,922 - __main__ - INFO - Loaded config: motion from configs/motion_config.json
+2025-08-17 19:32:54,928 - __main__ - INFO - Loaded config: movement from configs/movement_controls.json
+2025-08-17 19:32:55,178 - __main__ - INFO - Connecting to WebSocket: ws://10.1.1.230:8766
+2025-08-17 19:32:55,407 - __main__ - WARNING - Cannot send message - WebSocket not connected
+2025-08-17 19:32:55,551 - __main__ - ERROR - Camera restart failed: Failed to open camera: http://10.1.1.230:8081/stream
+2025-08-17 19:32:55,858 - __main__ - INFO - Switched to Home screen
+2025-08-17 19:32:55,859 - __main__ - INFO - WALL-E Control System initialized
+2025-08-17 19:32:55,970 - __main__ - ERROR - Camera error: Camera restart failed: Failed to open camera: http://10.1.1.230:8081/stream
+2025-08-17 19:32:56,032 - __main__ - WARNING - WebSocket disconnected
+2025-08-17 19:32:56,034 - __main__ - ERROR - WebSocket error: SocketError.ConnectionRefusedError
+2025-08-17 19:33:00,784 - __main__ - INFO - Reconnection attempt 1/10
+2025-08-17 19:33:00,905 - __main__ - WARNING - WebSocket disconnected
+2025-08-17 19:33:00,907 - __main__ - ERROR - WebSocket error: SocketError.ConnectionRefusedError
+2025-08-17 19:33:10,549 - __main__ - INFO - Reconnection attempt 2/10
+2025-08-17 19:33:10,628 - __main__ - WARNING - WebSocket disconnected
+2025-08-17 19:33:10,629 - __main__ - ERROR - WebSocket error: SocketError.ConnectionRefusedError
+2025-08-17 19:33:27,398 - __main__ - INFO - Switched to ServoConfig screen
+2025-08-17 19:33:30,548 - __main__ - INFO - Reconnection attempt 3/10
+2025-08-17 19:33:30,596 - __main__ - WARNING - WebSocket disconnected
+2025-08-17 19:33:30,597 - __main__ - ERROR - WebSocket error: SocketError.ConnectionRefusedError
+2025-08-17 19:33:39,675 - __main__ - INFO - Switched to Controller screen
+2025-08-17 19:33:43,646 - __main__ - INFO - Switched to Settings screen
+2025-08-17 19:33:47,212 - __main__ - INFO - Switched to Scene screen
+2025-08-17 19:34:10,548 - __main__ - INFO - Reconnection attempt 4/10
+2025-08-17 19:34:10,636 - __main__ - WARNING - WebSocket disconnected
+2025-08-17 19:34:10,637 - __main__ - ERROR - WebSocket error: SocketError.ConnectionRefusedError
+2025-08-17 19:34:11,769 - __main__ - INFO - Application closing...
+2025-08-17 19:34:11,834 - __main__ - INFO - Application exited normally

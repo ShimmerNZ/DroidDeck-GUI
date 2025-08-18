@@ -1,4 +1,5 @@
-# WALL-E Optimized Frontend - Complete Implementation with Performance and Reliability Improvements
+
+# WALL-E Combined Frontend - HealthScreen + ServoConfigScreen with Maestro Dropdown
 import sys
 import json
 import time
@@ -11,287 +12,26 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QCheckBox, QMenuBar, QMenu, QButtonGroup, QSlider, QMessageBox
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap, QPainter, QPen, QColor, QPalette, QBrush, QIcon
-from PyQt6.QtCore import Qt, QTimer, QUrl, QRect, QSize, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, QRect, QSize
 from PyQt6.QtWebSockets import QWebSocket
 import pyqtgraph as pg
-
-# Optional imports for camera functionality
-try:
-    import cv2
-    import mediapipe as mp
-    CV2_AVAILABLE = True
-except ImportError:
-    print("Warning: OpenCV and/or MediaPipe not available. Camera functionality will be disabled.")
-    CV2_AVAILABLE = False
-    cv2 = None
-    mp = None
-
+import cv2
+import mediapipe as mp
 from collections import deque
-import weakref
-import gc
-from functools import lru_cache
-import os
 
-# PERFORMANCE IMPROVEMENT 1: Lazy initialization of MediaPipe
-mp_pose = None
-pose = None
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(
+    static_image_mode=False,
+    model_complexity=1,
+    enable_segmentation=False,
+    min_detection_confidence=0.75,  # Increase this to reduce false positives
+    min_tracking_confidence=0.9    # Same here
+)
 
-def init_mediapipe():
-    """Lazy initialization of MediaPipe to reduce startup time"""
-    global mp_pose, pose
-    if not CV2_AVAILABLE:
-        print("MediaPipe not available - camera tracking disabled")
-        return False
-    
-    if mp_pose is None:
-        mp_pose = mp.solutions.pose
-        pose = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            enable_segmentation=False,
-            min_detection_confidence=0.75,
-            min_tracking_confidence=0.9
-        )
-    return True
 
-# PERFORMANCE IMPROVEMENT 2: Configuration caching and singleton pattern
-class ConfigManager:
-    _instance = None
-    _configs = {}
-    _last_modified = {}
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    
-    @lru_cache(maxsize=32)
-    def get_config(self, config_path):
-        """Cached config loading with file modification time checking"""
-        try:
-            if not os.path.exists(config_path):
-                return {}
-            current_mtime = os.path.getmtime(config_path)
-            if (config_path not in self._last_modified or 
-                self._last_modified[config_path] < current_mtime):
-                with open(config_path, "r") as f:
-                    self._configs[config_path] = json.load(f)
-                self._last_modified[config_path] = current_mtime
-            return self._configs[config_path]
-        except Exception as e:
-            print(f"Failed to load config {config_path}: {e}")
-            return {}
-    
-    def clear_cache(self):
-        """Clear configuration cache"""
-        self.get_config.cache_clear()
-        self._configs.clear()
-        self._last_modified.clear()
-
-config_manager = ConfigManager()
-
-# MEMORY MANAGEMENT: Add cleanup utilities
-class MemoryManager:
-    @staticmethod
-    def cleanup_widgets(widget):
-        """Recursively cleanup widget resources"""
-        if hasattr(widget, 'children'):
-            for child in widget.children():
-                if hasattr(child, 'deleteLater'):
-                    child.deleteLater()
-        gc.collect()
-    
-    @staticmethod
-    def periodic_cleanup():
-        """Periodic memory cleanup"""
-        gc.collect()
-
-# RELIABILITY IMPROVEMENT 2: Error boundary decorator
-def error_boundary(func):
-    """Decorator to catch and log errors without crashing"""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            print(f"Error in {func.__name__}: {e}")
-            return None
-    return wrapper
-
-# PERFORMANCE IMPROVEMENT 3: Optimized image processing thread
-class ImageProcessingThread(QThread):
-    frame_processed = pyqtSignal(object)  # Emit processed frame
-    stats_updated = pyqtSignal(str)      # Emit stats string
-    
-    def __init__(self, esp32_cam_url):
-        super().__init__()
-        self.esp32_cam_url = esp32_cam_url
-        self.running = False
-        self.tracking_enabled = False
-        self.cap = None
-        self.hog = None
-        self.frame_skip_count = 0
-        self.target_fps = 15  # Reduced from 30+ for better performance
-        
-    def set_tracking_enabled(self, enabled):
-        self.tracking_enabled = enabled
-        
-    def run(self):
-        if not CV2_AVAILABLE:
-            print("Camera processing disabled - OpenCV not available")
-            return
-            
-        self.running = True
-        self.cap = cv2.VideoCapture(self.esp32_cam_url if self.esp32_cam_url else 0)
-        
-        # Optimize capture settings
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer lag
-        self.cap.set(cv2.CAP_PROP_FPS, self.target_fps)
-        
-        if self.tracking_enabled and self.hog is None:
-            self.hog = cv2.HOGDescriptor()
-            self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-            
-        frame_time = 1.0 / self.target_fps
-        last_process_time = time.time()
-        
-        while self.running:
-            current_time = time.time()
-            
-            # Frame rate limiting
-            if current_time - last_process_time < frame_time:
-                self.msleep(10)
-                continue
-                
-            ret, frame = self.cap.read()
-            if not ret:
-                self.msleep(50)
-                continue
-                
-            # Process every nth frame for performance
-            self.frame_skip_count += 1
-            if self.frame_skip_count % 2 == 0:  # Process every other frame
-                processed_frame = self.process_frame(frame)
-                self.frame_processed.emit(processed_frame)
-                
-            last_process_time = current_time
-            
-    def process_frame(self, frame):
-        """Optimized frame processing"""
-        if not CV2_AVAILABLE:
-            return {'frame': None, 'wave_detected': False, 'stats': 'OpenCV not available'}
-            
-        try:
-            # Resize frame for faster processing
-            height, width = frame.shape[:2]
-            if width > 640:
-                scale = 640 / width
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                frame = cv2.resize(frame, (new_width, new_height))
-                
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Only do expensive processing if tracking is enabled
-            wave_detected = False
-            if self.tracking_enabled:
-                if init_mediapipe():  # Lazy init with availability check
-                    if pose is not None:
-                        results = pose.process(frame_rgb)
-                        if results.pose_landmarks:
-                            lm = results.pose_landmarks.landmark
-                            rw = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
-                            rs = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                            if rw.y < rs.y:
-                                wave_detected = True
-                                cv2.putText(frame_rgb, 'Wave Detected', (50, 50), 
-                                          cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                
-                # HOG detection (less frequent)
-                if self.hog is not None and self.frame_skip_count % 5 == 0:
-                    boxes, weights = self.hog.detectMultiScale(frame_rgb, winStride=(8, 8))
-                    for (x, y, w, h) in boxes:
-                        cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            
-            return {
-                'frame': frame_rgb,
-                'wave_detected': wave_detected,
-                'stats': f"Processing: {frame_rgb.shape[1]}x{frame_rgb.shape[0]}"
-            }
-        except Exception as e:
-            print(f"Frame processing error: {e}")
-            return {'frame': frame_rgb if 'frame_rgb' in locals() else None, 'wave_detected': False, 'stats': f"Error: {e}"}
-    
-    def stop(self):
-        self.running = False
-        if self.cap:
-            self.cap.release()
-        self.quit()
-        self.wait()
-
-# RELIABILITY IMPROVEMENT 1: WebSocket connection management
-class WebSocketManager(QWebSocket):
-    def __init__(self, url, parent=None):
-        super().__init__(parent)
-        self.url = url
-        self.reconnect_timer = QTimer()
-        self.reconnect_timer.timeout.connect(self.attempt_reconnect)
-        self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 5
-        
-        # Connection state management
-        self.connected.connect(self.on_connected)
-        self.disconnected.connect(self.on_disconnected)
-        self.error.connect(self.on_error)
-        
-        self.connect_to_server()
-    
-    def connect_to_server(self):
-        """Attempt to connect to WebSocket server"""
-        try:
-            if not self.url.startswith("ws://") and not self.url.startswith("wss://"):
-                self.url = f"ws://{self.url}"
-            self.open(QUrl(self.url))
-        except Exception as e:
-            print(f"WebSocket connection error: {e}")
-            self.start_reconnect_timer()
-    
-    def on_connected(self):
-        print(f"WebSocket connected to {self.url}")
-        self.reconnect_attempts = 0
-        self.reconnect_timer.stop()
-    
-    def on_disconnected(self):
-        print(f"WebSocket disconnected from {self.url}")
-        self.start_reconnect_timer()
-    
-    def on_error(self, error):
-        print(f"WebSocket error: {error}")
-        self.start_reconnect_timer()
-    
-    def start_reconnect_timer(self):
-        if self.reconnect_attempts < self.max_reconnect_attempts:
-            delay = min(1000 * (2 ** self.reconnect_attempts), 30000)  # Exponential backoff
-            self.reconnect_timer.start(delay)
-        else:
-            print("Max reconnection attempts reached")
-    
-    def attempt_reconnect(self):
-        self.reconnect_attempts += 1
-        print(f"Attempting to reconnect ({self.reconnect_attempts}/{self.max_reconnect_attempts})")
-        self.connect_to_server()
-    
-    def send_safe(self, message):
-        """Safe message sending with connection check"""
-        if self.state() == QWebSocket.State.ConnectedState:
-            self.sendTextMessage(message)
-            return True
-        else:
-            print("WebSocket not connected, message not sent")
-            return False
-
-# Load configuration with improvements
 try:
-    config = config_manager.get_config("configs/steamdeck_config.json")
+    with open("configs/steamdeck_config.json", "r") as f:
+        config = json.load(f)
     wave_config = config.get("current", {})
     wave_settings = wave_config.get("wave_detection", {})
     ESP32_CAM_URL = wave_config.get("esp32_cam_url", "")
@@ -307,18 +47,28 @@ except Exception as e:
     CONFIDENCE_THRESHOLD = 0.7
     STAND_DOWN_TIME = 30
 
+
+
 # Load servo friendly names from config
-@error_boundary
 def load_servo_names():
-    config = config_manager.get_config("configs/servo_config.json")
-    return [v["name"] for v in config.values() if "name" in v and v["name"]]
+    try:
+        with open("configs/servo_config.json", "r") as f:
+            config = json.load(f)
+        return [v["name"] for v in config.values() if "name" in v and v["name"]]
+    except:
+        return []
 
-@error_boundary
+
 def load_movement_controls():
-    config = config_manager.get_config("configs/movement_controls.json")
-    return config.get("steam_controls", []), config.get("nema_movements", [])
+    try:
+        with open("configs/movement_controls.json", "r") as f:
+            config = json.load(f)
+        return config.get("steam_controls", []), config.get("nema_movements", [])
+    except Exception as e:
+        print(f"Failed to load movement controls: {e}")
+        return [], []
 
-STEAM_CONTROLS, NEMA_MOVEMENTS = load_movement_controls() or ([], [])
+STEAM_CONTROLS, NEMA_MOVEMENTS = load_movement_controls()
 
 
 class ControllerConfigScreen(QWidget):
@@ -332,21 +82,29 @@ class ControllerConfigScreen(QWidget):
         self.init_ui()
         self.load_config()
 
-    @error_boundary
     def load_motion_config(self):
-        config = config_manager.get_config("configs/motion_config.json")
-        self.groups = config.get("groups", {})
-        self.emotions = config.get("emotions", [])
-        self.movements = config.get("movements", {})
+        try:
+            with open("configs/motion_config.json", "r") as f:
+                config = json.load(f)
+            self.groups = config.get("groups", {})
+            self.emotions = config.get("emotions", [])
+            self.movements = config.get("movements", {})
+        except:
+            self.groups = {}
+            self.emotions = []
+            self.movements = {}
 
-    @error_boundary
     def get_maestro_channel_by_name(self, name):
-        config = config_manager.get_config("configs/servo_config.json")
-        for key, value in config.items():
-            if value.get("name") == name:
-                maestro = "Maestro 1" if key.startswith("m1") else "Maestro 2"
-                channel = key.split("_ch")[1]
-                return f"{maestro} / Ch {channel}"
+        try:
+            with open("configs/servo_config.json", "r") as f:
+                config = json.load(f)
+            for key, value in config.items():
+                if value.get("name") == name:
+                    maestro = "Maestro 1" if key.startswith("m1") else "Maestro 2"
+                    channel = key.split("_ch")[1]
+                    return f"{maestro} / Ch {channel}"
+        except:
+            pass
         return "Unknown"
 
     def init_ui(self):
@@ -444,12 +202,10 @@ class ControllerConfigScreen(QWidget):
         self.mapping_rows.append((control_cb, type_cb, movement_cb, maestro1_label, invert_cb1, maestro2_label, invert_cb2, remove_btn))
 
     def remove_mapping_row(self, index):
-        if index < len(self.mapping_rows) and self.mapping_rows[index]:
-            for widget in self.mapping_rows[index]:
-                widget.deleteLater()
-            self.mapping_rows[index] = None
+        for widget in self.mapping_rows[index]:
+            widget.deleteLater()
+        self.mapping_rows[index] = None
 
-    @error_boundary
     def save_config(self):
         config = {}
         for row in self.mapping_rows:
@@ -510,31 +266,34 @@ class ControllerConfigScreen(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
 
-    @error_boundary
     def load_config(self):
-        config = config_manager.get_config("configs/controller_config.json")
-        for control, settings in config.items():
-            control_type = settings.get("type")
-            movement = ""
-            invert1 = False
-            invert2 = False
-            if control_type == "control":
-                movement = settings["movement"]["name"]
-                invert1 = settings["movement"]["invert"]
-            elif control_type == "group_control":
-                movement = settings["group"]
-                invert1 = settings["channels"][0]["invert"]
-                invert2 = settings["channels"][1]["invert"]
-            elif control_type == "track_control":
-                movement = settings["group"]
-                invert1 = settings["tracks"]["left"]["invert"]
-                invert2 = settings["tracks"]["right"]["invert"]
-            elif control_type == "scene":
-                movement = settings["emotion"]
-            elif control_type == "toggle":
-                movement = settings["movement"]["name"]
-                invert1 = settings["movement"]["invert"]
-            self.add_mapping_row(control, control_type, movement, invert1, invert2)
+        try:
+            with open("configs/controller_config.json", "r") as f:
+                config = json.load(f)
+            for control, settings in config.items():
+                control_type = settings.get("type")
+                movement = ""
+                invert1 = False
+                invert2 = False
+                if control_type == "control":
+                    movement = settings["movement"]["name"]
+                    invert1 = settings["movement"]["invert"]
+                elif control_type == "group_control":
+                    movement = settings["group"]
+                    invert1 = settings["channels"][0]["invert"]
+                    invert2 = settings["channels"][1]["invert"]
+                elif control_type == "track_control":
+                    movement = settings["group"]
+                    invert1 = settings["tracks"]["left"]["invert"]
+                    invert2 = settings["tracks"]["right"]["invert"]
+                elif control_type == "scene":
+                    movement = settings["emotion"]
+                elif control_type == "toggle":
+                    movement = settings["movement"]["name"]
+                    invert1 = settings["movement"]["invert"]
+                self.add_mapping_row(control, control_type, movement, invert1, invert2)
+        except Exception as e:
+            print(f"Failed to load config: {e}")
 
 
 class BackgroundWidget(QWidget):
@@ -544,8 +303,7 @@ class BackgroundWidget(QWidget):
 
         # Background image
         self.background_label = QLabel(self)
-        if os.path.exists(background_path):
-            self.background_label.setPixmap(QPixmap(background_path).scaled(self.size()))
+        self.background_label.setPixmap(QPixmap(background_path).scaled(self.size()))
         self.background_label.setGeometry(0, 0, 1280, 800)
 
         # Overlay layout
@@ -557,7 +315,13 @@ class BackgroundWidget(QWidget):
 class DynamicHeader(QFrame):
     def __init__(self, screen_name):
         super().__init__()
+
+        self.setStyleSheet("background-color: #2e2e2e; color: white;")
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        
+
         
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -578,11 +342,11 @@ class DynamicHeader(QFrame):
 
         self.setLayout(layout)
 
+
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_values)
         self.timer.start(5000)
 
-    @error_boundary
     def update_values(self):
         voltage = round(random.uniform(6.5, 15.5), 2)
         wifi = random.randint(70, 100)
@@ -593,50 +357,28 @@ class DynamicHeader(QFrame):
         self.screen_label.setText(name)
 
 
-# PERFORMANCE IMPROVEMENT 4: Optimized UI components with reduced redraws
 class HealthScreen(QWidget):
-    def __init__(self, websocket):  # FIXED: Accept websocket as parameter
+    def __init__(self):
         super().__init__()
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.setFixedWidth(1180)
+        self.config_path = "configs/steamdeck_config.json"
+        self.websocket = None
+
+        self.load_telemetry_websocket()
+
+        self.setStyleSheet("background-color: #1e1e1e; color: white;")
         
-        # FIXED: Use the shared WebSocket instead of creating a new one
-        self.websocket = websocket
-        self.websocket.textMessageReceived.connect(self.handle_telemetry)
-        
-        # Reduce update frequency for better performance
-        self.last_telemetry_update = 0
-        self.telemetry_update_interval = 0.5  # 500ms instead of real-time
-        
-        self.init_ui_optimized()
-    
-    def init_ui_optimized(self):
-        """Optimized UI initialization with reduced complexity"""
-        # Simplified graph widget with better performance settings
         self.graph_widget = pg.PlotWidget()
         self.graph_widget.setBackground('#1e1e1e')
-        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)  # Reduced grid opacity
+        self.graph_widget.showGrid(x=True, y=True)
         self.graph_widget.setTitle("Voltage & Current", color='white', size='12pt')
         self.graph_widget.setLabel('left', 'Voltage (V)', color='white')
         self.graph_widget.setLabel('bottom', 'Time (s)', color='white')
         self.graph_widget.setYRange(0, 20)
         self.graph_widget.setLimits(yMin=0, yMax=16)
         self.graph_widget.setMouseEnabled(x=False, y=False)
-        
-        # Limit data points for better performance
-        self.max_data_points = 100
-        self.voltage_data = deque(maxlen=self.max_data_points)
-        self.current_data = deque(maxlen=self.max_data_points)
-        self.time_data = deque(maxlen=self.max_data_points)
-        
-        # Create curves with optimized settings
-        self.voltage_curve = self.graph_widget.plot(
-            pen=pg.mkPen(color='y', width=2), 
-            name="Voltage",
-            antialias=False  # Disable antialiasing for performance
-        )
-        
-        # Current curve setup
+        self.voltage_curve = self.graph_widget.plot(pen=pg.mkPen(color='y', width=2), name="Voltage")
         self.current_curve = pg.ViewBox()
         self.graph_widget.scene().addItem(self.current_curve)
         self.graph_widget.getPlotItem().showAxis('right')
@@ -646,38 +388,65 @@ class HealthScreen(QWidget):
         self.graph_widget.getPlotItem().getViewBox().sigResized.connect(
             lambda: self.current_curve.setGeometry(self.graph_widget.getPlotItem().getViewBox().sceneBoundingRect())
         )
-        self.current_plot = pg.PlotCurveItem(pen=pg.mkPen(color='c', width=2), antialias=False)
+        self.current_plot = pg.PlotCurveItem(pen=pg.mkPen(color='c', width=2))
         self.current_curve.addItem(self.current_plot)
+        self.voltage_data = []
+        self.current_data = []
+        self.time_data = []
+
+        self.cpu_label = QLabel("CPU: 0%")
         
-        # Status labels with fixed widths to prevent layout recalculation
-        self.status_labels = {}
-        label_configs = [
-            ("cpu", "CPU: 0%", 400),
-            ("mem", "Memory: 0%", 400),
-            ("temp", "Temp: 0°C", 400),
-            ("stream", "Stream: 0 FPS, 0x0, 0ms", 400),
-            ("dfplayer", "DFPlayer: Disconnected, 0 files", 400),
-            ("maestro1", "Maestro 1: Disconnected, 0 channels", 400),
-            ("maestro2", "Maestro 2: Disconnected, 0 channels", 400)
-        ]
-        
-        for key, text, width in label_configs:
-            label = QLabel(text)
+
+        self.mem_label = QLabel("Memory: 0%")
+        self.temp_label = QLabel("Temp: 0°C")
+        self.stream_label = QLabel("Stream: 0 FPS, 0x0, 0ms")
+        self.dfplayer_label = QLabel("DFPlayer: Disconnected, 0 files")
+        self.maestro1_label = QLabel("Maestro 1: Disconnected, 0 channels")
+        self.maestro2_label = QLabel("Maestro 2: Disconnected, 0 channels")
+        for label in [self.cpu_label, self.mem_label, self.temp_label, self.stream_label,
+                      self.dfplayer_label, self.maestro1_label, self.maestro2_label]:
             label.setFont(QFont("Arial", 20))
             label.setStyleSheet("color: lime;")
-            label.setFixedWidth(width)
-            self.status_labels[key] = label
-        
-        # Layout setup (simplified)
-        self.setup_layout()
-    
-    def setup_layout(self):
-        """Simplified layout setup"""
+ 
+        stats_layout = QGridLayout()
+        stats_layout.setVerticalSpacing(2)
+        stats_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        stats_layout.addWidget(self.cpu_label, 0, 0)
+        stats_layout.addWidget(self.mem_label, 1, 0)
+        stats_layout.addWidget(self.temp_label, 2, 0)
+        stats_layout.addWidget(self.stream_label, 3, 0)
+        stats_layout.addWidget(self.dfplayer_label, 0, 1)
+        stats_layout.addWidget(self.maestro1_label, 1, 1)
+        stats_layout.addWidget(self.maestro2_label, 2, 1)
+
+        self.cpu_label.setFixedWidth(400)
+        self.mem_label.setFixedWidth(400)
+        self.temp_label.setFixedWidth(400)
+        self.stream_label.setFixedWidth(400)
+        self.dfplayer_label.setFixedWidth(400)
+        self.maestro1_label.setFixedWidth(400)
+        self.maestro2_label.setFixedWidth(400)
+
+
+
+
+        self.failsafe_button = QPushButton("🔴 Failsafe")
+        self.failsafe_button.setFont(QFont("Arial", 16))
+        self.failsafe_button.setStyleSheet("background-color: red; color: white;")
+        self.failsafe_button.clicked.connect(self.send_failsafe)
+
         main_layout = QVBoxLayout()
-        
-        # Graph container
+
+        # Wrap graph widget in a QFrame with soft border
         graph_frame = QFrame()
-        graph_frame.setStyleSheet("border: 0px solid #444; border-radius: 10px; background-color: #1e1e1e;")
+        graph_frame.setStyleSheet("""
+            QFrame {
+                border: 0px solid #444;
+                border-radius: 10px;
+                background-color: #1e1e1e;
+            }
+        """)
         graph_layout = QHBoxLayout(graph_frame)
         graph_layout.setContentsMargins(5, 0, 5, 0)
         self.graph_widget.setFixedWidth(1025)
@@ -685,95 +454,90 @@ class HealthScreen(QWidget):
         graph_layout.addStretch()
         graph_layout.addWidget(self.graph_widget)
         graph_layout.addStretch()
-        
-        # Stats layout
-        stats_layout = QGridLayout()
-        stats_layout.setVerticalSpacing(2)
-        stats_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
-        # Add labels to grid
-        labels_list = list(self.status_labels.values())
-        for i, label in enumerate(labels_list[:4]):
-            stats_layout.addWidget(label, i, 0)
-        for i, label in enumerate(labels_list[4:]):
-            stats_layout.addWidget(label, i, 1)
-        
-        # Container widgets
+
         graph_container = QWidget()
         container_layout = QHBoxLayout(graph_container)
         container_layout.addStretch()
         container_layout.addWidget(graph_frame)
         container_layout.addStretch()
-        
+        main_layout.addWidget(graph_container)
+
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
         stats_container = QWidget()
         stats_container_layout = QHBoxLayout()
         stats_container_layout.addStretch()
         stats_container_layout.addLayout(stats_layout)
         stats_container_layout.addStretch()
         stats_container.setLayout(stats_container_layout)
-        
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-        
-        main_layout.addWidget(graph_container)
         main_layout.addWidget(stats_container)
+
+
         self.setLayout(main_layout)
-    
-    @error_boundary
+
+
+        self.timer = QTimer()
+        self.websocket.textMessageReceived.connect(self.handle_telemetry)
+
+
+    def load_telemetry_websocket(self):
+        try:
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
+            url = config.get("current", {}).get("telemetry_websocket_url", "localhost:8765")
+            if not url.startswith("ws://"):
+                url = f"ws://{url}"
+            self.websocket = QWebSocket()
+            self.websocket.textMessageReceived.connect(self.handle_telemetry)
+            self.websocket.open(QUrl(url))
+
+            self.websocket.error.connect(lambda err: print(f"[ERROR] WebSocket error: {err}"))
+            print(f"[ERROR] Failed to load telemetry WebSocket: {url}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to load telemetry WebSocket: {e}")
+
+
+
     def handle_telemetry(self, message):
-        """Optimized telemetry handling with rate limiting"""
-        current_time = time.time()
-        if current_time - self.last_telemetry_update < self.telemetry_update_interval:
-            return
-        
+
+
+        print(f"[DEBUG] Received telemetry message: {message}")  # Debug print
+
+
         try:
             data = json.loads(message)
             if data.get("type") == "telemetry":
-                # Batch update labels to reduce redraws
-                updates = {}
-                
                 cpu = data.get("cpu", "--")
                 mem = data.get("memory", "--")
                 temp = data.get("temperature", "--")
-                
-                updates["cpu"] = f"CPU: {cpu}%"
-                updates["mem"] = f"Memory: {mem}%"
-                updates["temp"] = f"Temperature: {temp}°C"
-                
-                stream = data.get("stream", {})
-                updates["stream"] = f"Stream: {stream.get('fps', 0)} FPS, {stream.get('resolution', '0x0')}, {stream.get('latency', 0)}ms"
-                
-                audio = data.get("audio_system", {})
-                updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}, {audio.get('file_count', 0)} files"
-                
-                m1 = data.get("maestro1", {})
-                m2 = data.get("maestro2", {})
-                updates["maestro1"] = f"Maestro 1: {'Connected' if m1.get('connected') else 'Disconnected'}, {m1.get('channels', 0)} channels"
-                updates["maestro2"] = f"Maestro 2: {'Connected' if m2.get('connected') else 'Disconnected'}, {m2.get('channels', 0)} channels"
-                
-                # Batch update all labels
-                for key, text in updates.items():
-                    if key in self.status_labels:
-                        self.status_labels[key].setText(text)
-                
-                # Update graph data (limited)
-                voltage = data.get("voltage", 0)
-                current = data.get("current", 0)
-                if voltage or current:
-                    self.voltage_data.append(voltage)
-                    self.current_data.append(current)
-                    self.time_data.append(current_time)
-                    
-                    # Update plots with limited data
-                    self.voltage_curve.setData(list(self.time_data), list(self.voltage_data))
-                    self.current_plot.setData(list(self.time_data), list(self.current_data))
-                
-                self.last_telemetry_update = current_time
-                
+                self.cpu_label.setText(f"CPU: {cpu}%")
+                self.mem_label.setText(f"Memory: {mem}%")
+                self.temp_label.setText(f"Temperature: {temp}°C")
+
+
+            stream = data.get("stream", {})
+            self.stream_label.setText(
+                f"Stream: {stream.get('fps', 0)} FPS, {stream.get('resolution', '0x0')}, {stream.get('latency', 0)}ms"
+            )
+
+            df = data.get("dfplayer", {})
+            self.dfplayer_label.setText(
+                f"DFPlayer: {'Connected' if df.get('connected') else 'Disconnected'}, {df.get('file_count', 0)} files"
+            )
+
+            m1 = data.get("maestro1", {})
+            m2 = data.get("maestro2", {})
+            self.maestro1_label.setText(
+                f"Maestro 1: {'Connected' if m1.get('connected') else 'Disconnected'}, {m1.get('channels', 0)} channels"
+            )
+            self.maestro2_label.setText(
+                f"Maestro 2: {'Connected' if m2.get('connected') else 'Disconnected'}, {m2.get('channels', 0)} channels"
+            )
         except Exception as e:
             print(f"Telemetry parse error: {e}")
-    
     def send_failsafe(self):
-        self.websocket.send_safe(json.dumps({"type": "failsafe"}))
+        self.websocket.sendTextMessage(json.dumps({"type": "failsafe"}))
+
 
 
 class ServoConfigScreen(QWidget):
@@ -790,26 +554,23 @@ class ServoConfigScreen(QWidget):
         self.maestro2_btn = QPushButton()
         self.maestro1_btn.setCheckable(True)
         self.maestro2_btn.setCheckable(True)
-        
-        # Load icons if they exist
-        if os.path.exists("icons/M1.png"):
-            self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            self.maestro1_btn.setIconSize(QSize(112,118))
-        if os.path.exists("icons/M2.png"):
-            self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-            self.maestro2_btn.setIconSize(QSize(112,118))
+        self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
+        self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
+        self.maestro1_btn.setIconSize(QSize(112,118))
+        self.maestro2_btn.setIconSize(QSize(112,118))
+
 
         self.maestro_group = QButtonGroup()
         self.maestro_group.setExclusive(True)
         self.maestro_group.addButton(self.maestro1_btn, 0)
         self.maestro_group.addButton(self.maestro2_btn, 1)
         self.maestro_group.idClicked.connect(self.update_grid)
-        self.maestro_group.idClicked.connect(self.update_maestro_icons)
+        self.maestro_group.idClicked.connect(self.update_maestro_icons)  
 
-        self.maestro1_btn.setChecked(True)
-        self.update_maestro_icons(0)
+        self.maestro1_btn.setChecked(True)  # <--- Add this line
+        self.update_maestro_icons(0)        # <--- And this line
 
-        # Add refresh button
+        #Add refresh button
         self.refresh_btn = QPushButton("Update")
         self.refresh_btn.setStyleSheet("""
             QPushButton {
@@ -826,35 +587,45 @@ class ServoConfigScreen(QWidget):
         self.refresh_btn.clicked.connect(self.reload_servo_config)
         self.refresh_btn.clicked.connect(self.update_grid)
 
+
+
         # Scrollable grid area
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout()
-        self.grid_layout.setContentsMargins(10, 10, 10, 10)
+        self.grid_layout.setContentsMargins(10, 10, 10, 10)  # Even left/right padding
         self.grid_widget.setLayout(self.grid_layout)
-        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
+        self.grid_widget.setStyleSheet("""
+            QWidget {
+                border: 1px solid #555;
+                border-radius: 12px;
+                }
+        """)
+        
 
         # Main layout
         grid_and_selector_layout = QHBoxLayout()
         grid_and_selector_layout.addSpacing(80)
 
+        #self.grid_widget.setFixedWidth(int(1200 * 2 / 3))
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setWidget(self.grid_widget)
+        
         
         # Create a vertical layout to center the maestro selector
         selector_container = QVBoxLayout()
         selector_container.addStretch()
         selector_container.addWidget(self.maestro1_btn)
         selector_container.addWidget(self.maestro2_btn)
-        selector_container.addSpacing(20)
+        selector_container.addSpacing(20)  # Add space between buttons and refresh
         selector_container.addWidget(self.refresh_btn)
         selector_container.addStretch()
 
         # Create a QWidget to hold the selector layout
         selector_widget = QWidget()
         selector_widget.setLayout(selector_container)
-        selector_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
+        selector_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")  # Transparent background
 
         # Add selector widget to the right of the grid
         grid_and_selector_layout.addWidget(scroll_area, stretch=3)
@@ -866,36 +637,35 @@ class ServoConfigScreen(QWidget):
         self.setLayout(layout)
         self.update_grid()
 
-    @error_boundary
     def update_maestro_icons(self, checked_id):
         # Set pressed icon for selected, normal for unselected
         if self.maestro_group.checkedId() == 0:
-            if os.path.exists("icons/M1_pressed.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
-            if os.path.exists("icons/M2.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
+            self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
+            self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
         else:
-            if os.path.exists("icons/M1.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            if os.path.exists("icons/M2_pressed.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
+            self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
+            self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
 
-    @error_boundary
     def load_config(self):
-        return config_manager.get_config("configs/servo_config.json")
+        try:
+            with open("configs/servo_config.json", "r") as f:
+                return json.load(f)
+        except:
+            return {}
 
-    @error_boundary
     def save_config(self):
         with open("configs/servo_config.json", "w") as f:
             json.dump(self.servo_config, f, indent=2)
-        config_manager.clear_cache()  # Clear cache after save
 
-    @error_boundary
     def reload_servo_config(self):
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("configs/servo_config.json")
-        self.update_grid()
-        print("Servo config reloaded successfully.")
+        try:
+            with open("configs/servo_config.json", "r") as f:
+                self.servo_config = json.load(f)
+            self.update_grid()
+            print("Servo config reloaded successfully.")
+        except Exception as e:
+            print(f"Failed to reload servo config: {e}")
+
 
     def update_config(self, key, field, value):
         if key not in self.servo_config:
@@ -903,7 +673,6 @@ class ServoConfigScreen(QWidget):
         self.servo_config[key][field] = value
         self.save_config()
 
-    @error_boundary
     def update_grid(self):
         font = QFont("Arial", 16)
 
@@ -914,6 +683,7 @@ class ServoConfigScreen(QWidget):
                 widget.setParent(None)
 
         maestro_index = self.maestro_group.checkedId()
+        base_channel = maestro_index * 18
 
         for i in range(18):
             channel_key = f"m{maestro_index+1}_ch{i}"
@@ -931,6 +701,8 @@ class ServoConfigScreen(QWidget):
             name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
             self.grid_layout.addWidget(name_edit, row, 1)
 
+
+
             min_spin = QSpinBox()
             min_spin.setFont(font)
             min_spin.setRange(0, 2500)
@@ -940,6 +712,7 @@ class ServoConfigScreen(QWidget):
             min_label = QLabel("Min")
             min_label.setFont(font)
             self.grid_layout.addWidget(min_label, row, 3)
+
             self.grid_layout.addWidget(min_spin, row, 4)
 
             max_spin = QSpinBox()
@@ -951,7 +724,6 @@ class ServoConfigScreen(QWidget):
             max_label.setFont(font)
             self.grid_layout.addWidget(max_label, row, 5)
             self.grid_layout.addWidget(max_spin, row, 6)
-            
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setMinimum(min_spin.value())
             slider.setMaximum(max_spin.value())
@@ -973,11 +745,11 @@ class ServoConfigScreen(QWidget):
             accel_spin.setFont(font)
             accel_spin.setRange(0, 100)
             accel_spin.setValue(config.get("accel", 0))
-            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
-            accel_label = QLabel("A")
-            accel_label.setFont(font)
-            self.grid_layout.addWidget(accel_label, row, 9)
+            speed_label = QLabel("A")
+            speed_label.setFont(font)
+            self.grid_layout.addWidget(speed_label, row, 9)
             self.grid_layout.addWidget(accel_spin, row, 10)
+
 
             play_btn = QPushButton("▶")
             play_btn.setFont(font)
@@ -987,18 +759,21 @@ class ServoConfigScreen(QWidget):
             self.grid_layout.addWidget(pos_label, row, 11)
 
             slider.valueChanged.connect(
-                lambda val, k=channel_key, p=pos_label: self.update_servo_position(k, p, val)
+                lambda val, k=channel_key, p=pos_label: (
+                    self.websocket.sendTextMessage(json.dumps({"type": "servo", "channel": k, "pos": val})),
+                    p.setText(f"V: {val}")
+                )
             )
 
             play_btn.clicked.connect(lambda checked, k=channel_key, p=pos_label, b=play_btn, s=slider, min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin: self.toggle_sweep(k, p, b, s, min_spin.value(), max_spin.value(), speed_spin.value()))
             self.grid_layout.addWidget(play_btn, row, 12)
-    
-    def update_servo_position(self, channel_key, pos_label, value):
-        """Update servo position and label"""
-        self.websocket.send_safe(json.dumps({"type": "servo", "channel": channel_key, "pos": value}))
-        pos_label.setText(f"V: {value}")
+
+        # Layout adjustments
+        grid_and_selector_layout = QHBoxLayout()
+
     
     def toggle_sweep(self, key, pos_label, button, slider, min_val, max_val, speed):
+
         if self.active_sweep:
             self.active_sweep.stop()
             self.active_sweep = None
@@ -1038,11 +813,12 @@ class ServoConfigScreen(QWidget):
                 self.btn.setChecked(False)
 
         sweep = Sweep(pos_label, button, slider, min_val, max_val, speed)
+
         self.active_sweep = sweep
-        button.setText("⏸")
+        button.setText("⏹")
 
 
-# PERFORMANCE IMPROVEMENT 5: Optimized Camera Screen
+
 class CameraFeedScreen(QWidget):
     def __init__(self, websocket):
         super().__init__()
@@ -1052,26 +828,28 @@ class CameraFeedScreen(QWidget):
         self.last_sample_time = 0
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.tracking_enabled = False
-        
-        # Use threading for image processing
-        config = config_manager.get_config("configs/steamdeck_config.json")
-        esp32_url = config.get("current", {}).get("esp32_cam_url", "")
-        self.image_thread = ImageProcessingThread(esp32_url)
-        self.image_thread.frame_processed.connect(self.update_display)
-        self.image_thread.stats_updated.connect(self.update_stats)
-        
+        self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
+        self.hog = cv2.HOGDescriptor()
+        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(30)
+        self.dropped_frames = 0
+        self.last_frame_time = None
         self.init_ui()
-        
+
     def init_ui(self):
-        """Optimized UI setup"""
         self.video_label = QLabel()
         self.video_label.setFixedSize(640, 480)
+        
         self.video_label.setStyleSheet("""
             border: 2px solid #555;
             border-radius: 20px;
             background-color: black;
         """)
-        
+
+
+
         self.stats_label = QLabel("Stream Stats: Initializing...")
         self.stats_label.setStyleSheet("""
             border: 1px solid #555;
@@ -1081,150 +859,136 @@ class CameraFeedScreen(QWidget):
         """)
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.stats_label.setFixedWidth(640)
-        
-        # Control buttons
-        self.setup_control_buttons()
-        self.setup_layout()
-        
-        # Start image processing thread
-        self.image_thread.start()
-    
-    def setup_control_buttons(self):
-        """Setup control buttons with proper styling"""
+
         self.reconnect_button = QPushButton()
-        if os.path.exists("icons/Reconnect.png"):
-            self.reconnect_button.setIcon(QIcon("icons/Reconnect.png"))
+        self.reconnect_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        self.reconnect_button.setIcon(QIcon("icons/Reconnect.png"))
+        self.reconnect_button.setIconSize(self.reconnect_button.size())
         self.reconnect_button.clicked.connect(self.reconnect_stream)
         self.reconnect_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-        
+
         self.tracking_button = QPushButton()
         self.tracking_button.setCheckable(True)
-        if os.path.exists("icons/Tracking.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+        self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+        self.tracking_button.setIconSize(self.reconnect_button.size())
         self.tracking_button.clicked.connect(self.toggle_tracking)
         self.tracking_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-    
-    def setup_layout(self):
-        """Setup optimized layout"""
+
         video_layout = QVBoxLayout()
         video_layout.addWidget(self.video_label)
         video_layout.addWidget(self.stats_label)
-        
+
         button_layout = QVBoxLayout()
-        button_layout.setSpacing(0)
+        button_layout.setSpacing(0)  # Remove vertical space
         button_layout.addWidget(self.reconnect_button)
         button_layout.addWidget(self.tracking_button)
-        button_layout.addSpacing(200)
+        button_layout.addSpacing(200)  # Push buttons to the top
         
+
         main_layout = QHBoxLayout()
         main_layout.addSpacing(81)
         main_layout.addLayout(video_layout, 2)
         main_layout.addLayout(button_layout, 1)
-        
+
         self.setLayout(main_layout)
-    
-    @error_boundary
-    def update_display(self, processed_data):
-        """Update display with processed frame data"""
-        try:
-            frame_rgb = processed_data['frame']
-            wave_detected = processed_data['wave_detected']
-            
-            if frame_rgb is None:
-                # Handle case where OpenCV is not available
-                self.video_label.setText("Camera not available\n(OpenCV not installed)")
-                return
-            
-            # Handle wave detection logic
-            if self.tracking_enabled and wave_detected:
-                current_time = time.time()
-                if current_time - self.last_sample_time >= 1.0 / SAMPLE_RATE:
-                    self.sample_buffer.append(wave_detected)
-                    self.last_sample_time = current_time
-                
-                if len(self.sample_buffer) == self.sample_buffer.maxlen:
-                    confidence = sum(self.sample_buffer) / len(self.sample_buffer)
-                    if confidence >= CONFIDENCE_THRESHOLD:
-                        if current_time - self.last_wave_time >= STAND_DOWN_TIME:
-                            self.websocket.send_safe(json.dumps({
-                                "type": "gesture",
-                                "name": "wave"
-                            }))
-                            self.last_wave_time = current_time
-                            self.sample_buffer.clear()
-            
-            # Convert to QPixmap and display
-            height, width, channel = frame_rgb.shape
-            bytes_per_line = 3 * width
-            q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_img).scaled(
-                self.video_label.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.FastTransformation  # Use fast transformation
-            )
-            self.video_label.setPixmap(pixmap)
-            
-        except Exception as e:
-            print(f"Display update error: {e}")
-            self.video_label.setText(f"Display Error:\n{str(e)}")
-    
-    def update_stats(self, stats_text):
-        """Update statistics display"""
-        self.stats_label.setText(f"Stream Stats: {stats_text}")
-    
-    @error_boundary
+
+    def reconnect_stream(self):
+        self.cap.release()
+        self.cap = cv2.VideoCapture(ESP32_CAM_URL if ESP32_CAM_URL else 0)
+
+        self.stats_label.setText("Stream Stats: Reconnected")
+
     def toggle_tracking(self):
-        """Toggle tracking with thread communication"""
         self.tracking_enabled = self.tracking_button.isChecked()
-        self.image_thread.set_tracking_enabled(self.tracking_enabled)
-        
-        if self.tracking_enabled and os.path.exists("icons/Tracking_pressed.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking_pressed.png"))
-        elif os.path.exists("icons/Tracking.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
-        
-        self.websocket.send_safe(json.dumps({
+        icon_path = "icons/Tracking_pressed.png" if self.tracking_enabled else "icons/Tracking.png"
+        self.tracking_button.setIcon(QIcon(icon_path))
+        self.websocket.sendTextMessage(json.dumps({
             "type": "tracking",
             "state": self.tracking_enabled
         }))
-    
-    @error_boundary
-    def reconnect_stream(self):
-        """Reconnect stream by restarting image thread"""
-        self.image_thread.stop()
-        config = config_manager.get_config("configs/steamdeck_config.json")
-        esp32_url = config.get("current", {}).get("esp32_cam_url", "")
-        self.image_thread = ImageProcessingThread(esp32_url)
-        self.image_thread.frame_processed.connect(self.update_display)
-        self.image_thread.stats_updated.connect(self.update_stats)
-        self.image_thread.start()
-        self.stats_label.setText("Stream Stats: Reconnected")
-    
+
+
+    def update_frame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            self.dropped_frames += 1
+            self.stats_label.setText("Stream Stats: Failed to read frame")
+            return
+
+        current_time = time.time()
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(frame_rgb)
+
+        wave_detected = False
+        if results.pose_landmarks:
+            lm = results.pose_landmarks.landmark
+            rw = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
+            rs = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            if rw.y < rs.y:
+                wave_detected = True
+
+        # Sampling logic
+        if self.tracking_enabled:
+            if current_time - self.last_sample_time >= 1.0 / SAMPLE_RATE:
+                self.sample_buffer.append(wave_detected)
+                self.last_sample_time = current_time
+
+            if len(self.sample_buffer) == self.sample_buffer.maxlen:
+                confidence = sum(self.sample_buffer) / len(self.sample_buffer)
+                if confidence >= CONFIDENCE_THRESHOLD:
+                    if current_time - self.last_wave_time >= STAND_DOWN_TIME:
+                        self.websocket.sendTextMessage(json.dumps({
+                            "type": "gesture",
+                            "name": "wave"
+                        }))
+                        self.last_wave_time = current_time
+                        self.sample_buffer.clear()
+
+        if self.tracking_enabled:
+            boxes, weights = self.hog.detectMultiScale(frame_rgb, winStride=(8, 8))
+            for (x, y, w, h) in boxes:
+                cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+        if wave_detected:
+            cv2.putText(frame_rgb, 'Wave Detected', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
+        height, width = frame.shape[:2]
+        bytes_per_line = 3 * width
+        q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_img).scaled(
+            self.video_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        self.video_label.setPixmap(pixmap)
+
+        fps = int(1000 / self.timer.interval())
+        latency = 0
+        self.stats_label.setText(
+            f"Stream Stats: {fps} FPS, {width}x{height}, {latency}ms latency, {self.dropped_frames} dropped frames"
+        )
+
+    def closeEvent(self, event):
+        self.cap.release()
+        event.accept()
+
     def reload_wave_settings(self):
-        """Reload wave detection settings"""
         try:
-            config_manager.clear_cache()
-            config = config_manager.get_config("configs/steamdeck_config.json")
+            with open("configs/steamdeck_config.json", "r") as f:
+                config = json.load(f)
             wave_config = config.get("current", {})
             wave_settings = wave_config.get("wave_detection", {})
-            
-            global SAMPLE_DURATION, SAMPLE_RATE, CONFIDENCE_THRESHOLD, STAND_DOWN_TIME
-            SAMPLE_DURATION = wave_settings.get("sample_duration", 3)
-            SAMPLE_RATE = wave_settings.get("sample_rate", 5)
-            CONFIDENCE_THRESHOLD = wave_settings.get("confidence_threshold", 0.7)
-            STAND_DOWN_TIME = wave_settings.get("stand_down_time", 30)
-            
-            self.sample_buffer = deque(maxlen=SAMPLE_DURATION * SAMPLE_RATE)
+            self.esp32_cam_url = wave_config.get("esp32_cam_url", "")
+            self.sample_duration = wave_settings.get("sample_duration", 3)
+            self.sample_rate = wave_settings.get("sample_rate", 5)
+            self.confidence_threshold = wave_settings.get("confidence_threshold", 0.7)
+            self.stand_down_time = wave_settings.get("stand_down_time", 30)
+            self.sample_buffer = deque(maxlen=self.sample_duration * self.sample_rate)
             self.last_sample_time = 0
             print("Wave detection settings reloaded.")
         except Exception as e:
             print(f"Failed to reload wave detection settings: {e}")
-    
-    def closeEvent(self, event):
-        """Proper cleanup on close"""
-        self.image_thread.stop()
-        event.accept()
 
+
+      
 
 class PlaceholderScreen(QWidget):
     def __init__(self, title):
@@ -1252,16 +1016,15 @@ class HomeScreen(QWidget):
 
         # WALL-E image on the left
         image_container = QVBoxLayout()
-        image_container.addStretch()
+        image_container.addStretch()  # Push image to bottom
         self.image_label = QLabel()
-        if os.path.exists("walle.png"):
-            self.image_label.setPixmap(QPixmap("walle.png").scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.image_label.setPixmap(QPixmap("walle.png").scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
         image_container.addWidget(self.image_label)
 
         image_widget = QWidget()
         image_widget.setLayout(image_container)
-        image_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
+        image_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")  # Transparent background
         layout.addWidget(image_widget)
 
         # Scrollable area for emotion buttons
@@ -1270,14 +1033,23 @@ class HomeScreen(QWidget):
         scroll_area.setStyleSheet("border: none; padding: 10px; background: transparent;")
 
         button_container = QWidget()
-        button_container.setStyleSheet("background-color: #222; border-radius: 30px;")
+        button_container.setStyleSheet("""
+        background-color: #222;
+        border-radius: 30px;
+        """)
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(15)
         button_container.setLayout(self.grid_layout)
 
         # Wrap emotion buttons in a frame
         button_frame = QFrame()
-        button_frame.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 12px; background-color: #1e1e1e; }")
+        button_frame.setStyleSheet("""
+        QFrame {
+            border: 1px solid #555;
+            border-radius: 12px;
+            background-color: #1e1e1e;
+        }
+        """)
         frame_layout = QVBoxLayout(button_frame)
         frame_layout.setContentsMargins(10, 10, 10, 10)
         frame_layout.addWidget(button_container)
@@ -1285,7 +1057,13 @@ class HomeScreen(QWidget):
 
         # Create Idle and Demo Mode buttons
         mode_frame = QFrame()
-        mode_frame.setStyleSheet("QFrame { border: 0px solid #555; border-radius: 12px; background-color: #1e1e1e; }")
+        mode_frame.setStyleSheet("""
+        QFrame {
+            border: 0px solid #555;
+            border-radius: 12px;
+            background-color: #1e1e1e;
+        }
+        """)
         mode_layout = QHBoxLayout(mode_frame)
         mode_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -1293,6 +1071,8 @@ class HomeScreen(QWidget):
         self.demo_button = QPushButton("🎬 Demo Mode")
         self.idle_button.toggled.connect(lambda checked: self.send_mode_state("idle", checked))
         self.demo_button.toggled.connect(lambda checked: self.send_mode_state("demo", checked))
+
+
 
         for btn in [self.idle_button, self.demo_button]:
             btn.setCheckable(True)
@@ -1319,29 +1099,28 @@ class HomeScreen(QWidget):
         right_layout.addWidget(scroll_area)
         right_layout.addSpacing(5)
 
+
         mode_container = QWidget()
         mode_container_layout = QHBoxLayout()
-        mode_container_layout.addSpacing(20)
+        mode_container_layout.addSpacing(20)  # Add spacing to the left
         mode_container_layout.addWidget(mode_frame)
-        mode_container_layout.addSpacing(20)
+        mode_container_layout.addSpacing(20)  # Add spacing to the right
         mode_container.setLayout(mode_container_layout)
-        mode_container.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
+        mode_container.setStyleSheet("background-color: rgba(0, 0, 0, 0);")  # Transparent background
 
         right_layout.addWidget(mode_container)
+
+
         layout.addLayout(right_layout)
         self.setLayout(layout)
         self.load_emotion_buttons()
 
-    @error_boundary
     def load_emotion_buttons(self):
-        # Clear existing buttons
-        for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        
-        config = config_manager.get_config("configs/emotion_buttons.json")
-        emotions = config if isinstance(config, list) else []
+        try:
+            with open("configs/emotion_buttons.json", "r") as f:
+                emotions = json.load(f)
+        except Exception as e:
+            emotions = []
 
         font = QFont("Arial", 18)
         for idx, item in enumerate(emotions):
@@ -1366,13 +1145,11 @@ class HomeScreen(QWidget):
             col = idx % 2
             self.grid_layout.addWidget(btn, row, col)
 
-    @error_boundary
     def send_emotion(self, name):
-        self.websocket.send_safe(json.dumps({"type": "scene", "emotion": name}))
+        self.websocket.sendTextMessage(json.dumps({"type": "scene", "emotion": name}))
 
-    @error_boundary
     def send_mode_state(self, mode, state):
-        self.websocket.send_safe(json.dumps({
+        self.websocket.sendTextMessage(json.dumps({
             "type": "mode",
             "name": mode,
             "state": state
@@ -1402,7 +1179,14 @@ class SettingsScreen(QWidget):
         self.url_input.setFont(font)
         self.url_input.setPlaceholderText("http://10.1.1.10/stream")
 
-        # Control WebSocket (Note: removed telemetry websocket since we use one connection now)
+        # Telemetry WebSocket
+        self.telemetry_label = QLabel("Telemetry WebSocket URL:")
+        self.telemetry_label.setFont(font)
+        self.telemetry_input = QLineEdit()
+        self.telemetry_input.setFont(font)
+        self.telemetry_input.setPlaceholderText("localhost:8765")
+
+        # Control WebSocket
         self.control_label = QLabel("Control WebSocket URL:")
         self.control_label.setFont(font)
         self.control_input = QLineEdit()
@@ -1443,17 +1227,19 @@ class SettingsScreen(QWidget):
         # Add widgets to grid
         self.grid.addWidget(self.url_label, 0, 0)
         self.grid.addWidget(self.url_input, 0, 1)
-        self.grid.addWidget(self.control_label, 1, 0)
-        self.grid.addWidget(self.control_input, 1, 1)
-        self.grid.addWidget(self.sample_duration_label, 2, 0)
-        self.grid.addWidget(self.sample_duration_spin, 2, 1)
-        self.grid.addWidget(self.sample_rate_label, 3, 0)
-        self.grid.addWidget(self.sample_rate_spin, 3, 1)
-        self.grid.addWidget(self.confidence_label, 4, 0)
-        self.grid.addWidget(self.confidence_slider, 4, 1)
-        self.grid.addWidget(self.confidence_value, 4, 2)
-        self.grid.addWidget(self.stand_down_label, 5, 0)
-        self.grid.addWidget(self.stand_down_spin, 5, 1)
+        self.grid.addWidget(self.telemetry_label, 1, 0)
+        self.grid.addWidget(self.telemetry_input, 1, 1)
+        self.grid.addWidget(self.control_label, 2, 0)
+        self.grid.addWidget(self.control_input, 2, 1)
+        self.grid.addWidget(self.sample_duration_label, 3, 0)
+        self.grid.addWidget(self.sample_duration_spin, 3, 1)
+        self.grid.addWidget(self.sample_rate_label, 4, 0)
+        self.grid.addWidget(self.sample_rate_spin, 4, 1)
+        self.grid.addWidget(self.confidence_label, 5, 0)
+        self.grid.addWidget(self.confidence_slider, 5, 1)
+        self.grid.addWidget(self.confidence_value, 5, 2)
+        self.grid.addWidget(self.stand_down_label, 6, 0)
+        self.grid.addWidget(self.stand_down_spin, 6, 1)
 
         self.layout.addLayout(self.grid)
 
@@ -1471,27 +1257,32 @@ class SettingsScreen(QWidget):
 
         self.setLayout(self.layout)
 
-    @error_boundary
     def load_config(self):
-        config = config_manager.get_config(self.config_path)
-        current = config.get("current", {})
-        wave = current.get("wave_detection", {})
-        self.url_input.setText(current.get("esp32_cam_url", ""))
-        self.control_input.setText(current.get("control_websocket_url", "localhost:8766"))
-        self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
-        self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
-        self.confidence_slider.setValue(int(wave.get("confidence_threshold", 0.7) * 100))
-        self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
+        try:
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
+            current = config.get("current", {})
+            wave = current.get("wave_detection", {})
+            self.url_input.setText(current.get("esp32_cam_url", ""))
+            self.telemetry_input.setText(current.get("telemetry_websocket_url", "localhost:8765"))
+            self.control_input.setText(current.get("control_websocket_url", "localhost:8766"))
+            self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
+            self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
+            self.confidence_slider.setValue(int(wave.get("confidence_threshold", 0.7) * 100))
+            self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load config: {e}")
 
-    @error_boundary
     def save_config(self):
         try:
-            config = config_manager.get_config(self.config_path)
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
         except:
             config = {}
 
         config["current"] = {
             "esp32_cam_url": self.url_input.text(),
+            "telemetry_websocket_url": self.telemetry_input.text(),
             "control_websocket_url": self.control_input.text(),
             "wave_detection": {
                 "sample_duration": self.sample_duration_spin.value(),
@@ -1504,10 +1295,7 @@ class SettingsScreen(QWidget):
         try:
             with open(self.config_path, "w") as f:
                 json.dump(config, f, indent=2)
-            config_manager.clear_cache()  # Clear cache after save
             QMessageBox.information(self, "Update", "Configuration updated successfully.")
-            
-            # Reload settings in other components
             app = QApplication.instance()
             if app:
                 for widget in app.allWidgets():
@@ -1516,16 +1304,19 @@ class SettingsScreen(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
 
-    @error_boundary
     def reset_to_defaults(self):
-        config = config_manager.get_config(self.config_path)
-        defaults = config.get("defaults", {})
-        config["current"] = defaults
-        with open(self.config_path, "w") as f:
-            json.dump(config, f, indent=2)
-        config_manager.clear_cache()
-        self.load_config()
-        QMessageBox.information(self, "Reset", "Configuration reset to defaults.")
+        try:
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
+            defaults = config.get("defaults", {})
+            config["current"] = defaults
+            with open(self.config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            self.load_config()
+            QMessageBox.information(self, "Reset", "Configuration reset to defaults.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to reset config: {e}")
+
 
 
 class SceneScreen(QWidget):
@@ -1570,11 +1361,9 @@ class SceneScreen(QWidget):
 
         self.setLayout(self.layout)
 
-    @error_boundary
     def request_scenes(self):
-        self.websocket.send_safe(json.dumps({"type": "get_scenes"}))
+        self.websocket.sendTextMessage(json.dumps({ "type": "get_scenes" }))
 
-    @error_boundary
     def handle_message(self, message):
         try:
             msg = json.loads(message)
@@ -1583,9 +1372,7 @@ class SceneScreen(QWidget):
         except Exception as e:
             print(f"Failed to handle message: {e}")
 
-    @error_boundary
     def update_grid(self, scenes):
-        # Clear existing widgets
         for i in reversed(range(self.grid_layout.count())):
             widget = self.grid_layout.itemAt(i).widget()
             if widget:
@@ -1619,21 +1406,18 @@ class SceneScreen(QWidget):
 
             self.scene_widgets[label] = (checkbox, emoji, category_cb)
 
-    @error_boundary
     def test_scene(self, name):
-        self.websocket.send_safe(json.dumps({"type": "scene", "emotion": name}))
+        self.websocket.sendTextMessage(json.dumps({ "type": "play_scene", "scene": name }))
 
-    @error_boundary
     def save_config(self):
         selected = [
-            {"label": label, "emoji": emoji, "category": cb.currentText()}
+            { "label": label, "emoji": emoji, "category": cb.currentText() }
             for label, (cbx, emoji, cb) in self.scene_widgets.items()
             if cbx.isChecked()
         ]
         try:
             with open("configs/emotion_buttons.json", "w") as f:
                 json.dump(selected, f, indent=2)
-            config_manager.clear_cache()
             QMessageBox.information(self, "Saved", "Emotion buttons saved successfully.")
             self.load_config()
 
@@ -1647,11 +1431,14 @@ class SceneScreen(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
 
-    @error_boundary
+
     def load_config(self):
-        config = config_manager.get_config("configs/emotion_buttons.json")
-        emotions = config if isinstance(config, list) else []
-        self.selected_labels = [item.get("label", "") for item in emotions]
+        try:
+            with open("configs/emotion_buttons.json", "r") as f:
+                emotions = json.load(f)
+            self.selected_labels = [item.get("label", "") for item in emotions]
+        except:
+            self.selected_labels = []
 
 
 class MainWindow(QMainWindow):
@@ -1659,24 +1446,19 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("WALL-E Control System")
         self.setFixedSize(1280, 800)
-        
-        # Set background if available
-        if os.path.exists("background.png"):
-            background = QPixmap("background.png")
-            palette = QPalette()
-            palette.setBrush(QPalette.ColorRole.Window, QBrush(background))
-            self.setPalette(palette)
+        background = QPixmap("background.png")
+        palette = QPalette()
+        palette.setBrush(QPalette.ColorRole.Window, QBrush(background))
+        self.setPalette(palette)
 
-        # FIXED: WebSocket setup with single connection to port 8766
+        self.websocket = QWebSocket()
         try:
-            config = config_manager.get_config("configs/steamdeck_config.json")
+            with open("configs/steamdeck_config.json", "r") as f:
+                config = json.load(f)
             ws_url = config.get("current", {}).get("control_websocket_url", "localhost:8766")
         except:
-            ws_url = "localhost:8766"
-        
-        if not ws_url.startswith("ws://"):
-            ws_url = f"ws://{ws_url}"
-        self.websocket = WebSocketManager(ws_url)
+            ws_url = "localhost:8765"
+        self.websocket.open(QUrl(f"ws://{ws_url}"))
         
         self.header = DynamicHeader("Home")
         self.header.setMaximumWidth(1000)
@@ -1684,8 +1466,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.nav_buttons = {}
 
-        # FIXED: Initialize screens with shared WebSocket
-        self.health_screen = HealthScreen(self.websocket)  # Pass websocket parameter
+        self.health_screen = HealthScreen()
         self.servo_screen = ServoConfigScreen(self.websocket)
         self.camera_screen = CameraFeedScreen(self.websocket)
         self.controller_screen = ControllerConfigScreen(self.websocket)
@@ -1693,27 +1474,16 @@ class MainWindow(QMainWindow):
         self.scene_editor_screen = SceneScreen(self.websocket)
         self.scene_dashboard_screen = HomeScreen(self.websocket)
 
-        self.stack.addWidget(self.scene_dashboard_screen)  # Home first
-        self.stack.addWidget(self.camera_screen)
         self.stack.addWidget(self.health_screen)
         self.stack.addWidget(self.servo_screen)
+        self.stack.addWidget(self.camera_screen)
         self.stack.addWidget(self.controller_screen)
         self.stack.addWidget(self.settings_screen)
         self.stack.addWidget(self.scene_editor_screen)
+        self.stack.addWidget(self.scene_dashboard_screen)
 
-        # Setup memory management timer
-        self.memory_timer = QTimer()
-        self.memory_timer.timeout.connect(MemoryManager.periodic_cleanup)
-        self.memory_timer.start(30000)  # Cleanup every 30 seconds
-
-        self.setup_navigation()
-        self.setup_layout()
-
-    def setup_navigation(self):
-        """Setup navigation with optimized button handling"""
-        self.nav_bar = QHBoxLayout()
-        self.nav_bar.addSpacing(100)
-        
+        nav_bar = QHBoxLayout()
+        nav_bar.addSpacing(100)
         buttons = [
             ("Home", self.scene_dashboard_screen),
             ("Camera", self.camera_screen),
@@ -1726,127 +1496,92 @@ class MainWindow(QMainWindow):
 
         for name, screen in buttons:
             btn = QPushButton()
-            if os.path.exists(f"icons/{name}.png"):
-                btn.setIcon(QIcon(f"icons/{name}.png"))
-                btn.setIconSize(QSize(64, 64))
-            btn.clicked.connect(lambda _, s=screen, n=name: self.switch_screen(s, n))
-            self.nav_bar.addWidget(btn)
+            btn.setIcon(QIcon(f"icons/{name}.png"))
+            btn.setIconSize(QSize(64, 64))
+            btn.clicked.connect(lambda _, s=screen, n=name: self.switch_screen(s,n))
+            nav_bar.addWidget(btn)
             self.nav_buttons[name] = btn
 
-        # Failsafe button
-        self.failsafe_button = QPushButton()
-        self.failsafe_button.setCheckable(True)
-        if os.path.exists("icons/failsafe.png"):
-            self.failsafe_button.setIcon(QIcon("icons/failsafe.png"))
-            self.failsafe_button.setIconSize(QSize(300, 70))
-        self.failsafe_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-        self.failsafe_button.clicked.connect(self.toggle_failsafe_icon)
-
-        self.nav_bar.addSpacing(20)
-        self.nav_bar.addWidget(self.failsafe_button)
-        self.nav_bar.addSpacing(100)
-
-    def setup_layout(self):
-        """Setup main window layout"""
         nav_frame = QFrame()
-        nav_frame.setLayout(self.nav_bar)
+
+        nav_frame.setLayout(nav_bar)
         nav_frame.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
 
+        
+
+        # Create image button
+        image_button = QPushButton()
+        image_button.setCheckable(True)
+        image_button.setIcon(QIcon("icons/failsafe.png"))
+        image_button.setIconSize(QSize(300, 70))
+        image_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        image_button.clicked.connect(self.toggle_failsafe_icon)
+
+        # Add stretch and image button to the right of nav_bar
+        nav_bar.addSpacing(20)
+        nav_bar.addWidget(image_button)
+        nav_bar.addSpacing(100)
+
         layout = QVBoxLayout()
-        layout.setSpacing(0)
+        layout.setSpacing(0) 
+
+        # Add spacing to push header down
         layout.addSpacing(60)
 
-        # Header container
+        # Create and configure header
+        header = DynamicHeader(name)
+        header.setMaximumWidth(1000)  # Limit horizontal space
+
+        # Wrap header in a container to centre it
         header_container = QWidget()
         header_layout = QHBoxLayout()
         header_layout.addWidget(self.header)
         header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_container.setLayout(header_layout)
 
+        # Add header container to layout
         layout.addWidget(header_container)
+
+        # Continue with rest of layout
         layout.addSpacing(2)
         layout.addWidget(self.stack)
         layout.addWidget(nav_frame)
         layout.addSpacing(35)
 
+        self.switch_screen(self.scene_dashboard_screen, "Home")
+
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-        # Set initial screen
-        self.switch_screen(self.scene_dashboard_screen, "Home")
-
-    @error_boundary
     def switch_screen(self, screen, name):
-        """Switch to a different screen with optimized icon updates"""
         self.stack.setCurrentWidget(screen)
         self.header.set_screen_name(name)
-        
-        # Update navigation icons
         for btn_name, btn in self.nav_buttons.items():
-            if btn_name == name and os.path.exists(f"icons/{btn_name}_pressed.png"):
-                btn.setIcon(QIcon(f"icons/{btn_name}_pressed.png"))
-            elif os.path.exists(f"icons/{btn_name}.png"):
-                btn.setIcon(QIcon(f"icons/{btn_name}.png"))
+            icon_file = f"icons/{btn_name}_pressed.png" if btn_name == name else f"icons/{btn_name}.png"
+            btn.setIcon(QIcon(icon_file))
 
-    @error_boundary
+
     def toggle_failsafe_icon(self):
-        """Toggle failsafe with WebSocket communication"""
         sender = self.sender()
         if sender.isChecked():
-            if os.path.exists("icons/failsafe_pressed.png"):
-                sender.setIcon(QIcon("icons/failsafe_pressed.png"))
+            sender.setIcon(QIcon("icons/failsafe_pressed.png"))
             state = True
         else:
-            if os.path.exists("icons/failsafe.png"):
-                sender.setIcon(QIcon("icons/failsafe.png"))
+            sender.setIcon(QIcon("icons/failsafe.png"))
             state = False
 
         # Send state to backend
-        self.websocket.send_safe(json.dumps({
-            "type": "failsafe",
+        self.websocket.sendTextMessage(json.dumps({
+           "type": "failsafe",
             "state": state
         }))
 
-    def closeEvent(self, event):
-        """Proper cleanup on application close"""
-        # Stop all threads
-        if hasattr(self.camera_screen, 'image_thread'):
-            self.camera_screen.image_thread.stop()
-        
-        # FIXED: Close only the main WebSocket connection
-        if hasattr(self, 'websocket'):
-            self.websocket.close()
-        
-        # Stop timers
-        if hasattr(self, 'memory_timer'):
-            self.memory_timer.stop()
-        
-        # Final cleanup
-        MemoryManager.cleanup_widgets(self)
-        event.accept()
+
 
 
 if __name__ == "__main__":
-    # Optimize application settings
     app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
-    
-    # Create and show main window
     window = MainWindow()
     window.show()
-    
-    print("🤖 WALL-E Optimized Frontend Started")
-    print("✅ Performance improvements active:")
-    print("   - Lazy MediaPipe initialization")
-    print("   - Configuration caching")
-    print("   - Threaded image processing")
-    print("   - WebSocket auto-reconnect")
-    print("   - Memory management")
-    print("   - Optimized UI updates")
-    print("🔧 WebSocket fixes applied:")
-    print("   - Single WebSocket connection to backend")
-    print("   - Shared connection for all screens")
-    print("   - Removed duplicate telemetry connection")
-    
     sys.exit(app.exec())
