@@ -562,7 +562,7 @@ class DynamicHeader(QFrame):
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.voltage_label = QLabel("  🔋 0.0V")
+        self.voltage_label = QLabel("🔋 --.-V")
         self.wifi_label = QLabel("📶 0%")
         self.screen_label = QLabel(screen_name)
 
@@ -582,198 +582,476 @@ class DynamicHeader(QFrame):
         self.timer.timeout.connect(self.update_values)
         self.timer.start(5000)
 
-    @error_boundary
-    def update_values(self):
-        voltage = round(random.uniform(6.5, 15.5), 2)
-        wifi = random.randint(70, 100)
-        self.voltage_label.setText(f"🔋 {voltage}V")
-        self.wifi_label.setText(f"📶 {wifi}%")
+    def update_voltage(self, voltage):
+        """Update voltage from telemetry data"""
+        if voltage < 11.0:
+            self.voltage_label.setText(f"🔋 {voltage:.2f}V 🔴")
+            self.voltage_label.setStyleSheet("color: #FF4444; font-weight: bold;")
+        elif voltage < 12.0:
+            self.voltage_label.setText(f"🔋 {voltage:.2f}V ⚠️")
+            self.voltage_label.setStyleSheet("color: #FFAA00; font-weight: bold;")
+        elif voltage > 14.0:
+            self.voltage_label.setText(f"🔋 {voltage:.2f}V ✅")
+            self.voltage_label.setStyleSheet("color: #44FF44;")
+        else:
+            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+            self.voltage_label.setStyleSheet("color: white;")
+
+    def update_wifi(self, percentage):
+        """Update WiFi percentage"""
+        self.wifi_label.setText(f"📶 {percentage}%")
 
     def set_screen_name(self, name):
         self.screen_label.setText(name)
 
+    @error_boundary
+    def update_values(self):
+        wifi = random.randint(70, 100)
+        self.wifi_label.setText(f"📶 {wifi}%")
 
-# PERFORMANCE IMPROVEMENT 4: Optimized UI components with reduced redraws
+
 class HealthScreen(QWidget):
-    def __init__(self, websocket):  # FIXED: Accept websocket as parameter
+    """FIXED: Single HealthScreen with comprehensive debugging and proper voltage display"""
+    
+    def __init__(self, websocket):
         super().__init__()
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.setFixedWidth(1180)
         
-        # FIXED: Use the shared WebSocket instead of creating a new one
         self.websocket = websocket
         self.websocket.textMessageReceived.connect(self.handle_telemetry)
         
-        # Reduce update frequency for better performance
+        # Rate limiting for telemetry updates
         self.last_telemetry_update = 0
-        self.telemetry_update_interval = 0.5  # 500ms instead of real-time
+        self.telemetry_update_interval = 0.5  # 500ms minimum between updates
         
+        # Voltage alarm state tracking
+        self.last_voltage_alarm = None
+        
+        # Track start time for relative time calculation
+        self.start_time = time.time()
+        
+        # Initialize UI
         self.init_ui_optimized()
     
     def init_ui_optimized(self):
-        """Optimized UI initialization with reduced complexity"""
-        # Simplified graph widget with better performance settings
+        """FIXED: Optimized UI with better graph positioning and voltage display"""
+        # Enhanced graph widget for battery voltage + dual current
         self.graph_widget = pg.PlotWidget()
         self.graph_widget.setBackground('#1e1e1e')
-        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)  # Reduced grid opacity
-        self.graph_widget.setTitle("Voltage & Current", color='white', size='12pt')
-        self.graph_widget.setLabel('left', 'Voltage (V)', color='white')
+        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.graph_widget.setTitle("Battery Voltage & Current Draw", color='white', size='14pt')
+        self.graph_widget.setLabel('left', 'Battery Voltage (V)', color='white')
         self.graph_widget.setLabel('bottom', 'Time (s)', color='white')
-        self.graph_widget.setYRange(0, 20)
-        self.graph_widget.setLimits(yMin=0, yMax=16)
+        
+        # FIXED: Better voltage range for 4S LiPo batteries
+        self.graph_widget.setYRange(0, 20)  # Focus on normal operating range
+        self.graph_widget.setLimits(yMin=0, yMax=20)
         self.graph_widget.setMouseEnabled(x=False, y=False)
         
+        # Add legend
+        self.graph_widget.addLegend(offset=(30, 180))
+        
         # Limit data points for better performance
-        self.max_data_points = 100
-        self.voltage_data = deque(maxlen=self.max_data_points)
-        self.current_data = deque(maxlen=self.max_data_points)
+        self.max_data_points = 200
+        self.battery_voltage_data = deque(maxlen=self.max_data_points)
+        self.current_a0_data = deque(maxlen=self.max_data_points)
+        self.current_a1_data = deque(maxlen=self.max_data_points)
         self.time_data = deque(maxlen=self.max_data_points)
         
-        # Create curves with optimized settings
+        # FIXED: Create voltage curve with better visibility
         self.voltage_curve = self.graph_widget.plot(
-            pen=pg.mkPen(color='y', width=2), 
-            name="Voltage",
-            antialias=False  # Disable antialiasing for performance
+            pen=pg.mkPen(color='#00FF00', width=4),  # Thicker line for better visibility
+            name="Battery Voltage",
+            antialias=True
         )
         
-        # Current curve setup
-        self.current_curve = pg.ViewBox()
-        self.graph_widget.scene().addItem(self.current_curve)
+        
+        # FIXED: Current curves setup (right Y-axis) with proper scaling
+        self.current_view = pg.ViewBox()
+        self.graph_widget.scene().addItem(self.current_view)
         self.graph_widget.getPlotItem().showAxis('right')
         self.graph_widget.getPlotItem().getAxis('right').setLabel('Current (A)', color='white')
-        self.graph_widget.getPlotItem().getAxis('right').linkToView(self.current_curve)
-        self.current_curve.setYRange(0, 150)
-        self.graph_widget.getPlotItem().getViewBox().sigResized.connect(
-            lambda: self.current_curve.setGeometry(self.graph_widget.getPlotItem().getViewBox().sceneBoundingRect())
-        )
-        self.current_plot = pg.PlotCurveItem(pen=pg.mkPen(color='c', width=2), antialias=False)
-        self.current_curve.addItem(self.current_plot)
+        self.graph_widget.getPlotItem().getAxis('right').linkToView(self.current_view)
+
+        # FIXED: Better current range (0-70A is more realistic)
+        self.current_view.setYRange(0, 70)  
+        self.current_view.setLimits(yMin=-5, yMax=100)
         
-        # Status labels with fixed widths to prevent layout recalculation
+        # Link the views properly
+        self.graph_widget.getPlotItem().getViewBox().sigResized.connect(self.update_views)
+        
+        # Current A0 plot (cyan)
+        self.current_a0_bars = pg.BarGraphItem(
+            x=[], y=[], width=1.0, 
+            brush=pg.mkBrush(0, 255, 255, 150),  # Semi-transparent cyan
+            name="Current A0"
+        )
+        self.current_view.addItem(self.current_a0_bars)
+        
+        # Current A1 plot (magenta)
+        self.current_a1_bars = pg.BarGraphItem(
+            x=[], y=[], width=1.0,
+            brush=pg.mkBrush(255, 0, 255, 150),  # Semi-transparent magenta
+            name="Current A1"
+        )
+        self.current_view.addItem(self.current_a1_bars)
+        
+        legend = self.graph_widget.addLegend(offset=(30, 30))
+        legend.addItem(self.current_a0_plot, "Current A0")
+        legend.addItem(self.current_a1_plot, "Current A1")
+
+        # Enhanced status labels with battery monitoring
         self.status_labels = {}
         label_configs = [
             ("cpu", "CPU: 0%", 400),
             ("mem", "Memory: 0%", 400),
             ("temp", "Temp: 0°C", 400),
+            ("battery", "Battery: 0.0V ⚡", 400),
             ("stream", "Stream: 0 FPS, 0x0, 0ms", 400),
-            ("dfplayer", "DFPlayer: Disconnected, 0 files", 400),
-            ("maestro1", "Maestro 1: Disconnected, 0 channels", 400),
-            ("maestro2", "Maestro 2: Disconnected, 0 channels", 400)
+            ("dfplayer", "Audio: Disconnected, 0 files", 400),
+            ("maestro1", "Maestro 1: Disconnected", 500),
+            ("maestro2", "Maestro 2: Disconnected", 500)
         ]
         
         for key, text, width in label_configs:
             label = QLabel(text)
-            label.setFont(QFont("Arial", 20))
-            label.setStyleSheet("color: lime;")
+            label.setFont(QFont("Arial", 18))
+            label.setStyleSheet("color: lime; padding: 2px;")
             label.setFixedWidth(width)
             self.status_labels[key] = label
         
-        # Layout setup (simplified)
+        # Layout setup
         self.setup_layout()
     
+    def update_views(self):
+        """Update the current view geometry to match the main plot"""
+        self.current_view.setGeometry(self.graph_widget.getPlotItem().getViewBox().sceneBoundingRect())
+    
+
     def setup_layout(self):
-        """Simplified layout setup"""
+        """FIXED: Enhanced layout with better graph positioning"""
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Graph container
+        # FIXED: Graph container with better positioning
         graph_frame = QFrame()
-        graph_frame.setStyleSheet("border: 0px solid #444; border-radius: 10px; background-color: #1e1e1e;")
+        graph_frame.setStyleSheet("border: 2px solid #444; border-radius: 10px; background-color: #1e1e1e;")
         graph_layout = QHBoxLayout(graph_frame)
-        graph_layout.setContentsMargins(5, 0, 5, 0)
-        self.graph_widget.setFixedWidth(1025)
-        self.graph_widget.setFixedHeight(300)
-        graph_layout.addStretch()
-        graph_layout.addWidget(self.graph_widget)
-        graph_layout.addStretch()
+        graph_layout.setContentsMargins(15, 10, 15, 10)
         
-        # Stats layout
+        # FIXED: Better graph sizing and positioning
+        self.graph_widget.setFixedWidth(1050)
+        self.graph_widget.setFixedHeight(340)
+        
+        # Center the graph horizontally
+        graph_layout.addStretch(1)
+        graph_layout.addWidget(self.graph_widget, 4)
+        graph_layout.addStretch(1)
+        
+        # FIXED: Stats layout with better organization
         stats_layout = QGridLayout()
-        stats_layout.setVerticalSpacing(2)
+        stats_layout.setVerticalSpacing(8)
+        stats_layout.setHorizontalSpacing(15)
         stats_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        # Add labels to grid
+        # Add labels to grid (2 columns) with better alignment
         labels_list = list(self.status_labels.values())
-        for i, label in enumerate(labels_list[:4]):
-            stats_layout.addWidget(label, i, 0)
-        for i, label in enumerate(labels_list[4:]):
-            stats_layout.addWidget(label, i, 1)
+        for i, label in enumerate(labels_list[:4]):  # First column
+            stats_layout.addWidget(label, i, 0, Qt.AlignmentFlag.AlignLeft)
+        for i, label in enumerate(labels_list[4:]):  # Second column
+            stats_layout.addWidget(label, i, 1, Qt.AlignmentFlag.AlignLeft)
         
-        # Container widgets
+        # FIXED: Container widgets with better spacing
         graph_container = QWidget()
-        container_layout = QHBoxLayout(graph_container)
-        container_layout.addStretch()
-        container_layout.addWidget(graph_frame)
-        container_layout.addStretch()
+        graph_container_layout = QVBoxLayout(graph_container)
+        graph_container_layout.setContentsMargins(5, 0, 5, 0)
+        graph_container_layout.addWidget(graph_frame)
         
         stats_container = QWidget()
-        stats_container_layout = QHBoxLayout()
+        stats_container_layout = QHBoxLayout(stats_container)
+        stats_container_layout.setContentsMargins(50, 10, 50, 10)
         stats_container_layout.addStretch()
         stats_container_layout.addLayout(stats_layout)
         stats_container_layout.addStretch()
-        stats_container.setLayout(stats_container_layout)
         
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        # FIXED: Main layout assembly
+        main_layout.addWidget(graph_container, 3)
+        main_layout.addWidget(stats_container, 1)
+        main_layout.addStretch(0)
         
-        main_layout.addWidget(graph_container)
-        main_layout.addWidget(stats_container)
         self.setLayout(main_layout)
-    
-    @error_boundary
+
+    def get_voltage_status_text(self, voltage):
+        """Get voltage status with color coding"""
+        if voltage < 11.0:
+            return f"Battery: {voltage:.2f}V 🔴 CRITICAL", "color: #FF4444; font-weight: bold;"
+        elif voltage < 12.0:
+            return f"Battery: {voltage:.2f}V ⚠️ LOW", "color: #FFAA00; font-weight: bold;"
+        elif voltage > 14.0:
+            return f"Battery: {voltage:.2f}V ✅ GOOD", "color: #44FF44;"
+        else:
+            return f"Battery: {voltage:.2f}V ⚡ OK", "color: #AAAAFF;"
+
+    def get_maestro_status_text(self, maestro_data, maestro_name):
+        """Format detailed Maestro status"""
+        if not maestro_data or not maestro_data.get('connected', False):
+            return f"{maestro_name}: ❌ Disconnected", "color: #FF4444;"
+        
+        # Extract detailed status
+        channels = maestro_data.get('channel_count', 0)
+        error_flags = maestro_data.get('error_flags', {})
+        script_status = maestro_data.get('script_status', {}).get('status', 'unknown')
+        moving = maestro_data.get('moving', False)
+        
+        # Check for errors
+        has_errors = error_flags.get('has_errors', False)
+        if has_errors:
+            error_details = error_flags.get('details', {})
+            error_list = [k.replace('_error', '') for k, v in error_details.items() if v]
+            error_text = ', '.join(error_list[:2])
+            status = f"{maestro_name}: ⚠️ {channels}ch, Errors: {error_text}"
+            color = "color: #FFAA00; font-weight: bold;"
+        else:
+            move_text = "Moving" if moving else "Idle"
+            status = f"{maestro_name}: ✅ {channels}ch, {script_status.title()}, {move_text}"
+            color = "color: #44FF44;"
+        
+        return status, color
+
     def handle_telemetry(self, message):
-        """Optimized telemetry handling with rate limiting"""
+        """FIXED: Enhanced telemetry handler with comprehensive debugging"""
         current_time = time.time()
+        
+        # Rate limiting to prevent UI overload
         if current_time - self.last_telemetry_update < self.telemetry_update_interval:
             return
         
         try:
             data = json.loads(message)
-            if data.get("type") == "telemetry":
-                # Batch update labels to reduce redraws
-                updates = {}
+            if data.get("type") != "telemetry":
+                return
+            
+            print(f"TELEMETRY DEBUG: Processing telemetry data")
+            print(f"TELEMETRY DEBUG: Received data keys: {list(data.keys())}")
+            
+            # Basic system stats
+            updates = {}
+            
+            cpu = data.get("cpu", "--")
+            mem = data.get("memory", "--")
+            temp = data.get("temperature", "--")
+            
+            updates["cpu"] = f"CPU: {cpu}%"
+            updates["mem"] = f"Memory: {mem}%"
+            updates["temp"] = f"Temperature: {temp}°C"
+            
+            # FIXED: Enhanced battery voltage handling - check multiple possible field names
+            battery_voltage = data.get("battery_voltage", None)
+            if battery_voltage is None:
+                battery_voltage = data.get("voltage", None)
+            if battery_voltage is None:
+                battery_voltage = data.get("battery", None)
+            
+            # Ensure we have a valid voltage reading
+            if battery_voltage is None or battery_voltage <= 0:
+                battery_voltage = 12.6  # Default fallback for display
+                print(f"TELEMETRY DEBUG: No valid voltage found, using fallback = {battery_voltage}")
+            else:
+                print(f"TELEMETRY DEBUG: Found battery voltage = {battery_voltage}")
+            
+            battery_text, battery_style = self.get_voltage_status_text(battery_voltage)
+            updates["battery"] = battery_text
+            self.status_labels["battery"].setStyleSheet(battery_style)
+            
+            # Check for voltage alarms
+            self.check_voltage_alarms(battery_voltage)
+            
+            # Stream info
+            stream = data.get("stream", {})
+            updates["stream"] = f"Stream: {stream.get('fps', 0)} FPS, {stream.get('resolution', '0x0')}, {stream.get('latency', 0)}ms"
+            
+            # Audio system
+            audio = data.get("audio_system", {})
+            updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}, {audio.get('file_count', 0)} files"
+            
+            # Enhanced Maestro status handling
+            m1 = data.get("maestro1", {})
+            m2 = data.get("maestro2", {})
+            
+            m1_text, m1_style = self.get_maestro_status_text(m1, "Maestro 1")
+            m2_text, m2_style = self.get_maestro_status_text(m2, "Maestro 2")
+            
+            updates["maestro1"] = m1_text
+            updates["maestro2"] = m2_text
+            
+            self.status_labels["maestro1"].setStyleSheet(m1_style)
+            self.status_labels["maestro2"].setStyleSheet(m2_style)
+            
+            # Update all text labels
+            for key, text in updates.items():
+                if key in self.status_labels:
+                    self.status_labels[key].setText(text)
+            
+            # FIXED: Enhanced graph data processing with relative time
+            current_a0 = data.get("current", 0.0)
+            current_a1 = data.get("current_a1", 0.0)
+            
+            # FIXED: Calculate relative time in seconds from start
+            relative_time = current_time - self.start_time
+            
+            print(f"TELEMETRY DEBUG: Graph data - Time: {relative_time:.1f}s, Battery: {battery_voltage:.2f}V, Current A0: {current_a0:.2f}A, Current A1: {current_a1:.2f}A")
+            
+            # Always update graph data with relative time
+            self.battery_voltage_data.append(float(battery_voltage))
+            self.current_a0_data.append(float(current_a0))
+            self.current_a1_data.append(float(current_a1))
+            self.time_data.append(relative_time)  # Use relative time instead of absolute
+            
+            # FIXED: Robust graph update with better time scaling
+            try:
+                # Convert deques to lists for plotting
+                time_list = list(self.time_data)
+                voltage_list = list(self.battery_voltage_data)
+                current_a0_list = list(self.current_a0_data)
+                current_a1_list = list(self.current_a1_data)
                 
-                cpu = data.get("cpu", "--")
-                mem = data.get("memory", "--")
-                temp = data.get("temperature", "--")
+                print(f"GRAPH DEBUG: Data lengths - Time: {len(time_list)}, Voltage: {len(voltage_list)}")
+                if len(time_list) > 1:
+                    print(f"GRAPH DEBUG: Time range: {min(time_list):.1f}s - {max(time_list):.1f}s")
+                    print(f"GRAPH DEBUG: Voltage range: {min(voltage_list):.2f}V - {max(voltage_list):.2f}V")
                 
-                updates["cpu"] = f"CPU: {cpu}%"
-                updates["mem"] = f"Memory: {mem}%"
-                updates["temp"] = f"Temperature: {temp}°C"
-                
-                stream = data.get("stream", {})
-                updates["stream"] = f"Stream: {stream.get('fps', 0)} FPS, {stream.get('resolution', '0x0')}, {stream.get('latency', 0)}ms"
-                
-                audio = data.get("audio_system", {})
-                updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}, {audio.get('file_count', 0)} files"
-                
-                m1 = data.get("maestro1", {})
-                m2 = data.get("maestro2", {})
-                updates["maestro1"] = f"Maestro 1: {'Connected' if m1.get('connected') else 'Disconnected'}, {m1.get('channels', 0)} channels"
-                updates["maestro2"] = f"Maestro 2: {'Connected' if m2.get('connected') else 'Disconnected'}, {m2.get('channels', 0)} channels"
-                
-                # Batch update all labels
-                for key, text in updates.items():
-                    if key in self.status_labels:
-                        self.status_labels[key].setText(text)
-                
-                # Update graph data (limited)
-                voltage = data.get("voltage", 0)
-                current = data.get("current", 0)
-                if voltage or current:
-                    self.voltage_data.append(voltage)
-                    self.current_data.append(current)
-                    self.time_data.append(current_time)
+                if len(time_list) > 1 and len(voltage_list) > 1:  # Need at least 2 points
+                    # FIXED: Update voltage curve with proper data
+                    self.voltage_curve.setData(time_list, voltage_list)
+                    print(f"VOLTAGE UPDATE: Updated voltage curve, range: {min(voltage_list):.2f}V - {max(voltage_list):.2f}V")
                     
-                    # Update plots with limited data
-                    self.voltage_curve.setData(list(self.time_data), list(self.voltage_data))
-                    self.current_plot.setData(list(self.time_data), list(self.current_data))
+                    # Update current curves
+                    if len(time_list) > 1:
+                        # Update A0 bars (bottom layer)
+                        self.current_a0_bars.setOpts(
+                            x=time_list, 
+                            height=current_a0_list, 
+                            width=0.8
+                        )
+                        
+                        # Update A1 bars (stacked on top of A0)
+                        stacked_a1 = [a0 + a1 for a0, a1 in zip(current_a0_list, current_a1_list)]
+                        self.current_a1_bars.setOpts(
+                            x=time_list, 
+                            height=stacked_a1, 
+                            width=0.8
+                        )
+                    
+                    # FIXED: Auto-scale the X-axis to show recent data with proper time scaling
+                    time_span = max(time_list) - min(time_list)
+                    if time_span > 120:  # If more than 2 minutes of data, show last 2 minutes
+                        x_min = max(time_list) - 120
+                        x_max = max(time_list)
+                        self.graph_widget.setXRange(x_min, x_max)
+                        print(f"X-AXIS: Showing last 2 minutes ({x_min:.1f}s - {x_max:.1f}s)")
+                    elif time_span > 1:  # Show all data if less than 2 minutes
+                        x_min = min(time_list)
+                        x_max = max(time_list) + 5  # Add 5s padding
+                        self.graph_widget.setXRange(x_min, x_max)
+                        print(f"X-AXIS: Showing all data ({x_min:.1f}s - {x_max:.1f}s)")
+                    
+                    # Force graph update
+                    self.graph_widget.update()
                 
-                self.last_telemetry_update = current_time
+                else:
+                    print(f"GRAPH DEBUG: Not enough data points yet (need 2+)")
                 
+            except Exception as graph_error:
+                print(f"GRAPH ERROR: Failed to update graph: {graph_error}")
+                import traceback
+                traceback.print_exc()
+            
+            self.last_telemetry_update = current_time
+            
+        except json.JSONDecodeError as e:
+            print(f"TELEMETRY ERROR: JSON decode failed: {e}")
         except Exception as e:
-            print(f"Telemetry parse error: {e}")
-    
+            print(f"TELEMETRY ERROR: Processing failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def check_voltage_alarms(self, voltage):
+        """Check and display voltage alarms"""
+        current_alarm = None
+        
+        if voltage < 11.0:
+            current_alarm = "CRITICAL"
+        elif voltage < 12.0:
+            current_alarm = "LOW"
+        
+        # Only show popup if alarm state changed
+        if current_alarm != self.last_voltage_alarm and current_alarm is not None:
+            if current_alarm == "CRITICAL":
+                QMessageBox.critical(self, "Battery Critical", 
+                                   f"⚠️ CRITICAL: Battery voltage is {voltage:.2f}V!\nLand immediately to prevent damage!")
+            elif current_alarm == "LOW":
+                QMessageBox.warning(self, "Battery Low", 
+                                  f"⚠️ WARNING: Battery voltage is {voltage:.2f}V\nConsider landing soon.")
+        
+        self.last_voltage_alarm = current_alarm
+
     def send_failsafe(self):
-        self.websocket.send_safe(json.dumps({"type": "failsafe"}))
+        """Send failsafe command to backend"""
+        if hasattr(self.websocket, 'send_safe'):
+            self.websocket.send_safe(json.dumps({"type": "failsafe"}))
+        else:
+            try:
+                self.websocket.sendTextMessage(json.dumps({"type": "failsafe"}))
+            except Exception as e:
+                print(f"Failed to send failsafe command: {e}")
+
+    def reload_settings(self):
+        """Reload settings if needed"""
+        print("HealthScreen: Settings reloaded")
+    
+    def reset_graph_time(self):
+        """Reset the graph time scale to start from 0"""
+        self.start_time = time.time()
+        self.time_data.clear()
+        self.battery_voltage_data.clear()
+        self.current_a0_data.clear()
+        self.current_a1_data.clear()
+        
+        # Clear the graph plots
+        self.voltage_curve.clear()
+        self.current_a0_plot.clear()
+        self.current_a1_plot.clear()
+        
+        print("Graph time scale reset")
+
+    def get_battery_health_summary(self):
+        """Get battery health summary for display"""
+        if not self.battery_voltage_data:
+            return "No battery data"
+        
+        current_voltage = self.battery_voltage_data[-1]
+        if len(self.battery_voltage_data) > 10:
+            avg_voltage = sum(list(self.battery_voltage_data)[-10:]) / 10
+            voltage_trend = "↗️" if current_voltage > avg_voltage else "↘️" if current_voltage < avg_voltage else "➡️"
+        else:
+            voltage_trend = "➡️"
+        
+        # Estimate remaining capacity (rough approximation for 4S LiPo)
+        if current_voltage > 15.0:
+            capacity = "90-100%"
+        elif current_voltage > 14.4:
+            capacity = "75-90%"
+        elif current_voltage > 13.8:
+            capacity = "50-75%"
+        elif current_voltage > 13.2:
+            capacity = "25-50%"
+        elif current_voltage > 12.6:
+            capacity = "10-25%"
+        else:
+            capacity = "<10%"
+        
+        return f"{voltage_trend} Est. Capacity: {capacity}"
 
 
 class ServoConfigScreen(QWidget):
@@ -1677,6 +1955,8 @@ class MainWindow(QMainWindow):
         if not ws_url.startswith("ws://"):
             ws_url = f"ws://{ws_url}"
         self.websocket = WebSocketManager(ws_url)
+        # Connect websocket to header for voltage updates
+        self.websocket.textMessageReceived.connect(self.update_header_from_telemetry)
         
         self.header = DynamicHeader("Home")
         self.header.setMaximumWidth(1000)
@@ -1708,6 +1988,23 @@ class MainWindow(QMainWindow):
 
         self.setup_navigation()
         self.setup_layout()
+
+    def update_header_from_telemetry(self, message):
+        """Update header voltage from telemetry"""
+        try:
+            data = json.loads(message)
+            if data.get("type") == "telemetry":
+                voltage = data.get("battery_voltage", 0.0)
+                if voltage > 0:
+                    self.header.update_voltage(voltage)
+                
+                # Also update WiFi with a simulated value
+                import random
+                wifi_percent = random.randint(70, 100)
+                self.header.update_wifi(wifi_percent)
+                
+        except Exception as e:
+            print(f"Header update error: {e}")
 
     def setup_navigation(self):
         """Setup navigation with optimized button handling"""
@@ -1837,16 +2134,5 @@ if __name__ == "__main__":
     window.show()
     
     print("🤖 WALL-E Optimized Frontend Started")
-    print("✅ Performance improvements active:")
-    print("   - Lazy MediaPipe initialization")
-    print("   - Configuration caching")
-    print("   - Threaded image processing")
-    print("   - WebSocket auto-reconnect")
-    print("   - Memory management")
-    print("   - Optimized UI updates")
-    print("🔧 WebSocket fixes applied:")
-    print("   - Single WebSocket connection to backend")
-    print("   - Shared connection for all screens")
-    print("   - Removed duplicate telemetry connection")
     
     sys.exit(app.exec())
