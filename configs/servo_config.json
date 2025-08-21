@@ -41,7 +41,8 @@
     "group": "Eyebrow",
     "group_type": "Same",
     "control_type": "Analog Button",
-    "control_action": "control"
+    "control_action": "control",
+    "min": 967
   },
   "m1_ch4": {
     "name": "Left Eye Tilt",
@@ -90,7 +91,7 @@
     "group_type": "Stick",
     "control_type": "Stick",
     "control_action": "control",
-    "min": 798,
+    "min": 793,
     "max": 1800
   },
   "m1_ch8": {
