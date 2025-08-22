@@ -656,7 +656,7 @@ class HealthScreen(QWidget):
         self.graph_widget.getPlotItem().setContentsMargins(5, 5, 5, 5)  # left, top, right, bottom
         
         # Limit data points for better performance
-        self.max_data_points = 300
+        self.max_data_points = 100
         self.battery_voltage_data = deque(maxlen=self.max_data_points)
         self.current_a0_data = deque(maxlen=self.max_data_points)
         self.current_a1_data = deque(maxlen=self.max_data_points)
@@ -2955,155 +2955,207 @@ class HomeScreen(QWidget):
             "state": state
         }))
 
-
-class SettingsScreen(QWidget):
-    def __init__(self):
+# PERFORMANCE IMPROVEMENT 5: Optimized Camera Screen
+class CameraFeedScreen(QWidget):
+    def __init__(self, websocket):
         super().__init__()
+        self.websocket = websocket
+        self.sample_buffer = deque(maxlen=SAMPLE_DURATION * SAMPLE_RATE)
+        self.last_wave_time = 0
+        self.last_sample_time = 0
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
-        self.setFixedWidth(1180)
-        self.config_path = "configs/steamdeck_config.json"
+        self.tracking_enabled = False
+        
+        # Use camera proxy URL instead of direct ESP32 URL
+        config = config_manager.get_config("configs/steamdeck_config.json")
+        camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
+        self.image_thread = ImageProcessingThread(camera_proxy_url)
+        self.image_thread.frame_processed.connect(self.update_display)
+        self.image_thread.stats_updated.connect(self.update_stats)
+        
         self.init_ui()
-        self.load_config()
-
+        
     def init_ui(self):
-        font = QFont("Arial", 16)
-        self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(100, 20, 15, 5)
-        self.grid = QGridLayout()
-        self.grid.setVerticalSpacing(20)
-
-        # ESP32 Cam Stream URL
-        self.url_label = QLabel("ESP32 Cam Stream URL:")
-        self.url_label.setFont(font)
-        self.url_input = QLineEdit()
-        self.url_input.setFont(font)
-        self.url_input.setPlaceholderText("http://10.1.1.10/stream")
-
-        # Control WebSocket (Note: removed telemetry websocket since we use one connection now)
-        self.control_label = QLabel("Control WebSocket URL:")
-        self.control_label.setFont(font)
-        self.control_input = QLineEdit()
-        self.control_input.setFont(font)
-        self.control_input.setPlaceholderText("localhost:8766")
-
-        # Wave detection settings
-        self.sample_duration_label = QLabel("Wave Sample Duration (sec):")
-        self.sample_duration_label.setFont(font)
-        self.sample_duration_spin = QSpinBox()
-        self.sample_duration_spin.setFont(font)
-        self.sample_duration_spin.setRange(1, 10)
-
-        self.sample_rate_label = QLabel("Sample Rate (Hz):")
-        self.sample_rate_label.setFont(font)
-        self.sample_rate_spin = QSpinBox()
-        self.sample_rate_spin.setFont(font)
-        self.sample_rate_spin.setRange(1, 60)
-
-        self.confidence_label = QLabel("Confidence Threshold (%):")
-        self.confidence_label.setFont(font)
-        self.confidence_slider = QSlider(Qt.Orientation.Horizontal)
-        self.confidence_slider.setRange(0, 100)
-        self.confidence_slider.setValue(70)
-        self.confidence_slider.setFixedWidth(300)
-        self.confidence_value = QLabel("70%")
-        self.confidence_value.setFont(font)
-        self.confidence_slider.valueChanged.connect(
-            lambda val: self.confidence_value.setText(f"{val}%")
-        )
-
-        self.stand_down_label = QLabel("Stand Down Time (sec):")
-        self.stand_down_label.setFont(font)
-        self.stand_down_spin = QSpinBox()
-        self.stand_down_spin.setFont(font)
-        self.stand_down_spin.setRange(0, 300)
-
-        # Add widgets to grid
-        self.grid.addWidget(self.url_label, 0, 0)
-        self.grid.addWidget(self.url_input, 0, 1)
-        self.grid.addWidget(self.control_label, 1, 0)
-        self.grid.addWidget(self.control_input, 1, 1)
-        self.grid.addWidget(self.sample_duration_label, 2, 0)
-        self.grid.addWidget(self.sample_duration_spin, 2, 1)
-        self.grid.addWidget(self.sample_rate_label, 3, 0)
-        self.grid.addWidget(self.sample_rate_spin, 3, 1)
-        self.grid.addWidget(self.confidence_label, 4, 0)
-        self.grid.addWidget(self.confidence_slider, 4, 1)
-        self.grid.addWidget(self.confidence_value, 4, 2)
-        self.grid.addWidget(self.stand_down_label, 5, 0)
-        self.grid.addWidget(self.stand_down_spin, 5, 1)
-
-        self.layout.addLayout(self.grid)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.save_btn = QPushButton("💾 Update")
-        self.save_btn.setFont(font)
-        self.save_btn.clicked.connect(self.save_config)
-        self.reset_btn = QPushButton("🔄 Reset")
-        self.reset_btn.setFont(font)
-        self.reset_btn.clicked.connect(self.reset_to_defaults)
-        btn_layout.addWidget(self.save_btn)
-        btn_layout.addWidget(self.reset_btn)
-        self.layout.addLayout(btn_layout)
-
-        self.setLayout(self.layout)
-
+        """Optimized UI setup"""
+        self.video_label = QLabel()
+        self.video_label.setFixedSize(640, 480)
+        self.video_label.setStyleSheet("""
+            border: 2px solid #555;
+            border-radius: 20px;
+            background-color: black;
+        """)
+        
+        self.stats_label = QLabel("Stream Stats: Initializing...")
+        self.stats_label.setStyleSheet("""
+            border: 1px solid #555;
+            border-radius: 4px;
+            background-color: black;
+            color: #aaa;   
+        """)
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.stats_label.setFixedWidth(640)
+        
+        # Control buttons
+        self.setup_control_buttons()
+        self.setup_layout()
+        
+        # Start image processing thread
+        self.image_thread.start()
+    
+    def setup_control_buttons(self):
+        """Setup control buttons with proper styling"""
+        self.reconnect_button = QPushButton()
+        if os.path.exists("icons/Reconnect.png"):
+            self.reconnect_button.setIcon(QIcon("icons/Reconnect.png"))
+        self.reconnect_button.clicked.connect(self.reconnect_stream)
+        self.reconnect_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        
+        self.tracking_button = QPushButton()
+        self.tracking_button.setCheckable(True)
+        if os.path.exists("icons/Tracking.png"):
+            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+        self.tracking_button.clicked.connect(self.toggle_tracking)
+        self.tracking_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+    
+    def setup_layout(self):
+        """Setup optimized layout"""
+        video_layout = QVBoxLayout()
+        video_layout.addWidget(self.video_label)
+        video_layout.addWidget(self.stats_label)
+        
+        button_layout = QVBoxLayout()
+        button_layout.setSpacing(0)
+        button_layout.addWidget(self.reconnect_button)
+        button_layout.addWidget(self.tracking_button)
+        button_layout.addSpacing(200)
+        
+        main_layout = QHBoxLayout()
+        main_layout.addSpacing(81)
+        main_layout.addLayout(video_layout, 2)
+        main_layout.addLayout(button_layout, 1)
+        
+        self.setLayout(main_layout)
+    
     @error_boundary
-    def load_config(self):
-        config = config_manager.get_config(self.config_path)
-        current = config.get("current", {})
-        wave = current.get("wave_detection", {})
-        self.url_input.setText(current.get("esp32_cam_url", ""))
-        self.control_input.setText(current.get("control_websocket_url", "localhost:8766"))
-        self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
-        self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
-        self.confidence_slider.setValue(int(wave.get("confidence_threshold", 0.7) * 100))
-        self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
-
-    @error_boundary
-    def save_config(self):
+    def update_display(self, processed_data):
+        """Update display with processed frame data"""
         try:
-            config = config_manager.get_config(self.config_path)
-        except:
-            config = {}
-
-        config["current"] = {
-            "esp32_cam_url": self.url_input.text(),
-            "control_websocket_url": self.control_input.text(),
-            "wave_detection": {
-                "sample_duration": self.sample_duration_spin.value(),
-                "sample_rate": self.sample_rate_spin.value(),
-                "confidence_threshold": self.confidence_slider.value() / 100.0,
-                "stand_down_time": self.stand_down_spin.value()
-            }
-        }
-
-        try:
-            with open(self.config_path, "w") as f:
-                json.dump(config, f, indent=2)
-            config_manager.clear_cache()  # Clear cache after save
-            QMessageBox.information(self, "Update", "Configuration updated successfully.")
+            frame_rgb = processed_data['frame']
+            wave_detected = processed_data['wave_detected']
             
-            # Reload settings in other components
-            app = QApplication.instance()
-            if app:
-                for widget in app.allWidgets():
-                    if hasattr(widget, "reload_wave_settings"):
-                        widget.reload_wave_settings()
+            if frame_rgb is None:
+                # Handle case where OpenCV is not available
+                self.video_label.setText("Camera not available\n(OpenCV not installed)")
+                return
+            
+            # Handle wave detection logic
+            if self.tracking_enabled and wave_detected:
+                current_time = time.time()
+                if current_time - self.last_sample_time >= 1.0 / SAMPLE_RATE:
+                    self.sample_buffer.append(wave_detected)
+                    self.last_sample_time = current_time
+                
+                if len(self.sample_buffer) == self.sample_buffer.maxlen:
+                    confidence = sum(self.sample_buffer) / len(self.sample_buffer)
+                    if confidence >= CONFIDENCE_THRESHOLD:
+                        if current_time - self.last_wave_time >= STAND_DOWN_TIME:
+                            self.websocket.send_safe(json.dumps({
+                                "type": "gesture",
+                                "name": "wave"
+                            }))
+                            self.last_wave_time = current_time
+                            self.sample_buffer.clear()
+            
+            # Convert to QPixmap and display
+            height, width, channel = frame_rgb.shape
+            bytes_per_line = 3 * width
+            q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_img).scaled(
+                self.video_label.size(), 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.FastTransformation  # Use fast transformation
+            )
+            self.video_label.setPixmap(pixmap)
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
-
+            print(f"Display update error: {e}")
+            self.video_label.setText(f"Display Error:\n{str(e)}")
+    
+    def update_stats(self, stats_text):
+        """Update statistics display"""
+        self.stats_label.setText(f"Stream Stats: {stats_text}")
+    
     @error_boundary
-    def reset_to_defaults(self):
-        config = config_manager.get_config(self.config_path)
-        defaults = config.get("defaults", {})
-        config["current"] = defaults
-        with open(self.config_path, "w") as f:
-            json.dump(config, f, indent=2)
-        config_manager.clear_cache()
-        self.load_config()
-        QMessageBox.information(self, "Reset", "Configuration reset to defaults.")
-
+    def toggle_tracking(self):
+        """Toggle tracking with thread communication"""
+        self.tracking_enabled = self.tracking_button.isChecked()
+        self.image_thread.set_tracking_enabled(self.tracking_enabled)
+        
+        if self.tracking_enabled and os.path.exists("icons/Tracking_pressed.png"):
+            self.tracking_button.setIcon(QIcon("icons/Tracking_pressed.png"))
+        elif os.path.exists("icons/Tracking.png"):
+            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+        
+        self.websocket.send_safe(json.dumps({
+            "type": "tracking",
+            "state": self.tracking_enabled
+        }))
+    
+    @error_boundary
+    def reconnect_stream(self):
+        """Reconnect stream by restarting image thread"""
+        self.image_thread.stop()
+        config = config_manager.get_config("configs/steamdeck_config.json")
+        camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
+        self.image_thread = ImageProcessingThread(camera_proxy_url)
+        self.image_thread.frame_processed.connect(self.update_display)
+        self.image_thread.stats_updated.connect(self.update_stats)
+        self.image_thread.start()
+        self.stats_label.setText("Stream Stats: Reconnected")
+    
+    def reload_wave_settings(self):
+        """Reload wave detection settings"""
+        try:
+            config_manager.clear_cache()
+            config = config_manager.get_config("configs/steamdeck_config.json")
+            wave_config = config.get("current", {})
+            wave_settings = wave_config.get("wave_detection", {})
+            
+            global SAMPLE_DURATION, SAMPLE_RATE, CONFIDENCE_THRESHOLD, STAND_DOWN_TIME
+            SAMPLE_DURATION = wave_settings.get("sample_duration", 3)
+            SAMPLE_RATE = wave_settings.get("sample_rate", 5)
+            CONFIDENCE_THRESHOLD = wave_settings.get("confidence_threshold", 0.7)
+            STAND_DOWN_TIME = wave_settings.get("stand_down_time", 30)
+            
+            self.sample_buffer = deque(maxlen=SAMPLE_DURATION * SAMPLE_RATE)
+            self.last_sample_time = 0
+            print("Wave detection settings reloaded.")
+        except Exception as e:
+            print(f"Failed to reload wave detection settings: {e}")
+    
+    def reload_camera_settings(self):
+        """NEW: Reload camera proxy URL settings"""
+        try:
+            config_manager.clear_cache()
+            config = config_manager.get_config("configs/steamdeck_config.json")
+            camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
+            
+            # Restart image thread with new URL
+            self.image_thread.stop()
+            self.image_thread = ImageProcessingThread(camera_proxy_url)
+            self.image_thread.frame_processed.connect(self.update_display)
+            self.image_thread.stats_updated.connect(self.update_stats)
+            self.image_thread.start()
+            
+            self.stats_label.setText("Stream Stats: Camera settings reloaded")
+            print(f"Camera settings reloaded. New proxy URL: {camera_proxy_url}")
+        except Exception as e:
+            print(f"Failed to reload camera settings: {e}")
+    
+    def closeEvent(self, event):
+        """Proper cleanup on close"""
+        self.image_thread.stop()
+        event.accept()
 
 class SceneScreen(QWidget):
     def __init__(self, websocket):
@@ -3230,6 +3282,182 @@ class SceneScreen(QWidget):
         emotions = config if isinstance(config, list) else []
         self.selected_labels = [item.get("label", "") for item in emotions]
 
+class SettingsScreen(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet("background-color: #1e1e1e; color: white;")
+        self.setFixedWidth(1180)
+        self.config_path = "configs/steamdeck_config.json"
+        self.init_ui()
+        self.load_config()
+
+    def init_ui(self):
+        font = QFont("Arial", 16)
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(100, 20, 15, 5)
+        self.grid = QGridLayout()
+        self.grid.setVerticalSpacing(20)
+
+        # ESP32 Cam Stream URL (for camera proxy backend)
+        self.esp32_url_label = QLabel("ESP32 Cam Stream URL:")
+        self.esp32_url_label.setFont(font)
+        self.esp32_url_input = QLineEdit()
+        self.esp32_url_input.setFont(font)
+        self.esp32_url_input.setPlaceholderText("http://esp32.local:81/stream")
+
+        # Camera Proxy URL (for frontend consumption)
+        self.proxy_url_label = QLabel("Camera Proxy URL:")
+        self.proxy_url_label.setFont(font)
+        self.proxy_url_input = QLineEdit()
+        self.proxy_url_input.setFont(font)
+        self.proxy_url_input.setPlaceholderText("http://10.1.1.10:8081/stream")
+
+        # Control WebSocket
+        self.control_label = QLabel("Control WebSocket URL:")
+        self.control_label.setFont(font)
+        self.control_input = QLineEdit()
+        self.control_input.setFont(font)
+        self.control_input.setPlaceholderText("localhost:8766")
+
+        # Wave detection settings (keeping existing)
+        self.sample_duration_label = QLabel("Wave Sample Duration (sec):")
+        self.sample_duration_label.setFont(font)
+        self.sample_duration_spin = QSpinBox()
+        self.sample_duration_spin.setFont(font)
+        self.sample_duration_spin.setRange(1, 10)
+
+        self.sample_rate_label = QLabel("Sample Rate (Hz):")
+        self.sample_rate_label.setFont(font)
+        self.sample_rate_spin = QSpinBox()
+        self.sample_rate_spin.setFont(font)
+        self.sample_rate_spin.setRange(1, 60)
+
+        self.confidence_label = QLabel("Confidence Threshold (%):")
+        self.confidence_label.setFont(font)
+        self.confidence_slider = QSlider(Qt.Orientation.Horizontal)
+        self.confidence_slider.setRange(0, 100)
+        self.confidence_slider.setValue(70)
+        self.confidence_slider.setFixedWidth(300)
+        self.confidence_value = QLabel("70%")
+        self.confidence_value.setFont(font)
+        self.confidence_slider.valueChanged.connect(
+            lambda val: self.confidence_value.setText(f"{val}%")
+        )
+
+        self.stand_down_label = QLabel("Stand Down Time (sec):")
+        self.stand_down_label.setFont(font)
+        self.stand_down_spin = QSpinBox()
+        self.stand_down_spin.setFont(font)
+        self.stand_down_spin.setRange(0, 300)
+
+        # Add widgets to grid
+        self.grid.addWidget(self.esp32_url_label, 0, 0)
+        self.grid.addWidget(self.esp32_url_input, 0, 1)
+        self.grid.addWidget(self.proxy_url_label, 1, 0)
+        self.grid.addWidget(self.proxy_url_input, 1, 1)
+        self.grid.addWidget(self.control_label, 2, 0)
+        self.grid.addWidget(self.control_input, 2, 1)
+        self.grid.addWidget(self.sample_duration_label, 3, 0)
+        self.grid.addWidget(self.sample_duration_spin, 3, 1)
+        self.grid.addWidget(self.sample_rate_label, 4, 0)
+        self.grid.addWidget(self.sample_rate_spin, 4, 1)
+        self.grid.addWidget(self.confidence_label, 5, 0)
+        self.grid.addWidget(self.confidence_slider, 5, 1)
+        self.grid.addWidget(self.confidence_value, 5, 2)
+        self.grid.addWidget(self.stand_down_label, 6, 0)
+        self.grid.addWidget(self.stand_down_spin, 6, 1)
+
+        self.layout.addLayout(self.grid)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.save_btn = QPushButton("💾 Update")
+        self.save_btn.setFont(font)
+        self.save_btn.clicked.connect(lambda checked: self.save_config())  # FIX: Ignore checked parameter
+        self.reset_btn = QPushButton("🔄 Reset")
+        self.reset_btn.setFont(font)
+        self.reset_btn.clicked.connect(lambda checked: self.reset_to_defaults())  # FIX: Ignore checked parameter
+        btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.reset_btn)
+        self.layout.addLayout(btn_layout)
+
+        self.setLayout(self.layout)
+
+    @error_boundary
+    def load_config(self):
+        config = config_manager.get_config(self.config_path)
+        current = config.get("current", {})
+        wave = current.get("wave_detection", {})
+        self.esp32_url_input.setText(current.get("esp32_cam_url", ""))
+        self.proxy_url_input.setText(current.get("camera_proxy_url", ""))
+        self.control_input.setText(current.get("control_websocket_url", "localhost:8766"))
+        self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
+        self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
+        self.confidence_slider.setValue(int(wave.get("confidence_threshold", 0.7) * 100))
+        self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
+
+    @error_boundary
+    def save_config(self):
+        try:
+            config = config_manager.get_config(self.config_path)
+        except:
+            config = {}
+
+        config["current"] = {
+            "esp32_cam_url": self.esp32_url_input.text(),
+            "camera_proxy_url": self.proxy_url_input.text(),
+            "control_websocket_url": self.control_input.text(),
+            "wave_detection": {
+                "sample_duration": self.sample_duration_spin.value(),
+                "sample_rate": self.sample_rate_spin.value(),
+                "confidence_threshold": self.confidence_slider.value() / 100.0,
+                "stand_down_time": self.stand_down_spin.value()
+            }
+        }
+
+        try:
+            with open(self.config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            config_manager.clear_cache()  # Clear cache after save
+            
+            # Send ESP32 URL update to backend to update camera_config.json
+            app = QApplication.instance()
+            if app:
+                main_window = None
+                for widget in app.allWidgets():
+                    if isinstance(widget, MainWindow):
+                        main_window = widget
+                        break
+                
+                if main_window and hasattr(main_window, 'websocket'):
+                    main_window.websocket.send_safe(json.dumps({
+                        "type": "update_camera_config",
+                        "esp32_url": self.esp32_url_input.text()
+                    }))
+            
+            QMessageBox.information(self, "Update", "Configuration updated successfully.\nCamera proxy will restart with new settings.")
+            
+            # Reload settings in other components
+            if app:
+                for widget in app.allWidgets():
+                    if hasattr(widget, "reload_wave_settings"):
+                        widget.reload_wave_settings()
+                    elif isinstance(widget, CameraFeedScreen):
+                        widget.reload_camera_settings()
+                        
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save config: {e}")
+
+    @error_boundary
+    def reset_to_defaults(self):
+        config = config_manager.get_config(self.config_path)
+        defaults = config.get("defaults", {})
+        config["current"] = defaults
+        with open(self.config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        config_manager.clear_cache()
+        self.load_config()
+        QMessageBox.information(self, "Reset", "Configuration reset to defaults.")
 
 class MainWindow(QMainWindow):
     def __init__(self):

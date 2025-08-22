@@ -1,8 +1,8 @@
 {
   "current": {
-    "esp32_cam_url": "http://10.1.1.230:8081/stream",
-    "telemetry_websocket_url": "ws://10.1.1.230:8765",
-    "control_websocket_url": "ws://10.1.1.230:8766",
+    "esp32_cam_url": "http://10.1.1.203:81/stream",
+    "camera_proxy_url": "http://10.1.1.230:8081/stream",
+    "control_websocket_url": "10.1.1.230:8766",
     "wave_detection": {
       "sample_duration": 3,
       "sample_rate": 5,
@@ -11,9 +11,9 @@
     }
   },
   "defaults": {
-    "esp32_cam_url": "http://10.1.1.230:8081/stream",
-    "telemetry_websocket_url": "ws://10.1.1.199:8765",
-    "control_websocket_url": "ws://10.1.1.199:8766",
+    "esp32_cam_url": "http://esp32.local:81/stream",
+    "camera_proxy_url": "http://localhost:8081/stream",
+    "control_websocket_url": "localhost:8766",
     "wave_detection": {
       "sample_duration": 3,
       "sample_rate": 5,
