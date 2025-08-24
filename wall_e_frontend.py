@@ -3,6 +3,8 @@ import sys
 import json
 import time
 import random
+import requests
+import numpy as np
 from tkinter import font
 import psutil
 from PyQt6.QtWidgets import (
@@ -118,116 +120,144 @@ def error_boundary(func):
             return None
     return wrapper
 
-# PERFORMANCE IMPROVEMENT 3: Optimized image processing thread
+
 class ImageProcessingThread(QThread):
-    frame_processed = pyqtSignal(object)  # Emit processed frame
-    stats_updated = pyqtSignal(str)      # Emit stats string
-    
-    def __init__(self, esp32_cam_url):
+    frame_processed = pyqtSignal(object)
+    stats_updated = pyqtSignal(str)
+
+    def __init__(self, camera_proxy_url):
         super().__init__()
-        self.esp32_cam_url = esp32_cam_url
+        self.camera_proxy_url = camera_proxy_url
+        self.stats_url = "http://10.1.1.230:8081/stats"
         self.running = False
         self.tracking_enabled = False
-        self.cap = None
-        self.hog = None
         self.frame_skip_count = 0
-        self.target_fps = 15  # Reduced from 30+ for better performance
-        
+        self.target_fps = 15
+        self.last_stats_update = 0
+        self.stats_fetch_interval = 2.0
+        self.hog = None
+        print(f"📷 Camera thread initialized with URL: {camera_proxy_url}")
+
     def set_tracking_enabled(self, enabled):
         self.tracking_enabled = enabled
-        
+        print(f"👀 Tracking enabled: {enabled}")
+
+    def fetch_camera_stats(self):
+        try:
+            response = requests.get(self.stats_url, timeout=2)
+            if response.status_code == 200:
+                stats_data = response.json()
+                fps = stats_data.get("fps", 0)
+                frame_count = stats_data.get("frame_count", 0)
+                latency = stats_data.get("latency", 0)
+                status = stats_data.get("status", "unknown")
+                return f"FPS: {fps}, Frames: {frame_count}, Latency: {latency}ms, Status: {status}"
+            else:
+                return f"Stats Error: HTTP {response.status_code}"
+        except Exception as e:
+            return f"Stats Error: {str(e)[:50]}"
+
     def run(self):
         if not CV2_AVAILABLE:
-            print("Camera processing disabled - OpenCV not available")
+            print("❌ Camera processing disabled - OpenCV not available")
+            self.stats_updated.emit("OpenCV not available")
             return
-            
+
         self.running = True
-        self.cap = cv2.VideoCapture(self.esp32_cam_url if self.esp32_cam_url else 0)
-        
-        # Optimize capture settings
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer lag
-        self.cap.set(cv2.CAP_PROP_FPS, self.target_fps)
-        
-        if self.tracking_enabled and self.hog is None:
-            self.hog = cv2.HOGDescriptor()
-            self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-            
         frame_time = 1.0 / self.target_fps
         last_process_time = time.time()
-        
-        while self.running:
-            current_time = time.time()
-            
-            # Frame rate limiting
-            if current_time - last_process_time < frame_time:
-                self.msleep(10)
-                continue
-                
-            ret, frame = self.cap.read()
-            if not ret:
-                self.msleep(50)
-                continue
-                
-            # Process every nth frame for performance
-            self.frame_skip_count += 1
-            if self.frame_skip_count % 2 == 0:  # Process every other frame
-                processed_frame = self.process_frame(frame)
-                self.frame_processed.emit(processed_frame)
-                
-            last_process_time = current_time
-            
+        reconnect_attempts = 0
+        max_retries = 5
+        reconnect_delay = 3  # seconds
+
+        while self.running and reconnect_attempts < max_retries:
+            try:
+                self.stats_updated.emit(f"Connecting to stream... (Attempt {reconnect_attempts + 1})")
+                stream = requests.get(self.camera_proxy_url, stream=True, timeout=5)
+                stream.raise_for_status()
+                print("✅ Connected to MJPEG stream")
+                self.stats_updated.emit("Stream connected")
+                reconnect_attempts = 0  # reset on success
+
+                bytes_data = b""
+                for chunk in stream.iter_content(chunk_size=1024):
+                    if not self.running:
+                        break
+
+                    bytes_data += chunk
+                    a = bytes_data.find(b'\xff\xd8')
+                    b = bytes_data.find(b'\xff\xd9')
+
+                    if a != -1 and b != -1:
+                        jpg = bytes_data[a:b+2]
+                        bytes_data = bytes_data[b+2:]
+
+                        img_array = np.frombuffer(jpg, dtype=np.uint8)
+                        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+                        if frame is not None:
+                            current_time = time.time()
+                            if current_time - last_process_time >= frame_time:
+                                processed_frame = self.process_frame(frame)
+                                self.frame_processed.emit(processed_frame)
+                                last_process_time = current_time
+
+                            if current_time - self.last_stats_update >= self.stats_fetch_interval:
+                                stats_text = self.fetch_camera_stats()
+                                self.stats_updated.emit(stats_text)
+                                self.last_stats_update = current_time
+            except Exception as e:
+                reconnect_attempts += 1
+                print(f"❌ MJPEG stream error: {e}")
+                self.stats_updated.emit(f"Stream error: {str(e)} - retrying in {reconnect_delay}s")
+                time.sleep(reconnect_delay)
+
+        if reconnect_attempts >= max_retries:
+            self.stats_updated.emit("❌ Failed to connect after multiple attempts")
+            print("❌ Max reconnect attempts reached")
+
+
     def process_frame(self, frame):
-        """Optimized frame processing"""
-        if not CV2_AVAILABLE:
-            return {'frame': None, 'wave_detected': False, 'stats': 'OpenCV not available'}
-            
         try:
-            # Resize frame for faster processing
             height, width = frame.shape[:2]
             if width > 640:
                 scale = 640 / width
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                frame = cv2.resize(frame, (new_width, new_height))
-                
+                frame = cv2.resize(frame, (int(width * scale), int(height * scale)))
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Only do expensive processing if tracking is enabled
             wave_detected = False
+
             if self.tracking_enabled:
-                if init_mediapipe():  # Lazy init with availability check
-                    if pose is not None:
-                        results = pose.process(frame_rgb)
-                        if results.pose_landmarks:
-                            lm = results.pose_landmarks.landmark
-                            rw = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
-                            rs = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                            if rw.y < rs.y:
-                                wave_detected = True
-                                cv2.putText(frame_rgb, 'Wave Detected', (50, 50), 
-                                          cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                
-                # HOG detection (less frequent)
-                if self.hog is not None and self.frame_skip_count % 5 == 0:
-                    boxes, weights = self.hog.detectMultiScale(frame_rgb, winStride=(8, 8))
-                    for (x, y, w, h) in boxes:
-                        cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            
+                if init_mediapipe() and pose is not None:
+                    results = pose.process(frame_rgb)
+                    if results.pose_landmarks:
+                        lm = results.pose_landmarks.landmark
+                        rw = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
+                        rs = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                        if rw.y < rs.y:
+                            wave_detected = True
+                            cv2.putText(frame_rgb, 'Wave Detected', (50, 50),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
             return {
                 'frame': frame_rgb,
                 'wave_detected': wave_detected,
                 'stats': f"Processing: {frame_rgb.shape[1]}x{frame_rgb.shape[0]}"
             }
         except Exception as e:
-            print(f"Frame processing error: {e}")
-            return {'frame': frame_rgb if 'frame_rgb' in locals() else None, 'wave_detected': False, 'stats': f"Error: {e}"}
-    
+            print(f"❌ Frame processing error: {e}")
+            black_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+            cv2.putText(black_frame, f"Error: {str(e)[:30]}", (10, 120),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            return {'frame': black_frame, 'wave_detected': False, 'stats': f"Error: {e}"}
+
     def stop(self):
+        print("🛑 Stopping camera thread...")
         self.running = False
-        if self.cap:
-            self.cap.release()
         self.quit()
-        self.wait()
+        self.wait(3000)
+
+
 
 # RELIABILITY IMPROVEMENT 1: WebSocket connection management
 class WebSocketManager(QWebSocket):
@@ -2619,190 +2649,6 @@ class ServoConfigScreen(QWidget):
         print(f"▶️ Sweep started for {key}")
 
 
-# PERFORMANCE IMPROVEMENT 5: Optimized Camera Screen
-class CameraFeedScreen(QWidget):
-    def __init__(self, websocket):
-        super().__init__()
-        self.websocket = websocket
-        self.sample_buffer = deque(maxlen=SAMPLE_DURATION * SAMPLE_RATE)
-        self.last_wave_time = 0
-        self.last_sample_time = 0
-        self.setStyleSheet("background-color: #1e1e1e; color: white;")
-        self.tracking_enabled = False
-        
-        # Use threading for image processing
-        config = config_manager.get_config("configs/steamdeck_config.json")
-        esp32_url = config.get("current", {}).get("esp32_cam_url", "")
-        self.image_thread = ImageProcessingThread(esp32_url)
-        self.image_thread.frame_processed.connect(self.update_display)
-        self.image_thread.stats_updated.connect(self.update_stats)
-        
-        self.init_ui()
-        
-    def init_ui(self):
-        """Optimized UI setup"""
-        self.video_label = QLabel()
-        self.video_label.setFixedSize(640, 480)
-        self.video_label.setStyleSheet("""
-            border: 2px solid #555;
-            border-radius: 20px;
-            background-color: black;
-        """)
-        
-        self.stats_label = QLabel("Stream Stats: Initializing...")
-        self.stats_label.setStyleSheet("""
-            border: 1px solid #555;
-            border-radius: 4px;
-            background-color: black;
-            color: #aaa;   
-        """)
-        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.stats_label.setFixedWidth(640)
-        
-        # Control buttons
-        self.setup_control_buttons()
-        self.setup_layout()
-        
-        # Start image processing thread
-        self.image_thread.start()
-    
-    def setup_control_buttons(self):
-        """Setup control buttons with proper styling"""
-        self.reconnect_button = QPushButton()
-        if os.path.exists("icons/Reconnect.png"):
-            self.reconnect_button.setIcon(QIcon("icons/Reconnect.png"))
-        self.reconnect_button.clicked.connect(self.reconnect_stream)
-        self.reconnect_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-        
-        self.tracking_button = QPushButton()
-        self.tracking_button.setCheckable(True)
-        if os.path.exists("icons/Tracking.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
-        self.tracking_button.clicked.connect(self.toggle_tracking)
-        self.tracking_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-    
-    def setup_layout(self):
-        """Setup optimized layout"""
-        video_layout = QVBoxLayout()
-        video_layout.addWidget(self.video_label)
-        video_layout.addWidget(self.stats_label)
-        
-        button_layout = QVBoxLayout()
-        button_layout.setSpacing(0)
-        button_layout.addWidget(self.reconnect_button)
-        button_layout.addWidget(self.tracking_button)
-        button_layout.addSpacing(200)
-        
-        main_layout = QHBoxLayout()
-        main_layout.addSpacing(81)
-        main_layout.addLayout(video_layout, 2)
-        main_layout.addLayout(button_layout, 1)
-        
-        self.setLayout(main_layout)
-    
-    @error_boundary
-    def update_display(self, processed_data):
-        """Update display with processed frame data"""
-        try:
-            frame_rgb = processed_data['frame']
-            wave_detected = processed_data['wave_detected']
-            
-            if frame_rgb is None:
-                # Handle case where OpenCV is not available
-                self.video_label.setText("Camera not available\n(OpenCV not installed)")
-                return
-            
-            # Handle wave detection logic
-            if self.tracking_enabled and wave_detected:
-                current_time = time.time()
-                if current_time - self.last_sample_time >= 1.0 / SAMPLE_RATE:
-                    self.sample_buffer.append(wave_detected)
-                    self.last_sample_time = current_time
-                
-                if len(self.sample_buffer) == self.sample_buffer.maxlen:
-                    confidence = sum(self.sample_buffer) / len(self.sample_buffer)
-                    if confidence >= CONFIDENCE_THRESHOLD:
-                        if current_time - self.last_wave_time >= STAND_DOWN_TIME:
-                            self.websocket.send_safe(json.dumps({
-                                "type": "gesture",
-                                "name": "wave"
-                            }))
-                            self.last_wave_time = current_time
-                            self.sample_buffer.clear()
-            
-            # Convert to QPixmap and display
-            height, width, channel = frame_rgb.shape
-            bytes_per_line = 3 * width
-            q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_img).scaled(
-                self.video_label.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.FastTransformation  # Use fast transformation
-            )
-            self.video_label.setPixmap(pixmap)
-            
-        except Exception as e:
-            print(f"Display update error: {e}")
-            self.video_label.setText(f"Display Error:\n{str(e)}")
-    
-    def update_stats(self, stats_text):
-        """Update statistics display"""
-        self.stats_label.setText(f"Stream Stats: {stats_text}")
-    
-    @error_boundary
-    def toggle_tracking(self):
-        """Toggle tracking with thread communication"""
-        self.tracking_enabled = self.tracking_button.isChecked()
-        self.image_thread.set_tracking_enabled(self.tracking_enabled)
-        
-        if self.tracking_enabled and os.path.exists("icons/Tracking_pressed.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking_pressed.png"))
-        elif os.path.exists("icons/Tracking.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
-        
-        self.websocket.send_safe(json.dumps({
-            "type": "tracking",
-            "state": self.tracking_enabled
-        }))
-    
-    @error_boundary
-    def reconnect_stream(self):
-        """Reconnect stream by restarting image thread"""
-        self.image_thread.stop()
-        config = config_manager.get_config("configs/steamdeck_config.json")
-        esp32_url = config.get("current", {}).get("esp32_cam_url", "")
-        self.image_thread = ImageProcessingThread(esp32_url)
-        self.image_thread.frame_processed.connect(self.update_display)
-        self.image_thread.stats_updated.connect(self.update_stats)
-        self.image_thread.start()
-        self.stats_label.setText("Stream Stats: Reconnected")
-    
-    def reload_wave_settings(self):
-        """Reload wave detection settings"""
-        try:
-            config_manager.clear_cache()
-            config = config_manager.get_config("configs/steamdeck_config.json")
-            wave_config = config.get("current", {})
-            wave_settings = wave_config.get("wave_detection", {})
-            
-            global SAMPLE_DURATION, SAMPLE_RATE, CONFIDENCE_THRESHOLD, STAND_DOWN_TIME
-            SAMPLE_DURATION = wave_settings.get("sample_duration", 3)
-            SAMPLE_RATE = wave_settings.get("sample_rate", 5)
-            CONFIDENCE_THRESHOLD = wave_settings.get("confidence_threshold", 0.7)
-            STAND_DOWN_TIME = wave_settings.get("stand_down_time", 30)
-            
-            self.sample_buffer = deque(maxlen=SAMPLE_DURATION * SAMPLE_RATE)
-            self.last_sample_time = 0
-            print("Wave detection settings reloaded.")
-        except Exception as e:
-            print(f"Failed to reload wave detection settings: {e}")
-    
-    def closeEvent(self, event):
-        """Proper cleanup on close"""
-        self.image_thread.stop()
-        event.accept()
-
-
 class PlaceholderScreen(QWidget):
     def __init__(self, title):
         super().__init__()
@@ -2955,7 +2801,349 @@ class HomeScreen(QWidget):
             "state": state
         }))
 
-# PERFORMANCE IMPROVEMENT 5: Optimized Camera Screen
+class CameraControlsWidget(QWidget):
+    """Camera controls panel for adjusting ESP32 camera settings"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        config = config_manager.get_config("configs/steamdeck_config.json")
+        raw_url = config.get("current", {}).get("camera_proxy_url", "http://10.1.1.230:8081")
+        self.proxy_base_url = raw_url.replace("/stream", "")  # Remove trailing /stream if present
+        self.current_settings = {}
+        self.init_ui()
+        self.load_current_settings()
+        
+    def init_ui(self):
+        """Initialize the camera controls UI"""
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #2a2a2a;
+                color: white;
+                border-radius: 10px;
+            }
+            QLabel {
+                color: white;
+                font-size: 14px;
+            }
+            QSlider {
+                min-height: 20px;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #555;
+                height: 8px;
+                background: #333;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #FF4444;
+                border: 1px solid #FF4444;
+                width: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #FF6666;
+            }
+            QPushButton {
+                background-color: #444;
+                color: white;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #333;
+            }
+            QPushButton:checked {
+                background-color: #44FF44;
+                color: black;
+            }
+            QComboBox {
+                background-color: #444;
+                color: white;
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 14px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid white;
+                margin-right: 5px;
+            }
+            QSpinBox {
+                background-color: #444;
+                color: white;
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 14px;
+            }
+        """)
+        
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(10)
+        
+        # Title
+        title = QLabel("📷 Camera Controls")
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        main_layout.addWidget(title)
+        
+        # XCLK Frequency control
+        xclk_layout = QHBoxLayout()
+        xclk_label = QLabel("XCLK MHz:")
+        xclk_label.setFixedWidth(100)
+        self.xclk_spin = QSpinBox()
+        self.xclk_spin.setRange(8, 20)
+        self.xclk_spin.setValue(10)
+        self.xclk_spin.setFixedWidth(80)
+        self.xclk_btn = QPushButton("Set")
+        self.xclk_btn.setFixedWidth(60)
+        self.xclk_btn.clicked.connect(lambda: self.update_setting("xclk_freq", self.xclk_spin.value()))
+        xclk_layout.addWidget(xclk_label)
+        xclk_layout.addWidget(self.xclk_spin)
+        xclk_layout.addWidget(self.xclk_btn)
+        xclk_layout.addStretch()
+        main_layout.addLayout(xclk_layout)
+        
+        # Resolution dropdown
+        res_layout = QHBoxLayout()
+        res_label = QLabel("Resolution:")
+        res_label.setFixedWidth(100)
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems([
+            "QQVGA(160x120)",   # 0
+            "QCIF(176x144)",    # 1
+            "HQVGA(240x176)",   # 2
+            "QVGA(320x240)",    # 3
+            "CIF(400x296)",     # 4
+            "VGA(640x480)",     # 5
+            "SVGA(800x600)",    # 6
+            "XGA(1024x768)",    # 7
+            "SXGA(1280x1024)",  # 8
+            "UXGA(1600x1200)"   # 9
+        ])
+        self.resolution_combo.setCurrentIndex(5)  # Default to VGA
+        self.resolution_combo.currentIndexChanged.connect(
+            lambda idx: self.update_setting("resolution", idx)
+        )
+        res_layout.addWidget(res_label)
+        res_layout.addWidget(self.resolution_combo)
+        main_layout.addLayout(res_layout)
+        
+        # Quality slider
+        self.quality_slider, quality_layout = self.create_slider_control(
+            "Quality:", 4, 63, 12, "quality",
+            inverted=True  # Lower value = better quality
+        )
+        main_layout.addLayout(quality_layout)
+        
+        # Brightness slider
+        self.brightness_slider, brightness_layout = self.create_slider_control(
+            "Brightness:", -2, 2, 0, "brightness"
+        )
+        main_layout.addLayout(brightness_layout)
+        
+        # Contrast slider
+        self.contrast_slider, contrast_layout = self.create_slider_control(
+            "Contrast:", -2, 2, 0, "contrast"
+        )
+        main_layout.addLayout(contrast_layout)
+        
+        # Saturation slider
+        self.saturation_slider, saturation_layout = self.create_slider_control(
+            "Saturation:", -2, 2, 0, "saturation"
+        )
+        main_layout.addLayout(saturation_layout)
+        
+        # Mirror controls
+        mirror_layout = QHBoxLayout()
+        mirror_label = QLabel("Mirror:")
+        mirror_label.setFixedWidth(100)
+        
+        self.h_mirror_btn = QPushButton("↔ Horizontal")
+        self.h_mirror_btn.setCheckable(True)
+        self.h_mirror_btn.setFixedWidth(125)
+        self.h_mirror_btn.clicked.connect(
+            lambda checked: self.update_setting("h_mirror", checked)
+        )
+        
+        self.v_flip_btn = QPushButton("↕ Vertical")
+        self.v_flip_btn.setCheckable(True)
+        self.v_flip_btn.setFixedWidth(125)
+        self.v_flip_btn.clicked.connect(
+            lambda checked: self.update_setting("v_flip", checked)
+        )
+        
+        mirror_layout.addWidget(mirror_label)
+        mirror_layout.addWidget(self.h_mirror_btn)
+        mirror_layout.addWidget(self.v_flip_btn)
+        mirror_layout.addStretch()
+        main_layout.addLayout(mirror_layout)
+        
+        # Reset button
+        reset_btn = QPushButton("🔄 Reset to Defaults")
+        reset_btn.clicked.connect(self.reset_to_defaults)
+        main_layout.addWidget(reset_btn)
+        
+        # Status label
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet("color: #888; font-size: 12px;")
+        main_layout.addWidget(self.status_label)
+        
+        main_layout.addStretch()
+        self.setLayout(main_layout)
+        
+    def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name, inverted=False):
+        """Create a slider control with label and value display"""
+        layout = QHBoxLayout()
+        
+        label = QLabel(label_text)
+        label.setFixedWidth(100)
+        
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(min_val, max_val)
+        slider.setValue(default_val)
+        slider.setFixedWidth(170)
+        
+        value_label = QLabel(str(default_val))
+        value_label.setFixedWidth(40)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Update value label when slider changes
+        slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
+        
+        # Update camera setting when slider is released
+        slider.sliderReleased.connect(
+            lambda: self.update_setting(setting_name, slider.value())
+        )
+        
+        # Add min/max labels
+        min_label = QLabel(str(min_val))
+        min_label.setStyleSheet("color: #666; font-size: 12px;")
+        max_label = QLabel(str(max_val))
+        max_label.setStyleSheet("color: #666; font-size: 12px;")
+        
+        layout.addWidget(label)
+        layout.addWidget(min_label)
+        layout.addWidget(slider)
+        layout.addWidget(max_label)
+        layout.addWidget(value_label)
+        layout.addStretch()
+        
+        return slider, layout
+    
+    @error_boundary
+    def load_current_settings(self):
+        """Load current settings from camera proxy"""
+        try:
+            response = requests.get(
+                f"{self.proxy_base_url}/camera/settings",
+                timeout=3
+            )
+            if response.status_code == 200:
+                settings = response.json()
+                self.current_settings = settings
+                
+                # Update UI with current settings
+                if "xclk_freq" in settings:
+                    self.xclk_spin.setValue(settings["xclk_freq"])
+                if "resolution" in settings:
+                    self.resolution_combo.setCurrentIndex(settings["resolution"])
+                if "quality" in settings:
+                    self.quality_slider.setValue(settings["quality"])
+                if "brightness" in settings:
+                    self.brightness_slider.setValue(settings["brightness"])
+                if "contrast" in settings:
+                    self.contrast_slider.setValue(settings["contrast"])
+                if "saturation" in settings:
+                    self.saturation_slider.setValue(settings["saturation"])
+                if "h_mirror" in settings:
+                    self.h_mirror_btn.setChecked(settings["h_mirror"])
+                if "v_flip" in settings:
+                    self.v_flip_btn.setChecked(settings["v_flip"])
+                
+                self.status_label.setText("✅ Settings loaded")
+                print(f"📷 Loaded camera settings: {settings}")
+                
+        except Exception as e:
+            self.status_label.setText(f"⚠️ Failed to load settings")
+            print(f"Failed to load camera settings: {e}")
+    
+    @error_boundary
+    def update_setting(self, setting_name, value):
+        """Update a camera setting via the proxy"""
+        try:
+            # Convert boolean to string for POST request
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            
+            response = requests.post(
+                f"{self.proxy_base_url}/camera/setting/{setting_name}",
+                params={"value": value},
+                timeout=3
+            )
+            
+            if response.status_code == 200:
+                self.status_label.setText(f"✅ Updated {setting_name}")
+                self.current_settings[setting_name] = value
+                print(f"📷 Updated {setting_name} = {value}")
+            else:
+                self.status_label.setText(f"❌ Failed to update {setting_name}")
+                
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)[:30]}")
+            print(f"Failed to update {setting_name}: {e}")
+    
+    @error_boundary
+    def reset_to_defaults(self):
+        """Reset all settings to default values"""
+        defaults = {
+            "xclk_freq": 10,
+            "resolution": 5,  # VGA
+            "quality": 12,
+            "brightness": 0,
+            "contrast": 0,
+            "saturation": 0,
+            "h_mirror": False,
+            "v_flip": False
+        }
+        
+        # Update UI
+        self.xclk_spin.setValue(defaults["xclk_freq"])
+        self.resolution_combo.setCurrentIndex(defaults["resolution"])
+        self.quality_slider.setValue(defaults["quality"])
+        self.brightness_slider.setValue(defaults["brightness"])
+        self.contrast_slider.setValue(defaults["contrast"])
+        self.saturation_slider.setValue(defaults["saturation"])
+        self.h_mirror_btn.setChecked(defaults["h_mirror"])
+        self.v_flip_btn.setChecked(defaults["v_flip"])
+        
+        # Send all defaults to camera
+        try:
+            response = requests.post(
+                f"{self.proxy_base_url}/camera/settings",
+                json=defaults,
+                timeout=3
+            )
+            if response.status_code == 200:
+                self.status_label.setText("✅ Reset to defaults")
+                self.current_settings = defaults
+            else:
+                self.status_label.setText("❌ Failed to reset")
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)[:30]}")
+            print(f"Failed to reset to defaults: {e}")
+
+
 class CameraFeedScreen(QWidget):
     def __init__(self, websocket):
         super().__init__()
@@ -2981,7 +3169,7 @@ class CameraFeedScreen(QWidget):
         self.video_label.setFixedSize(640, 480)
         self.video_label.setStyleSheet("""
             border: 2px solid #555;
-            border-radius: 20px;
+            padding: 2px;
             background-color: black;
         """)
         
@@ -2989,6 +3177,7 @@ class CameraFeedScreen(QWidget):
         self.stats_label.setStyleSheet("""
             border: 1px solid #555;
             border-radius: 4px;
+            padding: 1px;
             background-color: black;
             color: #aaa;   
         """)
@@ -2997,42 +3186,71 @@ class CameraFeedScreen(QWidget):
         
         # Control buttons
         self.setup_control_buttons()
+
+        # Camera controls panel
+        self.controls_widget = CameraControlsWidget()
+        self.controls_widget.setFixedWidth(400)
+        self.controls_widget.setMaximumHeight(600)
+
         self.setup_layout()
         
         # Start image processing thread
         self.image_thread.start()
     
     def setup_control_buttons(self):
-        """Setup control buttons with proper styling"""
-        self.reconnect_button = QPushButton()
-        if os.path.exists("icons/Reconnect.png"):
-            self.reconnect_button.setIcon(QIcon("icons/Reconnect.png"))
-        self.reconnect_button.clicked.connect(self.reconnect_stream)
-        self.reconnect_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-        
+        # 👀 Tracking Button - Enables wave detection
         self.tracking_button = QPushButton()
         self.tracking_button.setCheckable(True)
         if os.path.exists("icons/Tracking.png"):
             self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
-        self.tracking_button.clicked.connect(self.toggle_tracking)
-        self.tracking_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
-    
+            self.tracking_button.setIconSize(QSize(200, 80))  # Keep icon size as desired
+        
+
+        self.tracking_button.toggled.connect(self.toggle_tracking)
+        self.tracking_button.setFixedSize(220, 100)  # Slightly larger than icon
+        #Fully transparent background with visual feedback when checked
+        self.tracking_button.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+            }
+            QPushButton:checked {
+                background-color: rgba(0, 255, 0, 0.1);
+            }
+            QPushButton:pressed {
+                background-color: rgba(255, 255, 255, 0.2);
+            }
+        """)
+        self.tracking_button.setToolTip("Toggle Wave Detection (Click to enable/disable)")
+        
+        print("🎮 Camera control buttons initialized")
+
     def setup_layout(self):
-        """Setup optimized layout"""
+        """Setup optimized layout with properly sized buttons"""
         video_layout = QVBoxLayout()
+        video_layout.setContentsMargins(0, 10, 0, 0)
         video_layout.addWidget(self.video_label)
         video_layout.addWidget(self.stats_label)
         
         button_layout = QVBoxLayout()
-        button_layout.setSpacing(0)
-        button_layout.addWidget(self.reconnect_button)
-        button_layout.addWidget(self.tracking_button)
-        button_layout.addSpacing(200)
+        button_layout.setSpacing(20)  # Add spacing between buttons
+        button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # Align to top
+        button_layout.addWidget(self.controls_widget)
+        tracking_wrapper = QHBoxLayout()
+        tracking_wrapper.addStretch()
+        tracking_wrapper.addWidget(self.tracking_button)
+        tracking_wrapper.addStretch()
+        button_layout.addLayout(tracking_wrapper)
+        button_layout.addStretch()  # Push buttons to top
         
         main_layout = QHBoxLayout()
-        main_layout.addSpacing(81)
-        main_layout.addLayout(video_layout, 2)
-        main_layout.addLayout(button_layout, 1)
+        main_layout.addSpacing(90)
+        main_layout.addLayout(video_layout)  # Give video more space
+        main_layout.addLayout(button_layout)  # Buttons take less space
+        main_layout.addStretch()  # Add some right margin
         
         self.setLayout(main_layout)
     
@@ -3048,7 +3266,7 @@ class CameraFeedScreen(QWidget):
                 self.video_label.setText("Camera not available\n(OpenCV not installed)")
                 return
             
-            # Handle wave detection logic
+            # Handle wave detection logic - only if tracking is enabled
             if self.tracking_enabled and wave_detected:
                 current_time = time.time()
                 if current_time - self.last_sample_time >= 1.0 / SAMPLE_RATE:
@@ -3059,12 +3277,14 @@ class CameraFeedScreen(QWidget):
                     confidence = sum(self.sample_buffer) / len(self.sample_buffer)
                     if confidence >= CONFIDENCE_THRESHOLD:
                         if current_time - self.last_wave_time >= STAND_DOWN_TIME:
+                            # Send wave gesture detected
                             self.websocket.send_safe(json.dumps({
                                 "type": "gesture",
                                 "name": "wave"
                             }))
                             self.last_wave_time = current_time
                             self.sample_buffer.clear()
+                            print("👋 Wave gesture detected and sent!")
             
             # Convert to QPixmap and display
             height, width, channel = frame_rgb.shape
@@ -3073,7 +3293,7 @@ class CameraFeedScreen(QWidget):
             pixmap = QPixmap.fromImage(q_img).scaled(
                 self.video_label.size(), 
                 Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.FastTransformation  # Use fast transformation
+                Qt.TransformationMode.FastTransformation
             )
             self.video_label.setPixmap(pixmap)
             
@@ -3085,33 +3305,78 @@ class CameraFeedScreen(QWidget):
         """Update statistics display"""
         self.stats_label.setText(f"Stream Stats: {stats_text}")
     
-    @error_boundary
-    def toggle_tracking(self):
-        """Toggle tracking with thread communication"""
-        self.tracking_enabled = self.tracking_button.isChecked()
+    @error_boundary    
+    def toggle_tracking(self, checked=None):
+        """Toggle wave detection tracking with visual feedback"""
+        # Handle both toggled signal (with checked param) and direct calls
+        if checked is not None:
+            self.tracking_enabled = checked
+        else:
+            self.tracking_enabled = self.tracking_button.isChecked()
+        
+        # Update the image thread with tracking state
         self.image_thread.set_tracking_enabled(self.tracking_enabled)
         
-        if self.tracking_enabled and os.path.exists("icons/Tracking_pressed.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking_pressed.png"))
-        elif os.path.exists("icons/Tracking.png"):
-            self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+        # Update button icon based on state
+        if self.tracking_enabled:
+            # Change to pressed icon when tracking is enabled
+            if os.path.exists("icons/Tracking_pressed.png"):
+                self.tracking_button.setIcon(QIcon("icons/Tracking_pressed.png"))
+                print("👀 Changed to Tracking_pressed.png icon")
+            self.tracking_button.setToolTip("Wave Detection: ENABLED (Click to disable)")
+            print("👀 Wave detection ENABLED")
+        else:
+            # Change back to normal icon when tracking is disabled
+            if os.path.exists("icons/Tracking.png"):
+                self.tracking_button.setIcon(QIcon("icons/Tracking.png"))
+                print("👀 Changed to Tracking.png icon")
+            self.tracking_button.setToolTip("Wave Detection: DISABLED (Click to enable)")
+            print("👀 Wave detection DISABLED")
         
+        # Send tracking state to backend
         self.websocket.send_safe(json.dumps({
             "type": "tracking",
             "state": self.tracking_enabled
         }))
+        
+        # Update stats to show tracking status
+        status = "ENABLED" if self.tracking_enabled else "DISABLED"
+        current_stats = self.stats_label.text()
+        if "Wave Detection:" in current_stats:
+            # Update existing status
+            parts = current_stats.split(" | Wave Detection:")
+            self.stats_label.setText(f"{parts[0]} | Wave Detection: {status}")
+        else:
+            # Add status
+            self.stats_label.setText(f"{current_stats} | Wave Detection: {status}")
     
     @error_boundary
     def reconnect_stream(self):
         """Reconnect stream by restarting image thread"""
+        print("🔄 Reconnecting camera stream...")
+        
+        # Stop current thread
         self.image_thread.stop()
+        
+        # Reload config in case URL changed
         config = config_manager.get_config("configs/steamdeck_config.json")
         camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
+        
+        # Create new thread
         self.image_thread = ImageProcessingThread(camera_proxy_url)
         self.image_thread.frame_processed.connect(self.update_display)
         self.image_thread.stats_updated.connect(self.update_stats)
+        
+        # Restore tracking state if it was enabled
+        if self.tracking_enabled:
+            self.image_thread.set_tracking_enabled(True)
+        
+        # Start new thread
         self.image_thread.start()
-        self.stats_label.setText("Stream Stats: Reconnected")
+        
+        # Update status
+        self.stats_label.setText("Stream Stats: Reconnecting...")
+        print(f"🔄 Camera reconnected with URL: {camera_proxy_url}")
     
     def reload_wave_settings(self):
         """Reload wave detection settings"""
@@ -3134,20 +3399,15 @@ class CameraFeedScreen(QWidget):
             print(f"Failed to reload wave detection settings: {e}")
     
     def reload_camera_settings(self):
-        """NEW: Reload camera proxy URL settings"""
+        """Reload camera proxy URL settings"""
         try:
             config_manager.clear_cache()
             config = config_manager.get_config("configs/steamdeck_config.json")
             camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
             
             # Restart image thread with new URL
-            self.image_thread.stop()
-            self.image_thread = ImageProcessingThread(camera_proxy_url)
-            self.image_thread.frame_processed.connect(self.update_display)
-            self.image_thread.stats_updated.connect(self.update_stats)
-            self.image_thread.start()
+            self.reconnect_stream()
             
-            self.stats_label.setText("Stream Stats: Camera settings reloaded")
             print(f"Camera settings reloaded. New proxy URL: {camera_proxy_url}")
         except Exception as e:
             print(f"Failed to reload camera settings: {e}")
@@ -3156,6 +3416,7 @@ class CameraFeedScreen(QWidget):
         """Proper cleanup on close"""
         self.image_thread.stop()
         event.accept()
+
 
 class SceneScreen(QWidget):
     def __init__(self, websocket):
