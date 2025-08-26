@@ -68,7 +68,8 @@
     "control_type": "Stick",
     "control_action": "control",
     "min": 992,
-    "max": 2000
+    "max": 2000,
+    "speed": 100
   },
   "m1_ch6": {
     "name": "Head Pan",
@@ -79,7 +80,8 @@
     "group": "Head Pan/Tilt",
     "group_type": "Stick",
     "control_type": "Stick",
-    "control_action": "control"
+    "control_action": "control",
+    "speed": 6
   },
   "m1_ch7": {
     "name": "Head Tilt",
@@ -91,8 +93,10 @@
     "group_type": "Stick",
     "control_type": "Stick",
     "control_action": "control",
-    "min": 793,
-    "max": 1800
+    "min": 950,
+    "max": 1800,
+    "speed": 10,
+    "accel": 0
   },
   "m1_ch8": {
     "name": "Neck Lift",
@@ -203,5 +207,8 @@
   "m1_ch17": {
     "speed": 0,
     "accel": 0
+  },
+  "m1_ch21": {
+    "speed": 27
   }
 }

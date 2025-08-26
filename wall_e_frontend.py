@@ -237,7 +237,7 @@ class ImageProcessingThread(QThread):
                         if rw.y < rs.y:
                             wave_detected = True
                             cv2.putText(frame_rgb, 'Wave Detected', (50, 50),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
             return {
                 'frame': frame_rgb,
@@ -1076,28 +1076,62 @@ class HealthScreen(QWidget):
         
         return f"{voltage_trend} Est. Capacity: {capacity}"
 
-
 class ServoConfigScreen(QWidget):
+    """Fixed Servo Configuration Screen with proper thread safety and initialization"""
+    
+    # Qt signals for thread-safe communication
+    position_update_signal = pyqtSignal(str, int)  # channel_key, position
+    status_update_signal = pyqtSignal(str, bool, bool)  # message, error, warning
+    
     def __init__(self, websocket):
         super().__init__()
         self.websocket = websocket
         self.setFixedWidth(1180)
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.servo_config = self.load_config()
-        self.active_sweep = None
+        self.active_sweeps = {}  # Track multiple active sweeps by channel
         
-        # 🔥 NEW: Track channel counts for each Maestro
-        self.maestro_channel_counts = {1: 18, 2: 18}  # Default fallback
-        self.current_maestro = 1
-        self.channels_loaded = False
+        # Track channel counts for each Maestro with defensive defaults
+        self.maestro_channel_counts = {1: 0, 2: 0}  # Start with 0, detect later
+        self.maestro_connected = {1: False, 2: False}  # Track connection status
+        self.current_maestro = 0  # 0=Maestro1, 1=Maestro2
+        self.initialization_complete = False
         
-        # 🔥 NEW: Track servo widgets for position updates
-        self.servo_widgets = {}  # Will store {channel_key: (slider, pos_label, ...)}
+        # Track servo widgets for position updates
+        self.servo_widgets = {}
+        
+        # Timer for batch position updates
         self.position_update_timer = QTimer()
         self.position_update_timer.timeout.connect(self.update_all_positions)
-        self.auto_update_positions = True  # Toggle for auto-refresh
-
-        # Maestro selector dropdown
+        self.position_update_timer.setInterval(500)
+        self.auto_update_positions = False
+        
+        # Position reading state
+        self.reading_positions = False
+        self.position_read_timeout = QTimer()
+        self.position_read_timeout.timeout.connect(self.handle_position_read_timeout)
+        self.position_read_timeout.setSingleShot(True)
+        
+        # Maestro selector setup
+        self.setup_maestro_selectors()
+        self.setup_control_buttons()
+        self.setup_position_controls()
+        
+        # Connect Qt signals for thread safety
+        self.position_update_signal.connect(self.update_servo_position_display)
+        self.status_update_signal.connect(self.update_status_threadsafe)
+        
+        # Layout setup
+        self.setup_layout()
+        
+        # Connect to WebSocket for responses
+        self.websocket.textMessageReceived.connect(self.handle_websocket_message)
+        
+        # Initialize only after everything is set up
+        QTimer.singleShot(200, self.safe_initialization)
+        
+    def setup_maestro_selectors(self):
+        """Setup maestro selection buttons"""
         self.maestro1_btn = QPushButton()
         self.maestro2_btn = QPushButton()
         self.maestro1_btn.setCheckable(True)
@@ -1106,22 +1140,25 @@ class ServoConfigScreen(QWidget):
         # Load icons if they exist
         if os.path.exists("icons/M1.png"):
             self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            self.maestro1_btn.setIconSize(QSize(112,118))
+            self.maestro1_btn.setIconSize(QSize(112, 118))
         if os.path.exists("icons/M2.png"):
             self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-            self.maestro2_btn.setIconSize(QSize(112,118))
-
+            self.maestro2_btn.setIconSize(QSize(112, 118))
+        
         self.maestro_group = QButtonGroup()
         self.maestro_group.setExclusive(True)
         self.maestro_group.addButton(self.maestro1_btn, 0)
         self.maestro_group.addButton(self.maestro2_btn, 1)
         self.maestro_group.idClicked.connect(self.on_maestro_changed)
-
+        
+        # Default to Maestro 1
         self.maestro1_btn.setChecked(True)
         self.update_maestro_icons(0)
-
-        # Add refresh button
-        self.refresh_btn = QPushButton("Update")
+        
+    def setup_control_buttons(self):
+        """Setup control buttons with clearer labels"""
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setToolTip("Refresh Maestro connection and reload servo config")
         self.refresh_btn.setStyleSheet("""
             QPushButton {
                 background-color: #444;
@@ -1134,64 +1171,68 @@ class ServoConfigScreen(QWidget):
             }
         """)
         self.refresh_btn.setMinimumSize(100, 40)
-        self.refresh_btn.clicked.connect(self.refresh_maestro_data)
-
-        # 🔥 NEW: Add status label to show channel detection
-        self.status_label = QLabel("Detecting channels...")
-        self.status_label.setFont(QFont("Arial", 14))
-        self.status_label.setStyleSheet("color: #FFAA00; padding: 5px;")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # 🔥 NEW: Add position refresh controls
-        self.setup_position_controls()
-
-        # Scrollable grid area
-        self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setContentsMargins(10, 10, 10, 10)
-        self.grid_widget.setLayout(self.grid_layout)
-        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
-
-        # 🔥 NEW: Connect to WebSocket for responses
-        self.websocket.textMessageReceived.connect(self.handle_websocket_message)
-
-        # Setup UI layout
-        self.setup_layout()
+        self.refresh_btn.clicked.connect(self.refresh_current_maestro)
         
-        # 🔥 NEW: Request channel counts from backend on startup
-        self.request_maestro_info()
-
     def setup_position_controls(self):
         """Setup controls for position reading"""
         # Auto-update checkbox
-        self.auto_update_checkbox = QCheckBox("Auto-refresh positions")
-        self.auto_update_checkbox.setChecked(True)
-        self.auto_update_checkbox.setFont(QFont("Arial", 12))
+        self.auto_update_checkbox = QCheckBox("Auto-refresh")
+        self.auto_update_checkbox.setChecked(False)
+        self.auto_update_checkbox.setFont(QFont("Arial", 14))
         self.auto_update_checkbox.setStyleSheet("color: white;")
+        self.auto_update_checkbox.setToolTip("Automatically read positions every 500ms")
         self.auto_update_checkbox.toggled.connect(self.toggle_auto_update)
         
         # Manual refresh button
-        self.read_positions_btn = QPushButton("📍 Read Positions")
-        self.read_positions_btn.setFont(QFont("Arial", 12))
+        self.read_positions_btn = QPushButton("Read Positions")
+        self.read_positions_btn.setFont(QFont("Arial", 14))
+        self.read_positions_btn.setToolTip("Read current servo positions from selected Maestro")
         self.read_positions_btn.clicked.connect(self.read_all_positions_now)
         self.read_positions_btn.setStyleSheet("""
             QPushButton {
                 background-color: #444;
                 color: white;
                 border-radius: 8px;
-                padding: 8px;
+                padding: 6px;
             }
             QPushButton:hover {
                 background-color: #666;
             }
         """)
-
+        
+        # Enable/Disable all live checkboxes
+        self.toggle_all_live_btn = QPushButton("Toggle Live")
+        self.toggle_all_live_btn.setFont(QFont("Arial", 14))
+        self.toggle_all_live_btn.clicked.connect(self.toggle_all_live_checkboxes)
+        self.toggle_all_live_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444;
+                color: white;
+                border-radius: 8px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+        """)
+        
+        # Status label
+        self.status_label = QLabel("Initializing...")
+        self.status_label.setFont(QFont("Arial", 12))
+        self.status_label.setStyleSheet("color: #FFAA00; padding: 3px;")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setFixedWidth(1050) 
+        
     def setup_layout(self):
-        """Enhanced layout with position controls"""
-        # Main layout
-        grid_and_selector_layout = QHBoxLayout()
-        grid_and_selector_layout.addSpacing(80)
-
+        """Setup the complete layout"""
+        # Scrollable grid area
+        self.grid_widget = QWidget()
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setContentsMargins(2, 5, 2, 5)
+        self.grid_layout.setVerticalSpacing(6)
+        self.grid_widget.setLayout(self.grid_layout)
+        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
+        
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1205,30 +1246,90 @@ class ServoConfigScreen(QWidget):
         selector_container.addSpacing(20)
         selector_container.addWidget(self.refresh_btn)
         selector_container.addSpacing(10)
-        # 🔥 NEW: Add position controls
         selector_container.addWidget(self.auto_update_checkbox)
         selector_container.addWidget(self.read_positions_btn)
+        selector_container.addWidget(self.toggle_all_live_btn)
         selector_container.addStretch()
-
-        # Create a QWidget to hold the selector layout
+        
         selector_widget = QWidget()
         selector_widget.setLayout(selector_container)
         selector_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
-
-        # Add selector widget to the right of the grid
-        grid_and_selector_layout.addWidget(scroll_area, stretch=3)
+        
+        # Main layout
+        grid_and_selector_layout = QHBoxLayout()
+        grid_and_selector_layout.addSpacing(5)
+        grid_and_selector_layout.addWidget(scroll_area, stretch=5)
         grid_and_selector_layout.addWidget(selector_widget)
-
-        # Final layout with status
+        
         layout = QVBoxLayout()
-        layout.addWidget(self.status_label)
+        layout.setContentsMargins(90, 10, 10, 5)
+        status_container = QHBoxLayout()
+        status_container.addStretch()
+        status_container.addWidget(self.status_label)
+        status_container.addStretch()
+        layout.addLayout(status_container)
         layout.addLayout(grid_and_selector_layout)
         self.setLayout(layout)
-
-    # 🔥 NEW: Handle WebSocket messages
+        
+    def safe_initialization(self):
+        """Safe initialization that only queries the selected Maestro"""
+        try:
+            self.update_status("Initializing servo configuration...")
+            
+            # Check if we already have info for current Maestro
+            maestro_num = self.current_maestro + 1
+            if self.maestro_connected.get(maestro_num, False) and self.maestro_channel_counts.get(maestro_num, 0) > 0:
+                # Already have info, build grid immediately
+                self.update_status(f"Using cached info for Maestro {maestro_num}")
+                self.update_grid()
+                QTimer.singleShot(300, self.read_all_positions_now)
+            else:
+                # Request fresh info
+                self.request_current_maestro_info()
+            
+        except Exception as e:
+            print(f"Initialization error: {e}")
+            self.update_status(f"Initialization failed: {str(e)}", error=True)
+    
+    def request_current_maestro_info(self):
+        """Request information only for the currently selected Maestro"""
+        maestro_num = self.current_maestro + 1
+        self.update_status(f"Detecting Maestro {maestro_num} controller...")
+        
+        # Send request only for selected Maestro
+        message = json.dumps({
+            "type": "get_maestro_info",
+            "maestro": maestro_num
+        })
+        
+        if hasattr(self.websocket, 'send_safe'):
+            self.websocket.send_safe(message)
+        else:
+            try:
+                self.websocket.sendTextMessage(message)
+            except Exception as e:
+                self.update_status(f"Failed to request Maestro info: {e}", error=True)
+        
+        print(f"Requested info for Maestro {maestro_num} only")
+    
+    def refresh_current_maestro(self):
+        """Refresh only the currently selected Maestro"""
+        # Stop any active operations
+        self.stop_all_sweeps()
+        if self.auto_update_positions:
+            self.position_update_timer.stop()
+        
+        # Clear current state
+        self.maestro_connected[self.current_maestro + 1] = False
+        self.maestro_channel_counts[self.current_maestro + 1] = 0
+        
+        # Request fresh info
+        self.request_current_maestro_info()
+        self.reload_servo_config()
+        
     @error_boundary
     def handle_websocket_message(self, message):
-        """Handle incoming WebSocket messages"""
+        """Handle incoming WebSocket messages with proper routing"""
         try:
             data = json.loads(message)
             msg_type = data.get("type")
@@ -1240,1413 +1341,680 @@ class ServoConfigScreen(QWidget):
                 
                 if maestro_num in [1, 2]:
                     self.maestro_channel_counts[maestro_num] = channels
-                    print(f"📡 Maestro {maestro_num}: {channels} channels, connected: {connected}")
+                    self.maestro_connected[maestro_num] = connected
+                    print(f"Maestro {maestro_num}: {channels} channels, connected: {connected}")
                     
-                    # Update status
                     if connected:
                         self.update_status(f"Maestro {maestro_num}: {channels} channels detected")
+                        # Only update grid if this is the currently selected Maestro
+                        if maestro_num == self.current_maestro + 1:
+                            self.update_grid()
+                            # Read initial positions after short delay
+                            QTimer.singleShot(500, self.read_all_positions_now)
                     else:
-                        self.update_status(f"Maestro {maestro_num}: Not connected")
-                    
-                    # Refresh grid if this is the current maestro
-                    if maestro_num == self.current_maestro + 1:
-                        self.update_grid()
+                        self.update_status(f"Maestro {maestro_num}: Not connected", error=True)
             
-            # 🔥 NEW: Handle servo position responses
             elif msg_type == "servo_position":
                 channel_key = data.get("channel")
                 position = data.get("position")
                 
                 if channel_key and position is not None:
-                    self.update_servo_position_display(channel_key, position)
+                    # Use Qt signal for thread-safe update
+                    self.position_update_signal.emit(channel_key, position)
+                    
+                    # Notify active sweeps
+                    if channel_key in self.active_sweeps:
+                        try:
+                            self.active_sweeps[channel_key].position_reached(position)
+                        except Exception as e:
+                            print(f"Error updating sweep position for {channel_key}: {e}")
+                            if channel_key in self.active_sweeps:
+                                self.active_sweeps[channel_key].stop()
+                                del self.active_sweeps[channel_key]
             
-            # 🔥 NEW: Handle batch position responses
             elif msg_type == "all_servo_positions":
                 maestro_num = data.get("maestro")
                 positions = data.get("positions", {})
                 
-                print(f"📍 Received {len(positions)} positions for Maestro {maestro_num}")
-                
-                for channel, position in positions.items():
-                    channel_key = f"m{maestro_num}_ch{channel}"
-                    if position is not None:
-                        self.update_servo_position_display(channel_key, position)
-                        
-        except Exception as e:
-            print(f"Error handling WebSocket message: {e}")
-
-    # 🔥 NEW: Update servo position display
-    def update_servo_position_display(self, channel_key, position):
-        """Update the UI to show actual servo position"""
-        if channel_key in self.servo_widgets:
-            slider, pos_label = self.servo_widgets[channel_key][:2]
-            
-            # Update slider position (without triggering servo movement)
-            slider.blockSignals(True)  # Prevent triggering servo command
-            slider.setValue(position)
-            slider.blockSignals(False)
-            
-            # Update position label
-            pos_label.setText(f"V: {position}")
-            pos_label.setStyleSheet("color: white;")  # White for read position
-            
-            print(f"📍 Updated display: {channel_key} = {position}")
-
-    # 🔥 NEW: Toggle auto-update
-    def toggle_auto_update(self, enabled):
-        """Toggle automatic position updates"""
-        self.auto_update_positions = enabled
-        
-        if enabled:
-            self.position_update_timer.start(200)  # Update every .2 seconds
-            self.update_status("Auto-refresh positions: ON")
-            print("🔄 Auto position updates enabled")
-        else:
-            self.position_update_timer.stop()
-            self.update_status("Auto-refresh positions: OFF")
-            print("⏸️ Auto position updates disabled")
-
-    # 🔥 NEW: Read all positions now
-    def read_all_positions_now(self):
-        """Manually trigger reading all servo positions"""
-        maestro_num = self.current_maestro + 1
-        
-        self.websocket.send_safe(json.dumps({
-            "type": "get_all_servo_positions",
-            "maestro": maestro_num
-        }))
-        
-        self.update_status(f"Reading positions from Maestro {maestro_num}...")
-        print(f"📡 Requesting all positions from Maestro {maestro_num}")
-
-    # 🔥 NEW: Auto-update all positions
-    def update_all_positions(self):
-        """Automatically update all servo positions"""
-        if not self.auto_update_positions:
-            return
-        
-        maestro_num = self.current_maestro + 1
-        
-        # Only update if we have servo widgets and maestro is connected
-        if self.servo_widgets:
-            self.websocket.send_safe(json.dumps({
-                "type": "get_all_servo_positions", 
-                "maestro": maestro_num
-            }))
-            print(f"🔄 Auto-updating positions for Maestro {maestro_num}")
-
-    # 🔥 NEW: Request maestro information
-    def request_maestro_info(self):
-        """Request channel count and status from both Maestros"""
-        self.update_status("Requesting Maestro information...")
-        
-        # Request info for both Maestros
-        for maestro_num in [1, 2]:
-            self.websocket.send_safe(json.dumps({
-                "type": "get_maestro_info",
-                "maestro": maestro_num
-            }))
-        
-        print("📡 Requested Maestro information from backend")
-
-    # 🔥 NEW: Refresh maestro data
-    def refresh_maestro_data(self):
-        """Refresh maestro data and rebuild grid"""
-        self.request_maestro_info()
-        # Also refresh servo config
-        self.reload_servo_config()
-
-    # 🔥 NEW: Handle maestro selection change
-    def on_maestro_changed(self, maestro_index):
-        """Handle maestro selection change"""
-        self.current_maestro = maestro_index
-        self.update_maestro_icons(maestro_index)
-        self.stop_all_sweeps()  # Stop any active sweeps
-        self.update_grid()  # Rebuild grid for new maestro
-        
-        # Update status
-        maestro_num = maestro_index + 1
-        channels = self.maestro_channel_counts.get(maestro_num, 0)
-        self.update_status(f"Maestro {maestro_num}: {channels} channels")
-
-    # 🔥 NEW: Update status label
-    def update_status(self, message):
-        """Update the status label"""
-        self.status_label.setText(message)
-        print(f"🔄 Status: {message}")
-
-    @error_boundary
-    def update_maestro_icons(self, checked_id):
-        # Set pressed icon for selected, normal for unselected
-        if self.maestro_group.checkedId() == 0:
-            if os.path.exists("icons/M1_pressed.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
-            if os.path.exists("icons/M2.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-        else:
-            if os.path.exists("icons/M1.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            if os.path.exists("icons/M2_pressed.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
-
-    @error_boundary
-    def load_config(self):
-        return config_manager.get_config("configs/servo_config.json")
-
-    @error_boundary
-    def save_config(self):
-        with open("configs/servo_config.json", "w") as f:
-            json.dump(self.servo_config, f, indent=2)
-        config_manager.clear_cache()  # Clear cache after save
-
-    @error_boundary
-    def reload_servo_config(self):
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("configs/servo_config.json")
-        self.update_grid()
-        print("Servo config reloaded successfully.")
-
-    def update_config(self, key, field, value):
-        if key not in self.servo_config:
-            self.servo_config[key] = {}
-        self.servo_config[key][field] = value
-        self.save_config()
-
-    # 🔥 UPDATED: Modified update_grid to use dynamic channel count and track widgets
-    @error_boundary
-    def update_grid(self):
-        font = QFont("Arial", 16)
-
-        # Stop any active sweeps when rebuilding grid
-        self.stop_all_sweeps()
-        
-        # Stop position updates while rebuilding
-        self.position_update_timer.stop()
-        
-        # Clear existing widgets and tracking
-        for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        
-        self.servo_widgets.clear()  # Clear widget tracking
-
-        maestro_index = self.maestro_group.checkedId()
-        maestro_num = maestro_index + 1
-        
-        # Get dynamic channel count
-        channel_count = self.maestro_channel_counts.get(maestro_num, 18)
-        
-        print(f"🔄 Building grid for Maestro {maestro_num} with {channel_count} channels")
-        
-        # Create grid for actual detected channels
-        for i in range(channel_count):
-            channel_key = f"m{maestro_num}_ch{i}"
-            config = self.servo_config.get(channel_key, {})
-            row = i
-
-            label = QLabel(f"Channel {i}")
-            label.setFont(font)
-            self.grid_layout.addWidget(label, row, 0)
-
-            name_edit = QLineEdit(config.get("name", ""))
-            name_edit.setFont(font)
-            name_edit.setMaxLength(32)
-            name_edit.setPlaceholderText("Friendly Name")
-            name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
-            self.grid_layout.addWidget(name_edit, row, 1)
-
-            # Slider for position control
-            slider = QSlider(Qt.Orientation.Horizontal)
-            min_val = config.get("min", 992)
-            max_val = config.get("max", 2000)
-            slider.setMinimum(min_val)
-            slider.setMaximum(max_val)
-            slider.setValue((min_val + max_val) // 2)  # Default to center
-            slider.setFixedWidth(150)
-            self.grid_layout.addWidget(slider, row, 2)
-
-            # Min value controls
-            min_label = QLabel("Min")
-            min_label.setFont(font)
-            self.grid_layout.addWidget(min_label, row, 3)
-            
-            min_spin = QSpinBox()
-            min_spin.setFont(font)
-            min_spin.setRange(0, 2500)
-            min_spin.setValue(min_val)
-            min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
-            min_spin.valueChanged.connect(lambda val, s=slider: s.setMinimum(val))
-            self.grid_layout.addWidget(min_spin, row, 4)
-
-            # Max value controls
-            max_label = QLabel("Max")
-            max_label.setFont(font)
-            self.grid_layout.addWidget(max_label, row, 5)
-            
-            max_spin = QSpinBox()
-            max_spin.setFont(font)
-            max_spin.setRange(0, 2500)
-            max_spin.setValue(max_val)
-            max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
-            max_spin.valueChanged.connect(lambda val, s=slider: s.setMaximum(val))
-            self.grid_layout.addWidget(max_spin, row, 6)
-
-            # Speed control
-            speed_label = QLabel("S")
-            speed_label.setFont(font)
-            self.grid_layout.addWidget(speed_label, row, 7)
-            
-            speed_spin = QSpinBox()
-            speed_spin.setFont(font)
-            speed_spin.setRange(0, 100)
-            speed_spin.setValue(config.get("speed", 0))
-            speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "speed", val))
-            self.grid_layout.addWidget(speed_spin, row, 8)
-
-            # Acceleration control
-            accel_label = QLabel("A")
-            accel_label.setFont(font)
-            self.grid_layout.addWidget(accel_label, row, 9)
-            
-            accel_spin = QSpinBox()
-            accel_spin.setFont(font)
-            accel_spin.setRange(0, 100)
-            accel_spin.setValue(config.get("accel", 0))
-            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
-            self.grid_layout.addWidget(accel_spin, row, 10)
-
-            # Position label - will show actual position
-            pos_label = QLabel("V: ---")  # 🔥 Changed default to show we're loading
-            pos_label.setFont(font)
-            pos_label.setStyleSheet("color: #FFAA00;")  # Orange while loading
-            self.grid_layout.addWidget(pos_label, row, 11)
-
-            # Play/sweep button
-            play_btn = QPushButton("▶")
-            play_btn.setFont(font)
-            play_btn.setCheckable(True)
-            play_btn.clicked.connect(lambda checked, k=channel_key, p=pos_label, b=play_btn, s=slider, min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin: self.toggle_sweep(k, p, b, s, min_spin.value(), max_spin.value(), speed_spin.value()))
-            self.grid_layout.addWidget(play_btn, row, 12)
-
-            # Connect slider to servo movement
-            slider.valueChanged.connect(
-                lambda val, k=channel_key, p=pos_label: self.update_servo_position(k, p, val)
-            )
-
-            # 🔥 NEW: Track widgets for position updates
-            self.servo_widgets[channel_key] = (slider, pos_label, play_btn)
-
-        # Update status to show completed grid
-        self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
-        
-        # 🔥 NEW: Start reading positions after grid is built
-        QTimer.singleShot(500, self.read_all_positions_now)  # Small delay to let UI settle
-        
-        # 🔥 NEW: Restart auto-updates if enabled
-        if self.auto_update_positions:
-            self.position_update_timer.start(2000)
-
-    # 🔥 UPDATED: Enhanced servo position update with real movement
-    def update_servo_position(self, channel_key, pos_label, value):
-        """Update servo position with enhanced feedback"""
-        
-        # Get current channel configuration
-        config = self.servo_config.get(channel_key, {})
-        speed = config.get("speed", 0)
-        accel = config.get("accel", 0)
-        
-        # Apply speed and acceleration settings if they exist
-        if speed > 0 or accel > 0:
-            print(f"⚙️ Applying settings to {channel_key}: speed={speed}, accel={accel}")
-            
-            # Send speed setting first (if configured)
-            if speed > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_speed",
-                    "channel": channel_key, 
-                    "speed": speed
-                }))
-            
-            # Send acceleration setting (if configured)
-            if accel > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_acceleration", 
-                    "channel": channel_key,
-                    "acceleration": accel
-                }))
-        
-        # Send position command
-        self.websocket.send_safe(json.dumps({
-            "type": "servo", 
-            "channel": channel_key, 
-            "pos": value
-        }))
-        
-        # Update UI immediately (optimistic update)
-        pos_label.setText(f"V: {value}")
-        pos_label.setStyleSheet("color: #44FF44;")  # Green for commanded position
-        
-        print(f"📡 Servo command: {channel_key} → {value}")
-
-    # 🔥 UPDATED: Enhanced sweep with real servo movement
-    def toggle_sweep(self, key, pos_label, button, slider, min_val, max_val, speed):
-        """Toggle servo sweep with real servo movement"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
-            button.setText("▶")
-            button.setChecked(False)
-            return
-
-        class Sweep:
-            def __init__(self, parent_screen, channel_key, label, btn, slider, minv, maxv, speedv):
-                self.parent_screen = parent_screen  # Reference to ServoConfigScreen
-                self.channel_key = channel_key      # e.g., "m1_ch5"
-                self.label = label
-                self.btn = btn
-                self.slider = slider
-                self.minv = minv
-                self.maxv = maxv
-                self.speedv = speedv
-                
-                # Calculate step size and timing
-                self.step_size = max(1, (maxv - minv) // 50)  # ~50 steps across range
-                self.timer = QTimer()
-                self.timer.timeout.connect(self.step)
-                
-                # Position tracking
-                self.pos = minv
-                self.direction = 1
-                
-                # Timer interval based on speed (higher speed = faster updates)
-                interval = max(20, 200 - (speedv * 2))
-                self.timer.start(interval)
-                
-                print(f"🎭 Starting sweep on {channel_key}: {minv}-{maxv}, speed={speedv}, step={self.step_size}, interval={interval}ms")
-
-            def step(self):
-                """Execute one step of the sweep"""
-                # Update position
-                self.pos += self.direction * self.step_size
-                
-                # Check bounds and reverse direction
-                if self.pos >= self.maxv:
-                    self.pos = self.maxv
-                    self.direction = -1
-                elif self.pos <= self.minv:
-                    self.pos = self.minv
-                    self.direction = 1
-                
-                # Update UI
-                self.label.setText(f"V: {self.pos}")
-                self.slider.setValue(self.pos)
-                
-                # 🔥 THE KEY FIX: Actually move the servo!
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": self.pos
-                }))
-                
-                print(f"📡 Sweep step: {self.channel_key} → {self.pos}")
-
-            def stop(self):
-                """Stop the sweep"""
-                self.timer.stop()
-                
-                # Reset to center position
-                center_pos = (self.minv + self.maxv) // 2
-                self.pos = center_pos
-                self.label.setText(f"V: {center_pos}")
-                self.slider.setValue(center_pos)
-                
-                # Move servo to center
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": center_pos
-                }))
-                
-                # Update UI
-                self.btn.setText("▶")
-                self.btn.setChecked(False)
-                
-                print(f"🛑 Sweep stopped: {self.channel_key} returned to center ({center_pos})")
-
-        # Create sweep with reference to this screen instance
-        sweep = Sweep(self, key, pos_label, button, slider, min_val, max_val, speed)
-        self.active_sweep = sweep
-        button.setText("⏸")
-        print(f"▶️ Sweep started for {key}")
-
-    def stop_all_sweeps(self):
-        """Stop any active sweeps when switching Maestros"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
-            print("🛑 All sweeps stopped")
-    def __init__(self, websocket):
-        super().__init__()
-        self.websocket = websocket
-        self.setFixedWidth(1180)
-        self.setStyleSheet("background-color: #1e1e1e; color: white;")
-        self.servo_config = self.load_config()
-        self.active_sweep = None
-        
-        # 🔥 NEW: Track channel counts for each Maestro
-        self.maestro_channel_counts = {1: 18, 2: 18}  # Default fallback
-        self.current_maestro = 1
-        self.channels_loaded = False
-        
-        # 🔥 NEW: Track servo widgets for position updates
-        self.servo_widgets = {}  # Will store {channel_key: (slider, pos_label, ...)}
-        self.position_update_timer = QTimer()
-        self.position_update_timer.timeout.connect(self.update_all_positions)
-        self.auto_update_positions = True  # Toggle for auto-refresh
-
-        # Maestro selector dropdown
-        self.maestro1_btn = QPushButton()
-        self.maestro2_btn = QPushButton()
-        self.maestro1_btn.setCheckable(True)
-        self.maestro2_btn.setCheckable(True)
-        
-        # Load icons if they exist
-        if os.path.exists("icons/M1.png"):
-            self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            self.maestro1_btn.setIconSize(QSize(112,118))
-        if os.path.exists("icons/M2.png"):
-            self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-            self.maestro2_btn.setIconSize(QSize(112,118))
-
-        self.maestro_group = QButtonGroup()
-        self.maestro_group.setExclusive(True)
-        self.maestro_group.addButton(self.maestro1_btn, 0)
-        self.maestro_group.addButton(self.maestro2_btn, 1)
-        self.maestro_group.idClicked.connect(self.on_maestro_changed)
-
-        self.maestro1_btn.setChecked(True)
-        self.update_maestro_icons(0)
-
-        # Add refresh button
-        self.refresh_btn = QPushButton("Update")
-        self.refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: white;
-                border-radius: 12px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
-        self.refresh_btn.setMinimumSize(100, 40)
-        self.refresh_btn.clicked.connect(self.refresh_maestro_data)
-
-        # 🔥 NEW: Add status label to show channel detection
-        self.status_label = QLabel("Detecting channels...")
-        self.status_label.setFont(QFont("Arial", 14))
-        self.status_label.setStyleSheet("color: #FFAA00; padding: 5px;")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # 🔥 NEW: Add position refresh controls
-        self.setup_position_controls()
-
-        # Scrollable grid area
-        self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setContentsMargins(10, 10, 10, 10)
-        self.grid_widget.setLayout(self.grid_layout)
-        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
-
-        # 🔥 NEW: Connect to WebSocket for responses
-        self.websocket.textMessageReceived.connect(self.handle_websocket_message)
-
-        # Setup UI layout
-        self.setup_layout()
-        
-        # 🔥 NEW: Request channel counts from backend on startup
-        self.request_maestro_info()
-
-    def setup_position_controls(self):
-        """Setup controls for position reading"""
-        # Auto-update checkbox
-        self.auto_update_checkbox = QCheckBox("Auto-refresh positions")
-        self.auto_update_checkbox.setChecked(True)
-        self.auto_update_checkbox.setFont(QFont("Arial", 12))
-        self.auto_update_checkbox.setStyleSheet("color: white;")
-        self.auto_update_checkbox.toggled.connect(self.toggle_auto_update)
-        
-        # Manual refresh button
-        self.read_positions_btn = QPushButton("📍 Read Positions")
-        self.read_positions_btn.setFont(QFont("Arial", 12))
-        self.read_positions_btn.clicked.connect(self.read_all_positions_now)
-        self.read_positions_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: white;
-                border-radius: 8px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
-
-    def setup_layout(self):
-        """Enhanced layout with position controls"""
-        # Main layout
-        grid_and_selector_layout = QHBoxLayout()
-        grid_and_selector_layout.addSpacing(80)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setWidget(self.grid_widget)
-        
-        # Create a vertical layout to center the maestro selector
-        selector_container = QVBoxLayout()
-        selector_container.addStretch()
-        selector_container.addWidget(self.maestro1_btn)
-        selector_container.addWidget(self.maestro2_btn)
-        selector_container.addSpacing(20)
-        selector_container.addWidget(self.refresh_btn)
-        selector_container.addSpacing(10)
-        # 🔥 NEW: Add position controls
-        selector_container.addWidget(self.auto_update_checkbox)
-        selector_container.addWidget(self.read_positions_btn)
-        selector_container.addStretch()
-
-        # Create a QWidget to hold the selector layout
-        selector_widget = QWidget()
-        selector_widget.setLayout(selector_container)
-        selector_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
-
-        # Add selector widget to the right of the grid
-        grid_and_selector_layout.addWidget(scroll_area, stretch=3)
-        grid_and_selector_layout.addWidget(selector_widget)
-
-        # Final layout with status
-        layout = QVBoxLayout()
-        layout.addWidget(self.status_label)
-        layout.addLayout(grid_and_selector_layout)
-        self.setLayout(layout)
-
-    # 🔥 NEW: Handle WebSocket messages
-    @error_boundary
-    def handle_websocket_message(self, message):
-        """Handle incoming WebSocket messages"""
-        try:
-            data = json.loads(message)
-            msg_type = data.get("type")
-            
-            if msg_type == "maestro_info":
-                maestro_num = data.get("maestro")
-                channels = data.get("channels", 0)
-                connected = data.get("connected", False)
-                
-                if maestro_num in [1, 2]:
-                    self.maestro_channel_counts[maestro_num] = channels
-                    print(f"📡 Maestro {maestro_num}: {channels} channels, connected: {connected}")
+                # Only process if this is for the currently selected Maestro
+                if maestro_num == self.current_maestro + 1:
+                    print(f"Received {len(positions)} positions for Maestro {maestro_num}")
                     
-                    # Update status
-                    if connected:
-                        self.update_status(f"Maestro {maestro_num}: {channels} channels detected")
+                    self.reading_positions = False
+                    self.position_read_timeout.stop()
+                    
+                    # Update all positions using Qt signals
+                    for channel, position in positions.items():
+                        channel_key = f"m{maestro_num}_ch{channel}"
+                        if position is not None:
+                            self.position_update_signal.emit(channel_key, position)
+                    
+                    if len(positions) > 0:
+                        self.update_status(f"Read {len(positions)} positions from Maestro {maestro_num}")
                     else:
-                        self.update_status(f"Maestro {maestro_num}: Not connected")
-                    
-                    # Refresh grid if this is the current maestro
-                    if maestro_num == self.current_maestro + 1:
-                        self.update_grid()
-            
-            # 🔥 NEW: Handle servo position responses
-            elif msg_type == "servo_position":
-                channel_key = data.get("channel")
-                position = data.get("position")
-                
-                if channel_key and position is not None:
-                    self.update_servo_position_display(channel_key, position)
-            
-            # 🔥 NEW: Handle batch position responses
-            elif msg_type == "all_servo_positions":
-                maestro_num = data.get("maestro")
-                positions = data.get("positions", {})
-                
-                print(f"📍 Received {len(positions)} positions for Maestro {maestro_num}")
-                
-                for channel, position in positions.items():
-                    channel_key = f"m{maestro_num}_ch{channel}"
-                    if position is not None:
-                        self.update_servo_position_display(channel_key, position)
+                        self.update_status(f"No positions received from Maestro {maestro_num}", warning=True)
                         
         except Exception as e:
             print(f"Error handling WebSocket message: {e}")
-
-    # 🔥 NEW: Update servo position display
+    
     def update_servo_position_display(self, channel_key, position):
-        """Update the UI to show actual servo position"""
+        """Thread-safe method to update servo position display"""
         if channel_key in self.servo_widgets:
-            slider, pos_label = self.servo_widgets[channel_key][:2]
+            widgets = self.servo_widgets[channel_key]
+            slider = widgets[0]
+            pos_label = widgets[1]
             
-            # Update slider position (without triggering servo movement)
-            slider.blockSignals(True)  # Prevent triggering servo command
+            # Update slider position without triggering servo movement
+            slider.blockSignals(True)
             slider.setValue(position)
             slider.blockSignals(False)
             
             # Update position label
             pos_label.setText(f"V: {position}")
-            pos_label.setStyleSheet("color: white;")  # White for read position
+            pos_label.setStyleSheet("color: #44FF44;")
             
-            print(f"📍 Updated display: {channel_key} = {position}")
-
-    # 🔥 NEW: Toggle auto-update
-    def toggle_auto_update(self, enabled):
-        """Toggle automatic position updates"""
-        self.auto_update_positions = enabled
+            print(f"Updated display: {channel_key} = {position}")
+    
+    def update_status_threadsafe(self, message, error=False, warning=False):
+        """Thread-safe status update"""
+        self.status_label.setText(message)
         
-        if enabled:
-            self.position_update_timer.start(2000)  # Update every 2 seconds
-            self.update_status("Auto-refresh positions: ON")
-            print("🔄 Auto position updates enabled")
+        if error:
+            self.status_label.setStyleSheet("color: #FF4444; padding: 3px;")
+        elif warning:
+            self.status_label.setStyleSheet("color: #FFAA00; padding: 3px;")
         else:
-            self.position_update_timer.stop()
-            self.update_status("Auto-refresh positions: OFF")
-            print("⏸️ Auto position updates disabled")
-
-    # 🔥 NEW: Read all positions now
-    def read_all_positions_now(self):
-        """Manually trigger reading all servo positions"""
-        maestro_num = self.current_maestro + 1
+            self.status_label.setStyleSheet("color: #44FF44; padding: 3px;")
         
-        self.websocket.send_safe(json.dumps({
-            "type": "get_all_servo_positions",
-            "maestro": maestro_num
-        }))
-        
-        self.update_status(f"Reading positions from Maestro {maestro_num}...")
-        print(f"📡 Requesting all positions from Maestro {maestro_num}")
-
-    # 🔥 NEW: Auto-update all positions
-    def update_all_positions(self):
-        """Automatically update all servo positions"""
-        if not self.auto_update_positions:
-            return
-        
-        maestro_num = self.current_maestro + 1
-        
-        # Only update if we have servo widgets and maestro is connected
-        if self.servo_widgets:
-            self.websocket.send_safe(json.dumps({
-                "type": "get_all_servo_positions", 
-                "maestro": maestro_num
-            }))
-            print(f"🔄 Auto-updating positions for Maestro {maestro_num}")
-
-    # 🔥 NEW: Request maestro information
-    def request_maestro_info(self):
-        """Request channel count and status from both Maestros"""
-        self.update_status("Requesting Maestro information...")
-        
-        # Request info for both Maestros
-        for maestro_num in [1, 2]:
-            self.websocket.send_safe(json.dumps({
-                "type": "get_maestro_info",
-                "maestro": maestro_num
-            }))
-        
-        print("📡 Requested Maestro information from backend")
-
-    # 🔥 NEW: Refresh maestro data
-    def refresh_maestro_data(self):
-        """Refresh maestro data and rebuild grid"""
-        self.request_maestro_info()
-        # Also refresh servo config
-        self.reload_servo_config()
-
-    # 🔥 NEW: Handle maestro selection change
+        print(f"Status: {message}")
+    
+    def update_status(self, message, error=False, warning=False):
+        """Update status using Qt signal for thread safety"""
+        self.status_update_signal.emit(message, error, warning)
+    
     def on_maestro_changed(self, maestro_index):
-        """Handle maestro selection change"""
+        """Handle maestro selection change with proper cleanup"""
+        if maestro_index == self.current_maestro:
+            return  # No change needed
+        
+        # Stop current operations
+        self.stop_all_sweeps()
+        if self.auto_update_positions:
+            self.position_update_timer.stop()
+        
+        # Update selection
+        old_maestro = self.current_maestro
         self.current_maestro = maestro_index
         self.update_maestro_icons(maestro_index)
-        self.stop_all_sweeps()  # Stop any active sweeps
-        self.update_grid()  # Rebuild grid for new maestro
         
-        # Update status
-        maestro_num = maestro_index + 1
-        channels = self.maestro_channel_counts.get(maestro_num, 0)
-        self.update_status(f"Maestro {maestro_num}: {channels} channels")
-
-    # 🔥 NEW: Update status label
-    def update_status(self, message):
-        """Update the status label"""
-        self.status_label.setText(message)
-        print(f"🔄 Status: {message}")
-
-    @error_boundary
-    def update_maestro_icons(self, checked_id):
-        # Set pressed icon for selected, normal for unselected
-        if self.maestro_group.checkedId() == 0:
-            if os.path.exists("icons/M1_pressed.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
-            if os.path.exists("icons/M2.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-        else:
-            if os.path.exists("icons/M1.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            if os.path.exists("icons/M2_pressed.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
-
-    @error_boundary
-    def load_config(self):
-        return config_manager.get_config("configs/servo_config.json")
-
-    @error_boundary
-    def save_config(self):
-        with open("configs/servo_config.json", "w") as f:
-            json.dump(self.servo_config, f, indent=2)
-        config_manager.clear_cache()  # Clear cache after save
-
-    @error_boundary
-    def reload_servo_config(self):
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("configs/servo_config.json")
-        self.update_grid()
-        print("Servo config reloaded successfully.")
-
-    def update_config(self, key, field, value):
-        if key not in self.servo_config:
-            self.servo_config[key] = {}
-        self.servo_config[key][field] = value
-        self.save_config()
-
-    # 🔥 UPDATED: Modified update_grid to use dynamic channel count and track widgets
-    @error_boundary
-    def update_grid(self):
-        font = QFont("Arial", 16)
-
-        # Stop any active sweeps when rebuilding grid
-        self.stop_all_sweeps()
+        # Clear old grid
+        self.clear_grid()
         
-        # Stop position updates while rebuilding
-        self.position_update_timer.stop()
-        
-        # Clear existing widgets and tracking
-        for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        
-        self.servo_widgets.clear()  # Clear widget tracking
-
-        maestro_index = self.maestro_group.checkedId()
         maestro_num = maestro_index + 1
         
-        # Get dynamic channel count
-        channel_count = self.maestro_channel_counts.get(maestro_num, 18)
-        
-        print(f"🔄 Building grid for Maestro {maestro_num} with {channel_count} channels")
-        
-        # Create grid for actual detected channels
-        for i in range(channel_count):
-            channel_key = f"m{maestro_num}_ch{i}"
-            config = self.servo_config.get(channel_key, {})
-            row = i
-
-            label = QLabel(f"Channel {i}")
-            label.setFont(font)
-            self.grid_layout.addWidget(label, row, 0)
-
-            name_edit = QLineEdit(config.get("name", ""))
-            name_edit.setFont(font)
-            name_edit.setMaxLength(32)
-            name_edit.setPlaceholderText("Friendly Name")
-            name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
-            self.grid_layout.addWidget(name_edit, row, 1)
-
-            # Slider for position control
-            slider = QSlider(Qt.Orientation.Horizontal)
-            min_val = config.get("min", 992)
-            max_val = config.get("max", 2000)
-            slider.setMinimum(min_val)
-            slider.setMaximum(max_val)
-            slider.setValue((min_val + max_val) // 2)  # Default to center
-            slider.setFixedWidth(150)
-            self.grid_layout.addWidget(slider, row, 2)
-
-            # Min value controls
-            min_label = QLabel("Min")
-            min_label.setFont(font)
-            self.grid_layout.addWidget(min_label, row, 3)
-            
-            min_spin = QSpinBox()
-            min_spin.setFont(font)
-            min_spin.setRange(0, 2500)
-            min_spin.setValue(min_val)
-            min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
-            min_spin.valueChanged.connect(lambda val, s=slider: s.setMinimum(val))
-            self.grid_layout.addWidget(min_spin, row, 4)
-
-            # Max value controls
-            max_label = QLabel("Max")
-            max_label.setFont(font)
-            self.grid_layout.addWidget(max_label, row, 5)
-            
-            max_spin = QSpinBox()
-            max_spin.setFont(font)
-            max_spin.setRange(0, 2500)
-            max_spin.setValue(max_val)
-            max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
-            max_spin.valueChanged.connect(lambda val, s=slider: s.setMaximum(val))
-            self.grid_layout.addWidget(max_spin, row, 6)
-
-            # Speed control
-            speed_label = QLabel("S")
-            speed_label.setFont(font)
-            self.grid_layout.addWidget(speed_label, row, 7)
-            
-            speed_spin = QSpinBox()
-            speed_spin.setFont(font)
-            speed_spin.setRange(0, 100)
-            speed_spin.setValue(config.get("speed", 0))
-            speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "speed", val))
-            self.grid_layout.addWidget(speed_spin, row, 8)
-
-            # Acceleration control
-            accel_label = QLabel("A")
-            accel_label.setFont(font)
-            self.grid_layout.addWidget(accel_label, row, 9)
-            
-            accel_spin = QSpinBox()
-            accel_spin.setFont(font)
-            accel_spin.setRange(0, 100)
-            accel_spin.setValue(config.get("accel", 0))
-            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
-            self.grid_layout.addWidget(accel_spin, row, 10)
-
-            # Position label - will show actual position
-            pos_label = QLabel("V: ---")  # 🔥 Changed default to show we're loading
-            pos_label.setFont(font)
-            pos_label.setStyleSheet("color: #FFAA00;")  # Orange while loading
-            self.grid_layout.addWidget(pos_label, row, 11)
-
-            # Play/sweep button
-            play_btn = QPushButton("▶")
-            play_btn.setFont(font)
-            play_btn.setCheckable(True)
-            play_btn.clicked.connect(lambda checked, k=channel_key, p=pos_label, b=play_btn, s=slider, min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin: self.toggle_sweep(k, p, b, s, min_spin.value(), max_spin.value(), speed_spin.value()))
-            self.grid_layout.addWidget(play_btn, row, 12)
-
-            # Connect slider to servo movement
-            slider.valueChanged.connect(
-                lambda val, k=channel_key, p=pos_label: self.update_servo_position(k, p, val)
-            )
-
-            # 🔥 NEW: Track widgets for position updates
-            self.servo_widgets[channel_key] = (slider, pos_label, play_btn)
-
-        # Update status to show completed grid
-        self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
-        
-        # 🔥 NEW: Start reading positions after grid is built
-        QTimer.singleShot(500, self.read_all_positions_now)  # Small delay to let UI settle
-        
-        # 🔥 NEW: Restart auto-updates if enabled
-        if self.auto_update_positions:
-            self.position_update_timer.start(2000)
-
-    # 🔥 UPDATED: Enhanced servo position update with real movement
-    def update_servo_position(self, channel_key, pos_label, value):
-        """Update servo position with enhanced feedback"""
-        
-        # Get current channel configuration
-        config = self.servo_config.get(channel_key, {})
-        speed = config.get("speed", 0)
-        accel = config.get("accel", 0)
-        
-        # Apply speed and acceleration settings if they exist
-        if speed > 0 or accel > 0:
-            print(f"⚙️ Applying settings to {channel_key}: speed={speed}, accel={accel}")
-            
-            # Send speed setting first (if configured)
-            if speed > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_speed",
-                    "channel": channel_key, 
-                    "speed": speed
-                }))
-            
-            # Send acceleration setting (if configured)
-            if accel > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_acceleration", 
-                    "channel": channel_key,
-                    "acceleration": accel
-                }))
-        
-        # Send position command
-        self.websocket.send_safe(json.dumps({
-            "type": "servo", 
-            "channel": channel_key, 
-            "pos": value
-        }))
-        
-        # Update UI immediately (optimistic update)
-        pos_label.setText(f"V: {value}")
-        pos_label.setStyleSheet("color: #44FF44;")  # Green for commanded position
-        
-        print(f"📡 Servo command: {channel_key} → {value}")
-
-    # 🔥 UPDATED: Enhanced sweep with real servo movement
-    def toggle_sweep(self, key, pos_label, button, slider, min_val, max_val, speed):
-        """Toggle servo sweep with real servo movement"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
-            button.setText("▶")
-            button.setChecked(False)
-            return
-
-        class Sweep:
-            def __init__(self, parent_screen, channel_key, label, btn, slider, minv, maxv, speedv):
-                self.parent_screen = parent_screen  # Reference to ServoConfigScreen
-                self.channel_key = channel_key      # e.g., "m1_ch5"
-                self.label = label
-                self.btn = btn
-                self.slider = slider
-                self.minv = minv
-                self.maxv = maxv
-                self.speedv = speedv
-                
-                # Calculate step size and timing
-                self.step_size = max(1, (maxv - minv) // 50)  # ~50 steps across range
-                self.timer = QTimer()
-                self.timer.timeout.connect(self.step)
-                
-                # Position tracking
-                self.pos = minv
-                self.direction = 1
-                
-                # Timer interval based on speed (higher speed = faster updates)
-                interval = max(20, 200 - (speedv * 2))
-                self.timer.start(interval)
-                
-                print(f"🎭 Starting sweep on {channel_key}: {minv}-{maxv}, speed={speedv}, step={self.step_size}, interval={interval}ms")
-
-            def step(self):
-                """Execute one step of the sweep"""
-                # Update position
-                self.pos += self.direction * self.step_size
-                
-                # Check bounds and reverse direction
-                if self.pos >= self.maxv:
-                    self.pos = self.maxv
-                    self.direction = -1
-                elif self.pos <= self.minv:
-                    self.pos = self.minv
-                    self.direction = 1
-                
-                # Update UI
-                self.label.setText(f"V: {self.pos}")
-                self.slider.setValue(self.pos)
-                
-                # 🔥 THE KEY FIX: Actually move the servo!
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": self.pos
-                }))
-                
-                print(f"📡 Sweep step: {self.channel_key} → {self.pos}")
-
-            def stop(self):
-                """Stop the sweep"""
-                self.timer.stop()
-                
-                # Reset to center position
-                center_pos = (self.minv + self.maxv) // 2
-                self.pos = center_pos
-                self.label.setText(f"V: {center_pos}")
-                self.slider.setValue(center_pos)
-                
-                # Move servo to center
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": center_pos
-                }))
-                
-                # Update UI
-                self.btn.setText("▶")
-                self.btn.setChecked(False)
-                
-                print(f"🛑 Sweep stopped: {self.channel_key} returned to center ({center_pos})")
-
-        # Create sweep with reference to this screen instance
-        sweep = Sweep(self, key, pos_label, button, slider, min_val, max_val, speed)
-        self.active_sweep = sweep
-        button.setText("⏸")
-        print(f"▶️ Sweep started for {key}")
-
-    def stop_all_sweeps(self):
-        """Stop any active sweeps when switching Maestros"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
-            print("🛑 All sweeps stopped")
-    def __init__(self, websocket):
-        super().__init__()
-        self.websocket = websocket
-        self.setFixedWidth(1180)
-        self.setStyleSheet("background-color: #1e1e1e; color: white;")
-        self.servo_config = self.load_config()
-        self.active_sweep = None
-
-        # Maestro selector dropdown
-        self.maestro1_btn = QPushButton()
-        self.maestro2_btn = QPushButton()
-        self.maestro1_btn.setCheckable(True)
-        self.maestro2_btn.setCheckable(True)
-        
-        # Load icons if they exist
-        if os.path.exists("icons/M1.png"):
-            self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            self.maestro1_btn.setIconSize(QSize(112,118))
-        if os.path.exists("icons/M2.png"):
-            self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
-            self.maestro2_btn.setIconSize(QSize(112,118))
-
-        self.maestro_group = QButtonGroup()
-        self.maestro_group.setExclusive(True)
-        self.maestro_group.addButton(self.maestro1_btn, 0)
-        self.maestro_group.addButton(self.maestro2_btn, 1)
-        self.maestro_group.idClicked.connect(self.update_grid)
-        self.maestro_group.idClicked.connect(self.update_maestro_icons)
-
-        self.maestro1_btn.setChecked(True)
-        self.update_maestro_icons(0)
-
-        # Add refresh button
-        self.refresh_btn = QPushButton("Update")
-        self.refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: white;
-                border-radius: 12px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
-        self.refresh_btn.setMinimumSize(100, 40)
-        self.refresh_btn.clicked.connect(self.reload_servo_config)
-        self.refresh_btn.clicked.connect(self.update_grid)
-
-        # Scrollable grid area
-        self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setContentsMargins(10, 10, 10, 10)
-        self.grid_widget.setLayout(self.grid_layout)
-        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
-
-        # Main layout
-        grid_and_selector_layout = QHBoxLayout()
-        grid_and_selector_layout.addSpacing(80)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setWidget(self.grid_widget)
-        
-        # Create a vertical layout to center the maestro selector
-        selector_container = QVBoxLayout()
-        selector_container.addStretch()
-        selector_container.addWidget(self.maestro1_btn)
-        selector_container.addWidget(self.maestro2_btn)
-        selector_container.addSpacing(20)
-        selector_container.addWidget(self.refresh_btn)
-        selector_container.addStretch()
-
-        # Create a QWidget to hold the selector layout
-        selector_widget = QWidget()
-        selector_widget.setLayout(selector_container)
-        selector_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
-
-        # Add selector widget to the right of the grid
-        grid_and_selector_layout.addWidget(scroll_area, stretch=3)
-        grid_and_selector_layout.addWidget(selector_widget)
-
-        # Final layout
-        layout = QVBoxLayout()
-        layout.addLayout(grid_and_selector_layout)
-        self.setLayout(layout)
-        self.update_grid()
-
-    @error_boundary
-    def update_maestro_icons(self, checked_id):
-        # Set pressed icon for selected, normal for unselected
-        if self.maestro_group.checkedId() == 0:
-            if os.path.exists("icons/M1_pressed.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
-            if os.path.exists("icons/M2.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
+        # Check if we already have info for this Maestro
+        if self.maestro_connected.get(maestro_num, False):
+            channels = self.maestro_channel_counts.get(maestro_num, 0)
+            self.update_status(f"Switched to Maestro {maestro_num}: {channels} channels")
+            self.update_grid()
+            QTimer.singleShot(200, self.read_all_positions_now)
         else:
-            if os.path.exists("icons/M1.png"):
-                self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
-            if os.path.exists("icons/M2_pressed.png"):
-                self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
-
-    @error_boundary
-    def load_config(self):
-        return config_manager.get_config("configs/servo_config.json")
-
-    @error_boundary
-    def save_config(self):
-        with open("configs/servo_config.json", "w") as f:
-            json.dump(self.servo_config, f, indent=2)
-        config_manager.clear_cache()  # Clear cache after save
-
-    @error_boundary
-    def reload_servo_config(self):
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("configs/servo_config.json")
-        self.update_grid()
-        print("Servo config reloaded successfully.")
-
-    def update_config(self, key, field, value):
-        if key not in self.servo_config:
-            self.servo_config[key] = {}
-        self.servo_config[key][field] = value
-        self.save_config()
-
-    @error_boundary
-    def update_grid(self):
-        font = QFont("Arial", 16)
-        self.stop_all_sweeps()
-
+            # Request info for newly selected Maestro
+            self.update_status(f"Loading Maestro {maestro_num}...")
+            self.request_current_maestro_info()
+        
+        print(f"Switched from Maestro {old_maestro + 1} to Maestro {maestro_num}")
+    
+    def clear_grid(self):
+        """Clear the current grid and widget tracking"""
         # Clear existing widgets
         for i in reversed(range(self.grid_layout.count())):
             widget = self.grid_layout.itemAt(i).widget()
             if widget:
                 widget.setParent(None)
-
-        maestro_index = self.maestro_group.checkedId()
-
-        for i in range(18):
-            channel_key = f"m{maestro_index+1}_ch{i}"
+        
+        self.servo_widgets.clear()
+    
+    def update_grid(self):
+        """Build servo control grid for currently selected Maestro only"""
+        maestro_num = self.current_maestro + 1
+        channel_count = self.maestro_channel_counts.get(maestro_num, 0)
+        
+        if channel_count == 0:
+            self.update_status(f"Maestro {maestro_num} not available", error=True)
+            return
+        
+        print(f"Building grid for Maestro {maestro_num} with {channel_count} channels")
+        
+        # Stop any active updates while rebuilding
+        if self.auto_update_positions:
+            self.position_update_timer.stop()
+        
+        # Clear existing content
+        self.clear_grid()
+        
+        font = QFont("Arial", 14)
+        
+        # Create grid for detected channels
+        for i in range(channel_count):
+            channel_key = f"m{maestro_num}_ch{i}"
             config = self.servo_config.get(channel_key, {})
             row = i
-
-            label = QLabel(f"Channel {i}")
+            
+            # Channel number
+            label = QLabel(f"Ch{i}")
             label.setFont(font)
+            label.setFixedWidth(35)
             self.grid_layout.addWidget(label, row, 0)
-
+            
+            # Name edit
             name_edit = QLineEdit(config.get("name", ""))
-            name_edit.setFont(font)
-            name_edit.setMaxLength(32)
-            name_edit.setPlaceholderText("Friendly Name")
+            name_edit.setFont(QFont("Arial", 16))
+            name_edit.setMaxLength(25)
+            name_edit.setFixedWidth(180)
+            name_edit.setPlaceholderText("Servo Name")
             name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
             self.grid_layout.addWidget(name_edit, row, 1)
-
-            min_spin = QSpinBox()
-            min_spin.setFont(font)
-            min_spin.setRange(0, 2500)
-            min_spin.setValue(config.get("min", 992))
-            min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
             
-            min_label = QLabel("Min")
-            min_label.setFont(font)
-            self.grid_layout.addWidget(min_label, row, 3)
-            self.grid_layout.addWidget(min_spin, row, 4)
-
-            max_spin = QSpinBox()
-            max_spin.setFont(font)
-            max_spin.setRange(0, 2500)
-            max_spin.setValue(config.get("max", 2000))
-            max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
-            max_label = QLabel("Max")
-            max_label.setFont(font)
-            self.grid_layout.addWidget(max_label, row, 5)
-            self.grid_layout.addWidget(max_spin, row, 6)
-            
+            # Slider for position control
             slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setMinimum(min_spin.value())
-            slider.setMaximum(max_spin.value())
-            slider.setValue((min_spin.value() + max_spin.value()) // 2)
+            min_val = config.get("min", 992)
+            max_val = config.get("max", 2000)
+            slider.setMinimum(min_val)
+            slider.setMaximum(max_val)
+            slider.setValue((min_val + max_val) // 2)
             slider.setFixedWidth(150)
+            slider.setMinimumHeight(24)
             self.grid_layout.addWidget(slider, row, 2)
-
+            
+            # Min value controls
+            min_spin = QSpinBox()
+            min_spin.setFont(QFont("Arial", 16))
+            min_spin.setRange(0, 2500)
+            min_spin.setValue(min_val)
+            min_spin.setFixedWidth(60)
+            min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
+            min_spin.valueChanged.connect(lambda val, s=slider: s.setMinimum(val))
+            self.grid_layout.addWidget(min_spin, row, 3)
+            
+            # Max value controls
+            max_spin = QSpinBox()
+            max_spin.setFont(QFont("Arial", 16))
+            max_spin.setRange(0, 2500)
+            max_spin.setValue(max_val)
+            max_spin.setFixedWidth(60)
+            max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
+            max_spin.valueChanged.connect(lambda val, s=slider: s.setMaximum(val))
+            self.grid_layout.addWidget(max_spin, row, 4)
+            
+            # Speed control
             speed_spin = QSpinBox()
-            speed_spin.setFont(font)
+            speed_spin.setFont(QFont("Arial", 16))
             speed_spin.setRange(0, 100)
             speed_spin.setValue(config.get("speed", 0))
+            speed_spin.setFixedWidth(50)
             speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "speed", val))
-            speed_label = QLabel("S")
-            speed_label.setFont(font)
-            self.grid_layout.addWidget(speed_label, row, 7)
-            self.grid_layout.addWidget(speed_spin, row, 8)
-
+            self.grid_layout.addWidget(speed_spin, row, 5)
+            
+            # Acceleration control
             accel_spin = QSpinBox()
-            accel_spin.setFont(font)
+            accel_spin.setFont(QFont("Arial", 16))
             accel_spin.setRange(0, 100)
             accel_spin.setValue(config.get("accel", 0))
+            accel_spin.setFixedWidth(50)
             accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
-            accel_label = QLabel("A")
-            accel_label.setFont(font)
-            self.grid_layout.addWidget(accel_label, row, 9)
-            self.grid_layout.addWidget(accel_spin, row, 10)
-
+            self.grid_layout.addWidget(accel_spin, row, 6)
+            
+            # Position label
+            pos_label = QLabel("---")
+            pos_label.setFont(QFont("Arial", 16))
+            pos_label.setStyleSheet("color: #FFAA00;")
+            pos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pos_label.setFixedWidth(60)
+            self.grid_layout.addWidget(pos_label, row, 7)
+            
+            # Live update checkbox
+            live_checkbox = QCheckBox()
+            live_checkbox.setChecked(False)
+            live_checkbox.setToolTip("Enable live servo updates")
+            live_checkbox.setFixedSize(20, 20)
+            live_checkbox.setStyleSheet("""
+                QCheckBox::indicator {
+                    width: 16px;
+                    height: 16px;
+                }
+                QCheckBox::indicator:unchecked {
+                    background-color: #333;
+                    border: 1px solid #666;
+                    border-radius: 2px;
+                }
+                QCheckBox::indicator:checked {
+                    background-color: #44FF44;
+                    border: 1px solid #44FF44;
+                    border-radius: 2px;
+                }
+            """)
+            self.grid_layout.addWidget(live_checkbox, row, 8)
+            
+            # Play/sweep button
             play_btn = QPushButton("▶")
-            play_btn.setFont(font)
+            play_btn.setFont(QFont("Arial", 12))
             play_btn.setCheckable(True)
-            pos_label = QLabel("V: 0")
-            pos_label.setFont(font)
-            self.grid_layout.addWidget(pos_label, row, 11)
-
-            slider.valueChanged.connect(
-                lambda val, k=channel_key, p=pos_label: self.update_servo_position(k, p, val)
+            play_btn.setFixedSize(30, 30)
+            play_btn.clicked.connect(
+                lambda checked, k=channel_key, p=pos_label, b=play_btn,
+                min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin:
+                self.toggle_sweep_minmax(k, p, b, min_spin.value(), max_spin.value(), speed_spin.value())
             )
-
-            play_btn.clicked.connect(lambda checked, k=channel_key, p=pos_label, b=play_btn, s=slider, min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin: self.toggle_sweep(k, p, b, s, min_spin.value(), max_spin.value(), speed_spin.value()))
-            self.grid_layout.addWidget(play_btn, row, 12)
+            self.grid_layout.addWidget(play_btn, row, 9)
+            
+            # Connect slider to servo movement
+            slider.valueChanged.connect(
+                lambda val, k=channel_key, p=pos_label, cb=live_checkbox:
+                self.update_servo_position_conditionally(k, p, val, cb)
+            )
+            
+            # Track widgets for position updates
+            self.servo_widgets[channel_key] = (slider, pos_label, play_btn, live_checkbox, name_edit)
+        
+        # Update status
+        self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
+        
+        # Restart auto-updates if enabled
+        if self.auto_update_positions:
+            self.position_update_timer.start()
+    
+    def toggle_auto_update(self, enabled):
+        """Toggle automatic position updates for current Maestro only"""
+        self.auto_update_positions = enabled
+        
+        if enabled:
+            # Only start if we have a valid current Maestro
+            maestro_num = self.current_maestro + 1
+            if self.maestro_connected.get(maestro_num, False):
+                self.position_update_timer.start()
+                self.update_status("Auto-refresh positions: ON")
+                print("Auto position updates enabled")
+            else:
+                self.auto_update_checkbox.setChecked(False)
+                self.auto_update_positions = False
+                self.update_status("No valid Maestro for auto-refresh", warning=True)
+        else:
+            self.position_update_timer.stop()
+            self.update_status("Auto-refresh positions: OFF")
+            print("Auto position updates disabled")
+    
+    def update_all_positions(self):
+        """Update all servo positions for current Maestro only"""
+        if not self.auto_update_positions or self.reading_positions:
+            return
+        
+        maestro_num = self.current_maestro + 1
+        
+        # Only update if current Maestro is connected and we have servo widgets
+        if not self.maestro_connected.get(maestro_num, False) or not self.servo_widgets:
+            return
+        
+        message = json.dumps({
+            "type": "get_all_servo_positions",
+            "maestro": maestro_num
+        })
+        
+        if hasattr(self.websocket, 'send_safe'):
+            self.websocket.send_safe(message)
+        else:
+            try:
+                self.websocket.sendTextMessage(message)
+            except Exception as e:
+                print(f"Failed to send auto position request: {e}")
+                return
+        
+        print(f"Auto-updating positions for Maestro {maestro_num}")
+    
+    def read_all_positions_now(self):
+        """Manually read all servo positions for current Maestro"""
+        if self.reading_positions:
+            print("Already reading positions, skipping...")
+            return
+        
+        maestro_num = self.current_maestro + 1
+        
+        if not self.maestro_connected.get(maestro_num, False):
+            self.update_status(f"Maestro {maestro_num} not connected", error=True)
+            return
+        
+        self.reading_positions = True
+        self.position_read_timeout.start(3000)
+        
+        message = json.dumps({
+            "type": "get_all_servo_positions",
+            "maestro": maestro_num
+        })
+        
+        if hasattr(self.websocket, 'send_safe'):
+            self.websocket.send_safe(message)
+        else:
+            try:
+                self.websocket.sendTextMessage(message)
+            except Exception as e:
+                print(f"Failed to send position request: {e}")
+                self.reading_positions = False
+                self.position_read_timeout.stop()
+                return
+        
+        self.update_status(f"Reading positions from Maestro {maestro_num}...")
+        print(f"Requested all positions from Maestro {maestro_num}")
+    
+    def handle_position_read_timeout(self):
+        """Handle timeout when reading positions"""
+        self.reading_positions = False
+        maestro_num = self.current_maestro + 1
+        
+        print(f"Timeout reading positions from Maestro {maestro_num}")
+        self.update_status(f"Maestro {maestro_num} not responding - check connection", error=True)
+        
+        # Set all sliders to center position as fallback
+        for channel_key, widgets in self.servo_widgets.items():
+            if channel_key.startswith(f"m{maestro_num}_"):
+                slider = widgets[0]
+                pos_label = widgets[1]
+                
+                center = (slider.minimum() + slider.maximum()) // 2
+                slider.blockSignals(True)
+                slider.setValue(center)
+                slider.blockSignals(False)
+                
+                pos_label.setText(f"V: {center}")
+                pos_label.setStyleSheet("color: #FFAA00;")
+    
+    def update_servo_position_conditionally(self, channel_key, pos_label, value, live_checkbox):
+        """Update servo position only if live checkbox is checked"""
+        pos_label.setText(f"V: {value}")
+        
+        if live_checkbox.isChecked():
+            self.update_servo_position(channel_key, pos_label, value)
+            pos_label.setStyleSheet("color: #FF4444;")
+        else:
+            pos_label.setStyleSheet("color: #AAAAAA;")
     
     def update_servo_position(self, channel_key, pos_label, value):
-        """Update servo position with speed/acceleration settings applied"""
-        
-        # Get current channel configuration
+        """Send servo position command with configuration"""
         config = self.servo_config.get(channel_key, {})
         speed = config.get("speed", 0)
         accel = config.get("accel", 0)
         
-        # Apply speed and acceleration settings if they exist
-        if speed > 0 or accel > 0:
-            print(f"⚙️ Applying settings to {channel_key}: speed={speed}, accel={accel}")
-            
-            # Send speed setting first (if configured)
-            if speed > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_speed",
-                    "channel": channel_key, 
-                    "speed": speed
-                }))
-            
-            # Send acceleration setting (if configured)
-            if accel > 0:
-                self.websocket.send_safe(json.dumps({
-                    "type": "servo_acceleration", 
-                    "channel": channel_key,
-                    "acceleration": accel
-                }))
+        # Always apply speed setting (including 0 to disable speed limit)
+        speed_message = json.dumps({
+            "type": "servo_speed",
+            "channel": channel_key,
+            "speed": speed
+        })
+        self.websocket.send_safe(speed_message)
+        
+        # Always apply acceleration setting (including 0 to disable acceleration limit)  
+        accel_message = json.dumps({
+            "type": "servo_acceleration",
+            "channel": channel_key,
+            "acceleration": accel
+        })
+        self.websocket.send_safe(accel_message)
         
         # Send position command
         self.websocket.send_safe(json.dumps({
-            "type": "servo", 
-            "channel": channel_key, 
+            "type": "servo",
+            "channel": channel_key,
             "pos": value
         }))
         
-        # Update UI
-        pos_label.setText(f"V: {value}")
-        print(f"📡 Servo command: {channel_key} → {value}")
-
-    def stop_all_sweeps(self):
-        """Stop any active sweeps when switching Maestros"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
-            print("🛑 All sweeps stopped")
-
-    def toggle_sweep(self, key, pos_label, button, slider, min_val, max_val, speed):
-        """Toggle servo sweep with real servo movement"""
-        if self.active_sweep:
-            self.active_sweep.stop()
-            self.active_sweep = None
+        print(f"Servo command: {channel_key} → {value} (speed: {speed}, accel: {accel})")
+    
+    def toggle_sweep_minmax(self, channel_key, pos_label, button, min_val, max_val, speed):
+        """Toggle min/max sweep for a servo channel using configured values"""
+        if channel_key in self.active_sweeps:
+            # Stop existing sweep
+            self.active_sweeps[channel_key].stop()
+            del self.active_sweeps[channel_key]
             button.setText("▶")
             button.setChecked(False)
+            print(f"Stopped sweep for {channel_key}")
             return
-
-        class Sweep:
-            def __init__(self, parent_screen, channel_key, label, btn, slider, minv, maxv, speedv):
-                self.parent_screen = parent_screen  # Reference to ServoConfigScreen
-                self.channel_key = channel_key      # e.g., "m1_ch5"
-                self.label = label
-                self.btn = btn
-                self.slider = slider
-                self.minv = minv
-                self.maxv = maxv
-                self.speedv = speedv
-                
-                # Calculate step size and timing
-                self.step_size = max(1, (maxv - minv) // 50)  # ~50 steps across range
-                self.timer = QTimer()
-                self.timer.timeout.connect(self.step)
-                
-                # Position tracking
-                self.pos = minv
-                self.direction = 1
-                
-                # Timer interval based on speed (higher speed = faster updates)
-                # Speed 0-100 maps to 200ms-20ms intervals
-                interval = max(20, 200 - (speedv * 2))
-                self.timer.start(interval)
-                
-                print(f"🎭 Starting sweep on {channel_key}: {minv}-{maxv}, speed={speedv}, step={self.step_size}, interval={interval}ms")
-
-            def step(self):
-                """Execute one step of the sweep"""
-                # Update position
-                self.pos += self.direction * self.step_size
-                
-                # Check bounds and reverse direction
-                if self.pos >= self.maxv:
-                    self.pos = self.maxv
-                    self.direction = -1
-                elif self.pos <= self.minv:
-                    self.pos = self.minv
-                    self.direction = 1
-                
-                # Update UI
-                self.label.setText(f"V: {self.pos}")
-                self.slider.setValue(self.pos)
-                
-                # 🔥 THE KEY FIX: Actually move the servo!
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": self.pos
-                }))
-                
-                print(f"📡 Sweep step: {self.channel_key} → {self.pos}")
-
-            def stop(self):
-                """Stop the sweep"""
-                self.timer.stop()
-                
-                # Reset to center position
-                center_pos = (self.minv + self.maxv) // 2
-                self.pos = center_pos
-                self.label.setText(f"V: {center_pos}")
-                self.slider.setValue(center_pos)
-                
-                # Move servo to center
-                self.parent_screen.websocket.send_safe(json.dumps({
-                    "type": "servo", 
-                    "channel": self.channel_key, 
-                    "pos": center_pos
-                }))
-                
-                # Update UI
-                self.btn.setText("▶")
-                self.btn.setChecked(False)
-                
-                print(f"🛑 Sweep stopped: {self.channel_key} returned to center ({center_pos})")
-
-        # Create sweep with reference to this screen instance
-        sweep = Sweep(self, key, pos_label, button, slider, min_val, max_val, speed)
-        self.active_sweep = sweep
+        
+        # Get actual configured min/max values from servo config (not spin boxes)
+        config = self.servo_config.get(channel_key, {})
+        actual_min = config.get("min", 992)
+        actual_max = config.get("max", 2000) 
+        actual_speed = config.get("speed", speed)  # Use config speed if available
+        
+        print(f"Starting sweep for {channel_key}: min={actual_min}, max={actual_max}, speed={actual_speed}")
+        
+        # Create new sweep with actual configured values
+        sweep = MinMaxSweep(self, channel_key, pos_label, button, actual_min, actual_max, actual_speed)
+        self.active_sweeps[channel_key] = sweep
         button.setText("⏸")
-        print(f"▶️ Sweep started for {key}")
+        print(f"Started sweep for {channel_key}")
+    
+    def toggle_all_live_checkboxes(self):
+        """Toggle all live update checkboxes"""
+        any_checked = False
+        for widgets in self.servo_widgets.values():
+            if len(widgets) > 3 and widgets[3].isChecked():
+                any_checked = True
+                break
+        
+        new_state = not any_checked
+        for widgets in self.servo_widgets.values():
+            if len(widgets) > 3:
+                widgets[3].setChecked(new_state)
+        
+        status = "enabled" if new_state else "disabled"
+        self.update_status(f"All live updates {status}")
+        print(f"Toggled all live checkboxes to: {new_state}")
+    
+    def stop_all_sweeps(self):
+        """Stop any active sweeps"""
+        for channel_key, sweep in list(self.active_sweeps.items()):
+            sweep.stop()
+        self.active_sweeps.clear()
+        print("All sweeps stopped")
+    
+    @error_boundary
+    def update_maestro_icons(self, checked_id):
+        """Update button icons based on selection"""
+        if self.maestro_group.checkedId() == 0:
+            if os.path.exists("icons/M1_pressed.png"):
+                self.maestro1_btn.setIcon(QIcon("icons/M1_pressed.png"))
+            if os.path.exists("icons/M2.png"):
+                self.maestro2_btn.setIcon(QIcon("icons/M2.png"))
+        else:
+            if os.path.exists("icons/M1.png"):
+                self.maestro1_btn.setIcon(QIcon("icons/M1.png"))
+            if os.path.exists("icons/M2_pressed.png"):
+                self.maestro2_btn.setIcon(QIcon("icons/M2_pressed.png"))
+    
+    @error_boundary
+    def load_config(self):
+        """Load servo configuration from file"""
+        return config_manager.get_config("configs/servo_config.json")
+    
+    @error_boundary
+    def save_config(self):
+        """Save servo configuration to file"""
+        with open("configs/servo_config.json", "w") as f:
+            json.dump(self.servo_config, f, indent=2)
+        config_manager.clear_cache()
+    
+    @error_boundary
+    def reload_servo_config(self):
+        """Reload servo configuration and update grid"""
+        config_manager.clear_cache()
+        self.servo_config = config_manager.get_config("configs/servo_config.json")
+        if hasattr(self, 'grid_layout'):
+            self.update_grid()
+        print("Servo config reloaded successfully.")
+    
+    def update_config(self, key, field, value):
+        """Update configuration for a specific servo channel"""
+        if key not in self.servo_config:
+            self.servo_config[key] = {}
+        self.servo_config[key][field] = value
+        self.save_config()
+
+
+class MinMaxSweep:
+    """Fixed Min/Max sweep class with thread-safe callbacks and proper timing"""
+    
+    def __init__(self, parent_screen, channel_key, label, btn, minv, maxv, speedv):
+        self.parent_screen = parent_screen
+        self.channel_key = channel_key
+        self.label = label
+        self.btn = btn
+        self.min_val = minv
+        self.max_val = maxv
+        self.speed = speedv
+        
+        # State tracking
+        self.current_target = None
+        self.going_to_max = True
+        self.position_tolerance = 1
+        self.check_interval = 100
+        self.hold_delay = 1000  # 500ms delay at each end
+        
+        # Timers
+        self.check_timer = QTimer()
+        self.check_timer.timeout.connect(self.check_position)
+        
+        self.hold_timer = QTimer()
+        self.hold_timer.setSingleShot(True)
+        self.hold_timer.timeout.connect(self.continue_after_hold)
+        
+        self.start_sweep()
+        print(f"Starting min/max sweep on {channel_key}: {minv}↔{maxv}, speed={speedv}")
+    
+    def start_sweep(self):
+        """Start the sweep by configuring servo and moving to first target"""
+        # Apply speed setting if specified
+        if self.speed >= 0:
+            speed_message = json.dumps({
+                "type": "servo_speed",
+                "channel": self.channel_key,
+                "speed": self.speed
+            })
+            if hasattr(self.parent_screen.websocket, 'send_safe'):
+                self.parent_screen.websocket.send_safe(speed_message)
+        
+        # Apply acceleration from config
+        config = self.parent_screen.servo_config.get(self.channel_key, {})
+        accel = config.get("accel", 0)
+        if accel >= 0:  # Send even if 0
+            accel_message = json.dumps({
+                "type": "servo_acceleration",
+                "channel": self.channel_key,
+                "acceleration": accel
+            })
+            if hasattr(self.parent_screen.websocket, 'send_safe'):
+                self.parent_screen.websocket.send_safe(accel_message)
+        
+        # Move to first target (max)
+        self.move_to_next_target()
+        
+        # Start position checking
+        self.check_timer.start(self.check_interval)
+    
+    def move_to_next_target(self):
+        """Move to the next target position"""
+        if self.going_to_max:
+            self.current_target = self.max_val
+            print(f"{self.channel_key} → MAX ({self.max_val})")
+        else:
+            self.current_target = self.min_val
+            print(f"{self.channel_key} → MIN ({self.min_val})")
+        
+        # Send move command
+        move_message = json.dumps({
+            "type": "servo",
+            "channel": self.channel_key,
+            "pos": self.current_target
+        })
+        if hasattr(self.parent_screen.websocket, 'send_safe'):
+            self.parent_screen.websocket.send_safe(move_message)
+        
+        # Update UI
+        self.label.setText(f"→{self.current_target}")
+        self.label.setStyleSheet("color: #FFFF44;")
+    
+    def check_position(self):
+        """Request current position for sweep validation"""
+        message = json.dumps({
+            "type": "get_servo_position",
+            "channel": self.channel_key
+        })
+        
+        if hasattr(self.parent_screen.websocket, 'send_safe'):
+            self.parent_screen.websocket.send_safe(message)
+        else:
+            try:
+                self.parent_screen.websocket.sendTextMessage(message)
+            except Exception as e:
+                print(f"Failed to request position for sweep {self.channel_key}: {e}")
+    
+    def position_reached(self, actual_position):
+        """Called when position update received - thread-safe"""
+        if self.current_target is None:
+            return
+        
+        # Check if we've reached the target
+        if actual_position == self.current_target:
+            print(f"✅ {self.channel_key} reached {self.current_target} precisely")
+            
+            # Update UI to show reached
+            self.label.setText(f"@{actual_position}")
+            self.label.setStyleSheet("color: #44FF44;")
+            
+            # Stop position checking during hold delay
+            self.check_timer.stop()
+            
+            # Start 500ms hold timer before switching direction
+            self.hold_timer.start(self.hold_delay)
+            
+        else:
+            # Still moving, update display
+            self.label.setText(f"V:{actual_position}")
+            self.label.setStyleSheet("color: #FFAA44;")
+            print(f"{self.channel_key}: {actual_position}/{self.current_target}")
+    
+    def continue_after_hold(self):
+        """Continue sweep after 500ms hold delay"""
+        # Switch direction
+        self.going_to_max = not self.going_to_max
+        
+        # Move to next target
+        self.move_to_next_target()
+        
+        # Resume position checking
+        self.check_timer.start(self.check_interval)
+    
+    def stop(self):
+        """Stop the sweep and return to center"""
+        self.check_timer.stop()
+        self.hold_timer.stop()
+        
+        # Return to center position
+        center_pos = (self.min_val + self.max_val) // 2
+        stop_message = json.dumps({
+            "type": "servo",
+            "channel": self.channel_key,
+            "pos": center_pos
+        })
+        if hasattr(self.parent_screen.websocket, 'send_safe'):
+            self.parent_screen.websocket.send_safe(stop_message)
+        
+        # Update UI
+        self.label.setText(f"C:{center_pos}")
+        self.label.setStyleSheet("color: #AAAAAA;")
+        self.btn.setText("▶")
+        self.btn.setChecked(False)
+        
+        print(f"Min/Max sweep stopped: {self.channel_key} returned to center ({center_pos})")
 
 
 class PlaceholderScreen(QWidget):
@@ -2695,7 +2063,7 @@ class HomeScreen(QWidget):
         button_container = QWidget()
         button_container.setStyleSheet("background-color: #222; border-radius: 30px;")
         self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(15)
+        self.grid_layout.setSpacing(10) 
         button_container.setLayout(self.grid_layout)
 
         # Wrap emotion buttons in a frame
@@ -2824,6 +2192,11 @@ class CameraControlsWidget(QWidget):
             QLabel {
                 color: white;
                 font-size: 14px;
+            } 
+            QLabel#title {
+                font-size: 32px;
+                font-weight: bold;
+                text-align: center;
             }
             QSlider {
                 min-height: 20px;
@@ -2894,7 +2267,8 @@ class CameraControlsWidget(QWidget):
         
         # Title
         title = QLabel("📷 Camera Controls")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setObjectName("title")  
+        title.setFont(QFont("Arial", 32, QFont.Weight.Bold))
         main_layout.addWidget(title)
         
         # XCLK Frequency control
@@ -3100,7 +2474,7 @@ class CameraControlsWidget(QWidget):
                 self.status_label.setText(f"❌ Failed to update {setting_name}")
                 
         except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)[:30]}")
+            self.status_label.setText(f"❌ Error: {str(e)[:50]}")
             print(f"Failed to update {setting_name}: {e}")
     
     @error_boundary
@@ -3140,9 +2514,8 @@ class CameraControlsWidget(QWidget):
             else:
                 self.status_label.setText("❌ Failed to reset")
         except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)[:30]}")
+            self.status_label.setText(f"❌ Error: {str(e)[:50]}")
             print(f"Failed to reset to defaults: {e}")
-
 
 class CameraFeedScreen(QWidget):
     def __init__(self, websocket):
@@ -3153,15 +2526,29 @@ class CameraFeedScreen(QWidget):
         self.last_sample_time = 0
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self.tracking_enabled = False
+
+        # Stream control state
+        self.streaming_enabled = False
+        self.stream_can_change_settings = True
         
         # Use camera proxy URL instead of direct ESP32 URL
         config = config_manager.get_config("configs/steamdeck_config.json")
         camera_proxy_url = config.get("current", {}).get("camera_proxy_url", "")
+
+        # Extract base URL for API calls
+        self.camera_proxy_base_url = camera_proxy_url.replace("/stream", "") if camera_proxy_url else ""
+
         self.image_thread = ImageProcessingThread(camera_proxy_url)
         self.image_thread.frame_processed.connect(self.update_display)
         self.image_thread.stats_updated.connect(self.update_stats)
         
         self.init_ui()
+
+        # Start image processing thread but don't auto-start streaming
+        self.image_thread.start()
+        
+        # Check initial stream status
+        self.check_stream_status()
         
     def init_ui(self):
         """Optimized UI setup"""
@@ -3194,10 +2581,51 @@ class CameraFeedScreen(QWidget):
 
         self.setup_layout()
         
-        # Start image processing thread
-        self.image_thread.start()
     
-    def setup_control_buttons(self):
+    def setup_control_buttons(self):        
+        # Stream Control Button - Primary control
+        self.stream_button = QPushButton()
+        self.stream_button.setCheckable(True)
+        self.stream_button.setChecked(False)
+        
+        # Load icons for stream control
+        if os.path.exists("icons/StreamStart.png"):
+            self.stream_start_icon = QIcon("icons/StreamStart.png")
+        else:
+            self.stream_start_icon = None
+            
+        if os.path.exists("icons/StreamStop.png"):
+            self.stream_stop_icon = QIcon("icons/StreamStop.png")
+        else:
+            self.stream_stop_icon = None
+        
+        self.update_stream_button_appearance()
+        self.stream_button.toggled.connect(self.toggle_stream)
+        self.stream_button.setFixedSize(150, 50)
+        self.stream_button.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                border: 2px solid #555;
+                border-radius: 12px;
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                border-color: #777;
+            }
+            QPushButton:checked {
+                background-color: #4a9;
+                border-color: #5ba;
+                color: black;
+            }
+            QPushButton:disabled {
+                background-color: #222;
+                border-color: #333;
+                color: #666;
+            }
+        """)
         # 👀 Tracking Button - Enables wave detection
         self.tracking_button = QPushButton()
         self.tracking_button.setCheckable(True)
@@ -3214,17 +2642,9 @@ class CameraFeedScreen(QWidget):
                 background-color: transparent;
                 border: none;
             }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            QPushButton:checked {
-                background-color: rgba(0, 255, 0, 0.1);
-            }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.2);
-            }
         """)
         self.tracking_button.setToolTip("Toggle Wave Detection (Click to enable/disable)")
+        self.tracking_button.setEnabled(False) 
         
         print("🎮 Camera control buttons initialized")
 
@@ -3239,11 +2659,15 @@ class CameraFeedScreen(QWidget):
         button_layout.setSpacing(20)  # Add spacing between buttons
         button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # Align to top
         button_layout.addWidget(self.controls_widget)
-        tracking_wrapper = QHBoxLayout()
-        tracking_wrapper.addStretch()
-        tracking_wrapper.addWidget(self.tracking_button)
-        tracking_wrapper.addStretch()
-        button_layout.addLayout(tracking_wrapper)
+            
+        control_buttons_layout = QHBoxLayout()
+        control_buttons_layout.setSpacing(15)  # Space between the two buttons
+        control_buttons_layout.addStretch()  # Center the buttons
+        control_buttons_layout.addWidget(self.stream_button)  # Stream button on the left
+        control_buttons_layout.addWidget(self.tracking_button)  # Tracking button on the right
+        control_buttons_layout.addStretch()  # Center the buttons
+
+        button_layout.addLayout(control_buttons_layout)
         button_layout.addStretch()  # Push buttons to top
         
         main_layout = QHBoxLayout()
@@ -3253,6 +2677,143 @@ class CameraFeedScreen(QWidget):
         main_layout.addStretch()  # Add some right margin
         
         self.setLayout(main_layout)
+
+    def update_stream_button_appearance(self):
+        """Update the stream button appearance based on current state"""
+        if self.streaming_enabled:
+            # Stream is ON - show stop button
+            if self.stream_stop_icon:
+                self.stream_button.setIcon(self.stream_stop_icon)
+                self.stream_button.setIconSize(QSize(32, 32)) 
+            self.stream_button.setText("🛑 Stop Stream")
+            self.stream_button.setToolTip("Click to stop camera stream")
+            self.stream_button.setChecked(True)
+        else:
+            # Stream is OFF - show start button  
+            if self.stream_start_icon:
+                self.stream_button.setIcon(self.stream_start_icon)
+                self.stream_button.setIconSize(QSize(32, 32)) 
+            self.stream_button.setText("▶️ Start Stream")
+            self.stream_button.setToolTip("Click to start camera stream")
+            self.stream_button.setChecked(False)
+
+    @error_boundary
+    def toggle_stream(self, checked):
+        """Toggle camera stream on/off"""
+        self.streaming_enabled = checked
+        
+        if self.streaming_enabled:
+            # Start streaming
+            print("📹 Starting camera stream...")
+            self.stats_label.setText("Stream Stats: Starting stream...")
+            
+            # Send start command to proxy
+            try:
+                if self.camera_proxy_base_url:
+                    response = requests.post(
+                        f"{self.camera_proxy_base_url}/stream/start",
+                        timeout=3
+                    )
+                    if response.status_code == 200:
+                        print("✅ Stream start command sent to proxy")
+                        # Enable tracking button now that stream might be available
+                        self.tracking_button.setEnabled(True)
+                        self.stream_can_change_settings = False  # Lock settings while streaming
+                    else:
+                        print(f"⚠️ Stream start failed: HTTP {response.status_code}")
+                
+            except Exception as e:
+                print(f"❌ Failed to start stream: {e}")
+                self.stats_label.setText(f"Stream Error: {str(e)[:50]}")
+        else:
+            # Stop streaming
+            print("🛑 Stopping camera stream...")
+            self.stats_label.setText("Stream Stats: Stopping stream...")
+            
+            # Disable tracking when stream stops
+            if self.tracking_enabled:
+                self.tracking_button.setChecked(False)
+                self.toggle_tracking(False)
+            self.tracking_button.setEnabled(False)
+            
+            # Send stop command to proxy
+            try:
+                if self.camera_proxy_base_url:
+                    response = requests.post(
+                        f"{self.camera_proxy_base_url}/stream/stop", 
+                        timeout=3
+                    )
+                    if response.status_code == 200:
+                        print("✅ Stream stop command sent to proxy")
+                        self.stream_can_change_settings = True  # Unlock settings
+                    else:
+                        print(f"⚠️ Stream stop failed: HTTP {response.status_code}")
+                        
+            except Exception as e:
+                print(f"❌ Failed to stop stream: {e}")
+        
+        # Update button appearance
+        self.update_stream_button_appearance()
+
+    @error_boundary  
+    def check_stream_status(self):
+        """Check if camera proxy stream is currently active"""
+        try:
+            if not self.camera_proxy_base_url:
+                return
+                
+            response = requests.get(
+                f"{self.camera_proxy_base_url}/stream/status",
+                timeout=2
+            )
+            
+            if response.status_code == 200:
+                status = response.json()
+                is_streaming = status.get("streaming", False)
+                
+                # Update UI to match actual stream state
+                if is_streaming != self.streaming_enabled:
+                    self.streaming_enabled = is_streaming
+                    self.stream_button.setChecked(is_streaming)
+                    self.update_stream_button_appearance()
+                    
+                    # Update tracking button availability
+                    self.tracking_button.setEnabled(is_streaming)
+                    
+                    if is_streaming:
+                        print("📹 Stream detected as active")
+                        self.stats_label.setText("Stream Stats: Stream active")
+                    else:
+                        print("⏸️ Stream detected as inactive")
+                        self.stats_label.setText("Stream Stats: Stream inactive")
+                        
+            else:
+                print(f"❌ Stream status check failed: HTTP {response.status_code}")
+                
+        except Exception as e:
+            print(f"❌ Stream status check error: {e}")
+            # Assume stream is not active if we can't check
+            if self.streaming_enabled:
+                self.streaming_enabled = False
+                self.stream_button.setChecked(False)
+                self.tracking_button.setEnabled(False)
+                self.update_stream_button_appearance()
+
+    def handle_stream_control(self, enabled):
+        """Handle stream control changes from camera controls widget"""
+        # This would be called if the camera controls widget had stream controls
+        # For now, we handle streaming through the main stream button
+        print(f"🎛️ Stream control change requested: {enabled}")
+        
+        if enabled != self.streaming_enabled:
+            self.stream_button.setChecked(enabled)
+            self.toggle_stream(enabled)
+
+    def handle_settings_update(self, setting_name, value):
+        """Handle camera settings update requests"""
+        # This would be called if the camera controls widget wanted to update settings
+        # The CameraControlsWidget already handles its own settings updates
+        print(f"🎛️ Settings update requested: {setting_name} = {value}")
     
     @error_boundary
     def update_display(self, processed_data):
@@ -3412,11 +2973,18 @@ class CameraFeedScreen(QWidget):
         except Exception as e:
             print(f"Failed to reload camera settings: {e}")
     
+    @error_boundary
     def closeEvent(self, event):
         """Proper cleanup on close"""
-        self.image_thread.stop()
+        # Stop streaming first
+        if self.streaming_enabled:
+            self.toggle_stream(False)
+        
+        # Stop image processing thread
+        if hasattr(self, 'image_thread'):
+            self.image_thread.stop()
+        
         event.accept()
-
 
 class SceneScreen(QWidget):
     def __init__(self, websocket):
