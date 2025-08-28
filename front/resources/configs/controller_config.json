@@ -1,0 +1,58 @@
+{
+  "left_stick_x": {
+    "type": "track_control",
+    "group": "Drive System",
+    "tracks": {
+      "left": {"maestro": "Maestro 2 / Ch 0", "invert": false},
+      "right": {"maestro": "Maestro 2 / Ch 1", "invert": true}
+    }
+  },
+  "right_stick_y": {
+    "type": "control",
+    "movement": {
+      "name": "Head Tilt",
+      "maestro": "Maestro 1 / Ch 1",
+      "invert": false
+    }
+  },
+  "right_stick_x": {
+    "type": "control",
+    "movement": {
+      "name": "Head Pan",
+      "maestro": "Maestro 1 / Ch 0",
+      "invert": false
+    }
+  },
+  "button_a": {
+    "type": "scene",
+    "emotion": "Happy"
+  },
+  "button_b": {
+    "type": "scene",
+    "emotion": "Sad"
+  },
+  "button_x": {
+    "type": "scene",
+    "emotion": "Curious"
+  },
+  "button_y": {
+    "type": "scene",
+    "emotion": "Excited"
+  },
+  "shoulder_left": {
+    "type": "control",
+    "movement": {
+      "name": "Left Arm",
+      "maestro": "Maestro 1 / Ch 5",
+      "invert": false
+    }
+  },
+  "shoulder_right": {
+    "type": "control",
+    "movement": {
+      "name": "Right Arm",
+      "maestro": "Maestro 1 / Ch 6",
+      "invert": false
+    }
+  }
+}

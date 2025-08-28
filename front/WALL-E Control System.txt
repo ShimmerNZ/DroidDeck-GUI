@@ -1,0 +1,760 @@
+# WALL-E Control System Documentation
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [Installation & Setup](#installation--setup)
+4. [Configuration](#configuration)
+5. [Core Components](#core-components)
+6. [UI Components](#ui-components)
+7. [Background Processing](#background-processing)
+8. [API Reference](#api-reference)
+9. [Development Guide](#development-guide)
+10. [Troubleshooting](#troubleshooting)
+11. [Contributing](#contributing)
+
+## Overview
+
+The WALL-E Control System is a modular PyQt6 application for controlling robotic systems through multiple interfaces including camera feeds, servo control, health monitoring, and gesture recognition. The system uses a WebSocket-based communication protocol to interface with backend hardware controllers.
+
+### Key Features
+
+- **Real-time Camera Feed**: Live MJPEG stream processing with pose detection
+- **Servo Control**: Individual and batch servo configuration with real-time position feedback
+- **Health Monitoring**: System telemetry with graphical battery and current monitoring
+- **Gesture Recognition**: MediaPipe-based wave detection with configurable sensitivity
+- **Controller Mapping**: Steam Deck control mapping to robot movements
+- **Scene Management**: Emotion-based scene triggering and audio playback
+- **Modular Architecture**: Clean separation of concerns with dependency injection
+
+### System Requirements
+
+- Python 3.8+
+- PyQt6
+- OpenCV 4.0+ (optional, for camera features)
+- MediaPipe (optional, for pose detection)
+- Network connectivity to robot backend
+
+## Architecture
+
+The system follows a modular architecture with clear separation between infrastructure, UI, and processing components.
+
+### High-Level Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   UI Widgets    │◄──►│  Core Services   │◄──►│ Background      │
+│                 │    │                  │    │ Processing      │
+│ - Home Screen   │    │ - Config Manager │    │                 │
+│ - Camera Screen │    │ - Logger         │    │ - Image Proc    │
+│ - Health Screen │    │ - WebSocket Mgr  │    │ - Servo Control │
+│ - Servo Screen  │    │ - Utils          │    │                 │
+│ - Settings      │    │                  │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+        │                        │                        │
+        └────────────────────────┼────────────────────────┘
+                                 │
+                    ┌──────────────────┐
+                    │   Robot Backend  │
+                    │   (WebSocket)    │
+                    └──────────────────┘
+```
+
+### Design Principles
+
+1. **Single Responsibility**: Each module has one clear purpose
+2. **Dependency Injection**: Services are passed to components that need them
+3. **Error Isolation**: Failures in one component don't cascade
+4. **Thread Safety**: Background processing isolated from UI
+5. **Configuration Driven**: Behavior controlled through config files
+6. **Testability**: Components can be mocked and tested independently
+
+## Installation & Setup
+
+### Prerequisites
+
+```bash
+# Install Python dependencies
+pip install PyQt6 numpy requests pyqtgraph
+
+# Optional: For camera functionality
+pip install opencv-python mediapipe
+
+# Optional: For advanced plotting
+pip install matplotlib seaborn
+```
+
+### Directory Structure
+
+Create the following directory structure:
+
+```
+wall-e-frontend/
+├── main.py
+├── core/
+│   ├── __init__.py
+│   ├── application.py
+│   ├── config_manager.py
+│   ├── logger.py
+│   ├── websocket_manager.py
+│   └── utils.py
+├── widgets/
+│   ├── __init__.py
+│   ├── base_screen.py
+│   ├── home_screen.py
+│   ├── camera_screen.py
+│   ├── health_screen.py
+│   ├── servo_screen.py
+│   ├── controller_screen.py
+│   ├── settings_screen.py
+│   └── scene_screen.py
+├── threads/
+│   ├── __init__.py
+│   └── image_processor.py
+├── resources/
+│   ├── icons/
+│   ├── images/
+│   └── configs/
+└── tests/
+    └── __init__.py
+```
+
+### Quick Start
+
+1. Copy all source files to appropriate directories
+2. Create configuration files in `resources/configs/`
+3. Add icons and images to `resources/` subdirectories
+4. Run: `python main.py`
+
+## Configuration
+
+The system uses JSON configuration files for all settings. Configuration is managed centrally through the `ConfigManager` class.
+
+### Main Configuration File
+
+`resources/configs/steamdeck_config.json`:
+
+```json
+{
+  "current": {
+    "esp32_cam_url": "http://esp32.local:81/stream",
+    "camera_proxy_url": "http://10.1.1.230:8081/stream",
+    "control_websocket_url": "localhost:8766",
+    "debug_level": "INFO",
+    "module_debug": {
+      "camera": "DEBUG",
+      "servo": "INFO",
+      "websocket": "WARNING",
+      "telemetry": "INFO",
+      "ui": "INFO",
+      "config": "WARNING",
+      "main": "INFO",
+      "controller": "INFO",
+      "error": "ERROR"
+    },
+    "wave_detection": {
+      "sample_duration": 3,
+      "sample_rate": 5,
+      "confidence_threshold": 0.7,
+      "stand_down_time": 30
+    }
+  },
+  "defaults": {
+    // Same structure with default values
+  }
+}
+```
+
+### Additional Configuration Files
+
+- `servo_config.json`: Servo channel mappings and limits
+- `emotion_buttons.json`: Available emotion scenes
+- `controller_config.json`: Steam Deck control mappings
+- `motion_config.json`: Movement definitions and groups
+
+### Configuration Schema
+
+#### Debug Levels
+- `CRITICAL`: Only critical errors
+- `ERROR`: Error conditions
+- `WARNING`: Warning messages  
+- `INFO`: General information
+- `DEBUG`: Detailed debugging information
+
+#### Wave Detection Settings
+- `sample_duration`: Seconds to collect gesture samples
+- `sample_rate`: Samples per second to collect
+- `confidence_threshold`: Percentage threshold for detection (0.0-1.0)
+- `stand_down_time`: Cooldown seconds between detections
+
+## Core Components
+
+### Logger (`core/logger.py`)
+
+Centralized logging system with per-module configuration.
+
+#### Key Features
+- Module-specific log levels
+- Configurable output formatting
+- Runtime reconfiguration support
+- Thread-safe operation
+
+#### Usage Example
+```python
+from core.logger import get_logger
+
+logger = get_logger("my_module")
+logger.info("Operation completed successfully")
+logger.debug("Detailed debugging information")
+logger.error("An error occurred", exc_info=True)
+```
+
+#### Configuration
+Logging is configured through the main config file's `debug_level` and `module_debug` sections.
+
+### Configuration Manager (`core/config_manager.py`)
+
+Singleton configuration manager with file monitoring and caching.
+
+#### Key Features
+- Automatic file change detection
+- LRU caching for performance
+- Type-safe configuration access
+- Centralized configuration logic
+
+#### Usage Example
+```python
+from core.config_manager import config_manager
+
+# Get full config
+config = config_manager.get_config("configs/my_config.json")
+
+# Get specific settings
+wave_config = config_manager.get_wave_config()
+logging_config = config_manager.get_logging_config()
+
+# Save configuration
+success = config_manager.save_config("path/to/file.json", data)
+```
+
+#### API Methods
+- `get_config(path)`: Load configuration file with caching
+- `save_config(path, data)`: Save configuration with validation
+- `get_wave_config()`: Get wave detection settings with defaults
+- `get_logging_config()`: Get logging configuration
+- `clear_cache()`: Clear configuration cache
+
+### WebSocket Manager (`core/websocket_manager.py`)
+
+Handles WebSocket connections with automatic reconnection and error recovery.
+
+#### Key Features
+- Automatic reconnection with exponential backoff
+- Connection state management
+- Safe message sending with queuing
+- Structured command interface
+
+#### Usage Example
+```python
+from core.websocket_manager import WebSocketManager
+
+# Create connection
+ws = WebSocketManager("ws://localhost:8766")
+
+# Send structured command
+success = ws.send_command("servo", channel="m1_ch0", pos=1500)
+
+# Send raw message
+success = ws.send_safe('{"type": "status_request"}')
+
+# Check connection status
+if ws.is_connected():
+    print("Connected to backend")
+```
+
+#### Connection Management
+- Automatic reconnection on disconnect
+- Maximum retry attempts with backoff
+- Connection state monitoring
+- Error logging and recovery
+
+### Utilities (`core/utils.py`)
+
+Common utilities and decorators used throughout the system.
+
+#### Error Boundary Decorator
+```python
+@error_boundary
+def risky_function():
+    # Function that might throw exceptions
+    pass
+```
+
+#### Memory Manager
+```python
+from core.utils import MemoryManager
+
+# Clean up widget resources
+MemoryManager.cleanup_widgets(widget)
+
+# Periodic memory cleanup
+MemoryManager.periodic_cleanup()
+```
+
+#### MediaPipe Manager
+```python
+from core.utils import mediapipe_manager
+
+if mediapipe_manager.initialize():
+    # Use MediaPipe functionality
+    results = mediapipe_manager.pose.process(frame)
+```
+
+## UI Components
+
+### Base Screen (`widgets/base_screen.py`)
+
+Abstract base class for all application screens providing common functionality.
+
+#### BaseScreen Class
+All screens inherit from `BaseScreen` which provides:
+- WebSocket communication helper methods
+- Consistent styling and layout
+- Error handling integration
+- Cleanup lifecycle management
+
+#### Usage Example
+```python
+from widgets.base_screen import BaseScreen
+
+class MyScreen(BaseScreen):
+    def _setup_screen(self):
+        # Initialize screen-specific UI
+        pass
+    
+    def cleanup(self):
+        # Custom cleanup logic
+        pass
+```
+
+#### DynamicHeader Class
+System status header displayed at top of application:
+- Battery voltage with color coding
+- WiFi signal strength
+- Current screen name
+- Automatic updates from telemetry
+
+### Home Screen (`widgets/home_screen.py`)
+
+Main dashboard with emotion controls and mode selection.
+
+#### Features
+- Emotion button grid loaded from configuration
+- Mode controls (Idle/Demo modes)
+- WALL-E image display
+- Scrollable interface for many emotions
+
+#### Configuration
+Loads emotion buttons from `resources/configs/emotion_buttons.json`:
+```json
+[
+  {
+    "label": "Happy",
+    "emoji": "😊",
+    "category": "Happy"
+  }
+]
+```
+
+### Camera Screen (`widgets/camera_screen.py`)
+
+Live camera feed with pose tracking and camera controls.
+
+#### Components
+- **Live Video Display**: MJPEG stream rendering
+- **Camera Controls**: Resolution, quality, brightness adjustment
+- **Pose Tracking**: Wave detection with MediaPipe
+- **Stream Control**: Start/stop streaming functionality
+
+#### Camera Controls Widget
+Provides interface for ESP32 camera settings:
+- Resolution selection (QQVGA to UXGA)
+- Quality, brightness, contrast, saturation sliders
+- Mirror and flip controls
+- Reset to defaults functionality
+
+#### Wave Detection
+Configurable gesture recognition:
+- Sample collection over time windows
+- Confidence threshold filtering
+- Cooldown period between detections
+- Visual feedback for detection events
+
+### Health Screen (`widgets/health_screen.py`)
+
+System monitoring with telemetry graphs and status displays.
+
+#### Features
+- **Battery Monitoring**: Voltage graphing with alarm thresholds
+- **Current Monitoring**: Dual current sensor displays
+- **System Stats**: CPU, memory, temperature monitoring
+- **Component Status**: Maestro, audio system status
+- **Real-time Graphs**: Scrolling time series data
+
+#### Telemetry Processing
+- Rate-limited updates for performance
+- Thread-safe display updates
+- Automatic graph scaling and windowing
+- Voltage alarm notifications
+
+#### Graph Configuration
+- Battery voltage range: 0-20V optimized for 4S LiPo
+- Current range: 0-70A for motor controllers  
+- Time window: Configurable with automatic scaling
+- Data point limits for memory management
+
+### Servo Screen (`widgets/servo_screen.py`)
+
+Real-time servo configuration and control interface.
+
+#### Features
+- **Multi-Maestro Support**: Switch between Maestro 1 and 2
+- **Individual Control**: Per-channel position, speed, acceleration
+- **Live Updates**: Real-time position feedback
+- **Batch Operations**: Read all positions, toggle all live updates
+- **Sweep Testing**: Automated min/max position sweeps
+
+#### Servo Configuration
+Each servo channel supports:
+- Custom naming for identification
+- Min/max position limits (typically 992-2000)
+- Speed settings (0-100, 0=no limit)
+- Acceleration settings (0-100, 0=no limit)
+- Live update enabling for real-time control
+
+#### Position Management
+- Auto-refresh positions every 500ms (configurable)
+- Manual position reading on demand
+- Thread-safe position updates via Qt signals
+- Timeout handling for unresponsive Maestros
+
+### Settings Screen (`widgets/settings_screen.py`)
+
+Configuration interface for system settings.
+
+#### Configurable Settings
+- **Network**: ESP32 camera URL, proxy URL, WebSocket URL
+- **Logging**: Global and per-module debug levels
+- **Wave Detection**: All gesture recognition parameters
+- **System**: Various operational parameters
+
+#### Features
+- Real-time configuration updates
+- Reset to defaults functionality
+- Input validation and error handling
+- Configuration persistence
+
+### Scene Screen (`widgets/scene_screen.py`)
+
+Management interface for emotion scenes and audio mappings.
+
+#### Features
+- Import scenes from backend
+- Select scenes for home screen display
+- Categorize scenes for organization
+- Test scene playback
+- Save configuration to emotion buttons
+
+#### Scene Management
+- Grid display of available scenes
+- Category assignment for organization
+- Live testing of scene playback
+- Integration with home screen button layout
+
+## Background Processing
+
+### Image Processing Thread (`threads/image_processor.py`)
+
+Handles camera stream processing and pose detection in background thread.
+
+#### Features
+- **MJPEG Stream Processing**: Decodes camera stream frames
+- **Pose Detection**: MediaPipe integration for gesture recognition
+- **Performance Optimization**: Frame rate limiting and processing optimization
+- **Error Recovery**: Automatic reconnection on stream failures
+
+#### Thread Communication
+- Qt signals for thread-safe UI updates
+- Frame processing results emission
+- Statistics and status updates
+- Proper thread lifecycle management
+
+#### Stream Processing Pipeline
+1. Connect to MJPEG stream with retry logic
+2. Parse JPEG frames from byte stream
+3. Decode frames with OpenCV
+4. Process poses with MediaPipe (if enabled)
+5. Emit processed results to UI thread
+6. Handle errors and reconnection
+
+#### Performance Considerations
+- Target frame rate limiting (default 15 FPS)
+- Frame scaling for performance
+- Memory management for long-running operation
+- CPU usage optimization
+
+## API Reference
+
+### Core Services API
+
+#### ConfigManager
+```python
+class ConfigManager:
+    def get_config(self, config_path: str) -> Dict[str, Any]
+    def save_config(self, config_path: str, data: Dict[str, Any]) -> bool
+    def get_wave_config(self) -> Dict[str, Any]
+    def get_logging_config(self) -> Dict[str, Any]
+    def clear_cache(self) -> None
+```
+
+#### WebSocketManager
+```python
+class WebSocketManager(QWebSocket):
+    def __init__(self, url: str, parent=None)
+    def send_safe(self, message: str) -> bool
+    def send_command(self, command_type: str, **kwargs) -> bool
+    def is_connected(self) -> bool
+```
+
+#### Logger
+```python
+def get_logger(name: str) -> logging.Logger
+```
+
+### Widget Base Classes
+
+#### BaseScreen
+```python
+class BaseScreen(QWidget):
+    def __init__(self, websocket=None)
+    def _setup_screen(self) -> None  # Abstract method
+    def cleanup(self) -> None
+    def send_websocket_message(self, message_type: str, **kwargs) -> bool
+```
+
+### Background Processing
+
+#### ImageProcessingThread
+```python
+class ImageProcessingThread(QThread):
+    frame_processed = pyqtSignal(object)
+    stats_updated = pyqtSignal(str)
+    
+    def __init__(self, camera_proxy_url: str, stats_url: str = None)
+    def set_tracking_enabled(self, enabled: bool) -> None
+    def stop(self) -> None
+```
+
+### WebSocket Message Protocol
+
+#### Outgoing Messages
+```python
+# Servo control
+{"type": "servo", "channel": "m1_ch0", "pos": 1500}
+{"type": "servo_speed", "channel": "m1_ch0", "speed": 50}
+
+# Scene triggers
+{"type": "scene", "emotion": "happy"}
+
+# Mode control  
+{"type": "mode", "name": "idle", "state": true}
+
+# Status requests
+{"type": "get_maestro_info", "maestro": 1}
+{"type": "get_servo_position", "channel": "m1_ch0"}
+```
+
+#### Incoming Messages
+```python
+# Telemetry data
+{
+  "type": "telemetry",
+  "battery_voltage": 14.2,
+  "current": 5.3,
+  "cpu": 45,
+  "memory": 67
+}
+
+# Servo positions
+{"type": "servo_position", "channel": "m1_ch0", "position": 1500}
+
+# Maestro information
+{"type": "maestro_info", "maestro": 1, "channels": 12, "connected": true}
+```
+
+## Development Guide
+
+### Adding New Screens
+
+1. Create new file in `widgets/` directory
+2. Inherit from `BaseScreen` 
+3. Implement `_setup_screen()` method
+4. Add to `widgets/__init__.py` exports
+5. Register in `core/application.py`
+
+Example:
+```python
+from widgets.base_screen import BaseScreen
+
+class NewScreen(BaseScreen):
+    def _setup_screen(self):
+        # Setup UI components
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+    
+    def cleanup(self):
+        # Cleanup resources
+        pass
+```
+
+### Adding New Services
+
+1. Create service class in `core/` directory
+2. Follow singleton pattern if needed
+3. Add proper error handling
+4. Include comprehensive logging
+5. Add to dependency injection in application
+
+### Configuration Schema
+
+When adding new configuration options:
+
+1. Update `ConfigManager` with getter methods
+2. Add validation logic
+3. Update settings screen UI
+4. Document configuration structure
+5. Provide sensible defaults
+
+### Error Handling Best Practices
+
+1. Use `@error_boundary` decorator for UI methods
+2. Log errors with full context
+3. Provide user-friendly error messages
+4. Implement graceful degradation
+5. Test error conditions thoroughly
+
+### Testing Guidelines
+
+1. Mock external dependencies (WebSocket, file system)
+2. Test error conditions and edge cases
+3. Verify thread safety of concurrent operations
+4. Test configuration loading and validation
+5. Validate UI behavior under various conditions
+
+## Troubleshooting
+
+### Common Issues
+
+#### Camera Not Working
+- **Symptoms**: Black screen, "OpenCV not available" message
+- **Solutions**: 
+  - Install OpenCV: `pip install opencv-python`
+  - Check camera URLs in settings
+  - Verify network connectivity to camera proxy
+
+#### WebSocket Connection Failed
+- **Symptoms**: "WebSocket not connected" messages, no backend communication
+- **Solutions**:
+  - Verify backend is running
+  - Check WebSocket URL in settings
+  - Examine firewall/network configuration
+  - Review WebSocket logs for connection errors
+
+#### Servo Control Not Responding
+- **Symptoms**: Position sliders don't move servos, timeout errors
+- **Solutions**:
+  - Check Maestro USB connections
+  - Verify Maestro power supply
+  - Test with Maestro Control Center
+  - Check servo configuration limits
+
+#### High CPU Usage
+- **Symptoms**: Application becomes slow, high CPU in task manager
+- **Solutions**:
+  - Reduce camera frame rate in image processor
+  - Disable auto-position updates for servos
+  - Check for memory leaks in long-running operations
+  - Adjust logging levels to reduce I/O
+
+### Debug Logging
+
+Enable detailed logging for troubleshooting:
+
+```json
+{
+  "debug_level": "DEBUG",
+  "module_debug": {
+    "camera": "DEBUG",
+    "servo": "DEBUG", 
+    "websocket": "DEBUG"
+  }
+}
+```
+
+### Log Analysis
+
+Common log patterns to look for:
+
+- `WebSocket error`: Connection issues with backend
+- `Config error`: Configuration file problems
+- `Thread error`: Background processing issues
+- `UI error`: User interface exceptions
+
+### Performance Monitoring
+
+Monitor these metrics for performance issues:
+
+- Memory usage growth over time
+- CPU usage during camera processing
+- WebSocket message queuing
+- Configuration file access patterns
+
+## Contributing
+
+### Code Style
+
+- Follow PEP 8 Python style guidelines
+- Use type hints where beneficial
+- Document all public methods and classes
+- Include error handling for all external operations
+- Add logging for significant operations
+
+### Commit Guidelines
+
+- Use descriptive commit messages
+- Keep commits focused on single changes
+- Include tests for new functionality
+- Update documentation for API changes
+- Verify all tests pass before committing
+
+### Pull Request Process
+
+1. Create feature branch from main
+2. Implement changes with tests
+3. Update documentation
+4. Submit pull request with description
+5. Address review feedback
+6. Merge after approval
+
+### Architecture Decisions
+
+When making architectural changes:
+
+1. Consider impact on existing components
+2. Maintain backward compatibility where possible
+3. Document breaking changes clearly
+4. Provide migration guides for major changes
+5. Discuss significant changes with team
+
+This documentation provides comprehensive coverage of the WALL-E Control System's modular architecture, enabling both users and developers to effectively work with the system.

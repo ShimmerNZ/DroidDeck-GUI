@@ -1,0 +1,120 @@
+{
+  "m1_ch0": {
+    "name": "Head Pan",
+    "min": 992,
+    "max": 2000,
+    "speed": 0,
+    "accel": 0
+  },
+  "m1_ch1": {
+    "name": "Head Tilt",
+    "min": 1000,
+    "max": 1900,
+    "speed": 20,
+    "accel": 10
+  },
+  "m1_ch2": {
+    "name": "Eye Left",
+    "min": 1100,
+    "max": 1800,
+    "speed": 30,
+    "accel": 15
+  },
+  "m1_ch3": {
+    "name": "Eye Right",
+    "min": 1100,
+    "max": 1800,
+    "speed": 30,
+    "accel": 15
+  },
+  "m1_ch4": {
+    "name": "Neck Lift",
+    "min": 1200,
+    "max": 1700,
+    "speed": 15,
+    "accel": 8
+  },
+  "m1_ch5": {
+    "name": "Left Arm",
+    "min": 800,
+    "max": 2200,
+    "speed": 25,
+    "accel": 12
+  },
+  "m1_ch6": {
+    "name": "Right Arm",
+    "min": 800,
+    "max": 2200,
+    "speed": 25,
+    "accel": 12
+  },
+  "m1_ch7": {
+    "name": "Left Hand",
+    "min": 1000,
+    "max": 2000,
+    "speed": 40,
+    "accel": 20
+  },
+  "m1_ch8": {
+    "name": "Right Hand",
+    "min": 1000,
+    "max": 2000,
+    "speed": 40,
+    "accel": 20
+  },
+  "m1_ch9": {
+    "name": "Body Lean",
+    "min": 1300,
+    "max": 1600,
+    "speed": 10,
+    "accel": 5
+  },
+  "m2_ch0": {
+    "name": "Left Track",
+    "min": 1000,
+    "max": 2000,
+    "speed": 0,
+    "accel": 0
+  },
+  "m2_ch1": {
+    "name": "Right Track",
+    "min": 1000,
+    "max": 2000,
+    "speed": 0,
+    "accel": 0
+  },
+  "m2_ch2": {
+    "name": "Lift Mechanism",
+    "min": 1200,
+    "max": 1800,
+    "speed": 20,
+    "accel": 10
+  },
+  "m2_ch3": {
+    "name": "Compactor Door",
+    "min": 1000,
+    "max": 2000,
+    "speed": 30,
+    "accel": 15
+  },
+  "m2_ch4": {
+    "name": "Extra Servo 1",
+    "min": 992,
+    "max": 2000,
+    "speed": 0,
+    "accel": 0
+  },
+  "m2_ch5": {
+    "name": "Extra Servo 2",
+    "min": 992,
+    "max": 2000,
+    "speed": 0,
+    "accel": 0
+  },
+  "m1_ch14": {
+    "max": 2008
+  },
+  "m1_ch11": {
+    "accel": 7
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "steam_controls": [
+    "left_stick_x",
+    "left_stick_y", 
+    "right_stick_x",
+    "right_stick_y",
+    "button_a",
+    "button_b",
+    "button_x", 
+    "button_y",
+    "shoulder_left",
+    "shoulder_right",
+    "trigger_left",
+    "trigger_right",
+    "dpad_up",
+    "dpad_down", 
+    "dpad_left",
+    "dpad_right",
+    "button_back",
+    "button_start",
+    "button_guide",
+    "left_stick_click",
+    "right_stick_click"
+  ],
+  "nema_movements": [
+    "forward",
+    "backward",
+    "turn_left",
+    "turn_right", 
+    "rotate_left",
+    "rotate_right",
+    "stop",
+    "speed_slow",
+    "speed_medium",
+    "speed_fast"
+  ]
+}

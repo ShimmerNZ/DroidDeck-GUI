@@ -1,0 +1,132 @@
+{
+  "groups": {
+    "Head Control": {
+      "description": "Pan and tilt head movements",
+      "servos": ["Head Pan", "Head Tilt"]
+    },
+    "Eye Control": {
+      "description": "Independent eye movements", 
+      "servos": ["Eye Left", "Eye Right"]
+    },
+    "Arm Control": {
+      "description": "Left and right arm movements",
+      "servos": ["Left Arm", "Right Arm"]
+    },
+    "Hand Control": {
+      "description": "Left and right hand control",
+      "servos": ["Left Hand", "Right Hand"]
+    },
+    "Drive System": {
+      "description": "Track movement control",
+      "servos": ["Left Track", "Right Track"]
+    },
+    "Body Control": {
+      "description": "Body positioning and lift",
+      "servos": ["Body Lean", "Neck Lift"]
+    },
+    "Track Control Left": {
+      "description": "Left track movement",
+      "servos": ["Left Track"]
+    },
+    "Track Control Right": {
+      "description": "Right track movement", 
+      "servos": ["Right Track"]
+    }
+  },
+  "emotions": [
+    "Happy",
+    "Sad", 
+    "Curious",
+    "Angry",
+    "Surprised",
+    "Love",
+    "Sleepy",
+    "Alert",
+    "Confused",
+    "Excited",
+    "Beep",
+    "Hello"
+  ],
+  "movements": {
+    "Head Pan": {
+      "type": "servo",
+      "channel": "m1_ch0",
+      "description": "Pan head left and right"
+    },
+    "Head Tilt": {
+      "type": "servo", 
+      "channel": "m1_ch1",
+      "description": "Tilt head up and down"
+    },
+    "Eye Left": {
+      "type": "servo",
+      "channel": "m1_ch2", 
+      "description": "Move left eye"
+    },
+    "Eye Right": {
+      "type": "servo",
+      "channel": "m1_ch3",
+      "description": "Move right eye"  
+    },
+    "Neck Lift": {
+      "type": "servo",
+      "channel": "m1_ch4",
+      "description": "Extend/retract neck"
+    },
+    "Left Arm": {
+      "type": "servo",
+      "channel": "m1_ch5", 
+      "description": "Move left arm"
+    },
+    "Right Arm": {
+      "type": "servo",
+      "channel": "m1_ch6",
+      "description": "Move right arm"
+    },
+    "Left Hand": {
+      "type": "servo",
+      "channel": "m1_ch7",
+      "description": "Open/close left hand"
+    },
+    "Right Hand": {
+      "type": "servo", 
+      "channel": "m1_ch8",
+      "description": "Open/close right hand"
+    },
+    "Body Lean": {
+      "type": "servo",
+      "channel": "m1_ch9",
+      "description": "Lean body forward/back"
+    },
+    "Left Track": {
+      "type": "servo",
+      "channel": "m2_ch0",
+      "description": "Left track movement"
+    },
+    "Right Track": {
+      "type": "servo",
+      "channel": "m2_ch1", 
+      "description": "Right track movement"
+    },
+    "Lift Mechanism": {
+      "type": "servo",
+      "channel": "m2_ch2",
+      "description": "Lift/lower mechanism"
+    },
+    "Compactor Door": {
+      "type": "servo",
+      "channel": "m2_ch3",
+      "description": "Open/close compactor door"
+    },
+    "head_nod_toggle": {
+      "type": "toggle",
+      "servos": ["Head Tilt"],
+      "description": "Toggle head nodding"
+    },
+    "wave_toggle": {
+      "type": "toggle", 
+      "servos": ["Right Arm", "Right Hand"],
+      "description": "Toggle waving motion"
+    }
+  }
+}

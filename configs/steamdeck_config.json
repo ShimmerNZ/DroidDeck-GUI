@@ -20,5 +20,19 @@
       "confidence_threshold": 0.7,
       "stand_down_time": 30
     }
+  },
+  "current": {
+    "debug_level": "INFO",
+    "module_debug": {
+      "camera": "DEBUG",
+      "servo": "INFO", 
+      "websocket": "WARNING",
+      "telemetry": "INFO",
+      "ui": "INFO",
+      "config": "WARNING",
+      "main": "INFO",
+      "controller": "INFO",
+      "error": "ERROR"
+    }
   }
 }
