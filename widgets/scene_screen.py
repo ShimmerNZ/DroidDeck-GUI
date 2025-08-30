@@ -759,7 +759,7 @@ class SceneScreen(BaseScreen):
 
     def init_ui(self):
         self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(100, 25, 40, 15)  # Moved 90px right, reduced top margin
+        self.layout.setContentsMargins(100, 25, 40, 10)  # Moved 90px right, reduced top margin
         
         # Main container with enhanced styling
         self.main_frame = QFrame()
@@ -785,7 +785,7 @@ class SceneScreen(BaseScreen):
                 color: {YELLOW};
                 font-weight: bold;
                 border: none;
-                padding: 5px 10px;
+                padding: 5px 5px;
                 margin-bottom: 5px;
             }}
         """)
@@ -803,7 +803,7 @@ class SceneScreen(BaseScreen):
     def create_enhanced_scroll_area(self, parent_layout):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(520)  # Increased minimum height for more space
+        scroll.setMaximumHeight(520)  # Increased maximum height for more space
         scroll.setStyleSheet(f"""
             QScrollArea {{
                 border: 3px solid {GREY};
