@@ -1,0 +1,49 @@
+{
+  "current": {
+    "esp32_cam_url": "http://10.1.1.203:81/stream",
+    "camera_proxy_url": "http://10.1.1.230:8081/stream",
+    "control_websocket_url": "ws://10.1.1.230:8766",
+    "debug_level": "ERROR",
+    "module_debug": {
+      "camera": "ERROR",
+      "servo": "ERROR",
+      "network": "INFO",
+      "websocket": "WARNING",
+      "telemetry": "INFO",
+      "ui": "INFO",
+      "config": "WARNING",
+      "main": "INFO",
+      "controller": "INFO",
+      "error": "ERROR"
+    },
+    "wave_detection": {
+      "sample_duration": 3,
+      "sample_rate": 5,
+      "confidence_threshold": 0.7,
+      "stand_down_time": 30
+    }
+  },
+  "defaults": {
+    "esp32_cam_url": "http://192.168.1.100:81/stream",
+    "camera_proxy_url": "http://10.1.1.230:8081/stream",
+    "control_websocket_url": "localhost:8766",
+    "debug_level": "INFO",
+    "module_debug": {
+      "camera": "INFO",
+      "servo": "INFO",
+      "websocket": "WARNING",
+      "telemetry": "INFO",
+      "ui": "INFO",
+      "config": "WARNING",
+      "main": "INFO",
+      "controller": "INFO",
+      "error": "ERROR"
+    },
+    "wave_detection": {
+      "sample_duration": 3,
+      "sample_rate": 5,
+      "confidence_threshold": 0.7,
+      "stand_down_time": 30
+    }
+  }
+}
