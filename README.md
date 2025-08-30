@@ -31,7 +31,7 @@ The WALL-E Control System is a comprehensive PyQt6 application for controlling r
 
 ### System Requirements
 
-- Python 3.8+
+- Python 3.9
 - PyQt6
 - pyqtgraph (for health monitoring graphs)
 - OpenCV 4.0+ (optional, for camera features)
@@ -72,22 +72,7 @@ The system follows a modular architecture with clear separation between infrastr
 3. **Error Isolation**: Failures in one component don't cascade
 4. **Thread Safety**: Background processing isolated from UI with Qt signals
 5. **Configuration Driven**: Behavior controlled through JSON config files
-6. **Testability**: Components can be mocked and tested independently
 
-## Installation & Setup
-
-### Prerequisites
-
-```bash
-# Install Python dependencies
-pip install PyQt6 numpy requests pyqtgraph
-
-# Optional: For camera functionality
-pip install opencv-python mediapipe
-
-# Optional: For advanced plotting
-pip install matplotlib seaborn
-```
 
 ### Directory Structure
 
@@ -641,7 +626,6 @@ Monitor these metrics for performance issues:
 ### Low Priority
 
 - [ ] **User Experience Improvements**
-  - Add theme support with light/dark mode switching
   - Implement user profiles with different configurations
   - Create guided setup wizard for initial configuration
   - Add keyboard shortcuts for common operations
@@ -650,13 +634,6 @@ Monitor these metrics for performance issues:
   - Add integration tests for WebSocket communication
   - Create user manual with detailed operation procedures
   - Add performance benchmarking and optimization guides
-
-### Future Considerations
-
-- [ ] **AI and Machine Learning**
-  - Add gesture recognition beyond simple wave detection
-  - Implement voice recognition and natural language processing
-  - Create behavioral learning and adaptation systems
 
 
 ### Technical Debt and Refactoring
