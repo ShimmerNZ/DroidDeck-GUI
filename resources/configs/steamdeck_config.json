@@ -7,7 +7,7 @@
     "module_debug": {
       "camera": "ERROR",
       "servo": "ERROR",
-      "network": "INFO",
+      "network": "ERROR",
       "websocket": "WARNING",
       "telemetry": "INFO",
       "ui": "INFO",

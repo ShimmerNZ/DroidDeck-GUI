@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy
+    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout
 )
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt, QTimer
@@ -95,7 +95,7 @@ class HomeScreen(BaseScreen):
         """)
         right_layout.addWidget(header)
 
-        # Category bar (buttons show CATEGORIES, not scene names)
+        # Category bar (buttons show CATEGORIES, not scene names) - now with wrapping
         self._create_category_bar(right_layout)
 
         # Scene queue panel (stretches to take available vertical space)
@@ -109,15 +109,16 @@ class HomeScreen(BaseScreen):
 
     # --------------------------------------------------------- CATEGORY (TOP)
     def _create_category_bar(self, parent_layout: QVBoxLayout):
-        self.category_bar = QHBoxLayout()
+        # Create a widget to contain the grid layout
+        category_widget = QWidget()
+        self.category_grid = QGridLayout(category_widget)
+        self.category_grid.setSpacing(8)  # spacing between buttons
+        self.category_grid.setContentsMargins(0, 0, 0, 0)
+        
         self.category_buttons = []
 
         # Load scenes config (new flow uses scenes.json; fallback to emotion_buttons.json converted)
         cfg = config_manager.get_config("resources/configs/scenes_config.json")
-        if not cfg:
-            old = config_manager.get_config("resources/configs/emotion_buttons.json")
-            if isinstance(old, list):
-                cfg = self._convert_old_emotion_format(old)
         self.scenes = cfg if isinstance(cfg, list) else []
 
         # Build category list -> scenes map
@@ -133,19 +134,35 @@ class HomeScreen(BaseScreen):
         self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
 
         font = QFont("Arial", 18, QFont.Weight.Bold)
+        
+        # Calculate how many buttons can fit per row (approximate)
+        # Assuming button width ~140px + spacing, and available width ~800px
+        buttons_per_row = 5  # You can adjust this based on your needs
+        
         for idx, cat in enumerate(self.categories):
             btn = QPushButton(cat)
             btn.setCheckable(True)
             btn.setFont(font)
-            btn.setMinimumSize(140, 40)
-            btn.setStyleSheet(self._emotion_button_style(selected=(idx == 0)))  # reuse style
+            btn.setMinimumSize(130, 40)
+            btn.setStyleSheet(self._emotion_button_style(selected=(idx == 0)))
             btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
-            self.category_bar.addWidget(btn)
+            
+            # Calculate row and column for grid placement
+            row = idx // buttons_per_row
+            col = idx % buttons_per_row
+            
+            self.category_grid.addWidget(btn, row, col)
             self.category_buttons.append(btn)
+
+        # Make sure all columns have equal stretch
+        for col in range(buttons_per_row):
+            self.category_grid.setColumnStretch(col, 1)
 
         # default selection
         self.selected_category_idx = 0
-        parent_layout.addLayout(self.category_bar)
+        
+        # Add the category widget to the parent layout
+        parent_layout.addWidget(category_widget)
 
     def _convert_old_emotion_format(self, old_config):
         """Convert old emotion_buttons.json to new scene-like records."""
@@ -234,10 +251,10 @@ class HomeScreen(BaseScreen):
         """)
         self.scene_layout.addWidget(self.current_scene_label, 0)
 
-        # Queue list (expands)
+        # Queue list (expands to fill available space)
         self.queue_list = QListWidget()
         self.queue_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.queue_list.setMinimumHeight(180)
+        self.queue_list.setMinimumHeight(120)  # Reduced minimum height to allow more flexibility
         self.queue_list.setStyleSheet(f"""
             QListWidget {{
                 background: #222;
@@ -270,10 +287,10 @@ class HomeScreen(BaseScreen):
         self.progress_label.setStyleSheet(f"color: {YELLOW}; padding: 2px;")
         self.scene_layout.addWidget(self.progress_label, 0)
 
-        # Stretch priorities within the panel
-        self.scene_layout.setStretch(0, 0)  # header
-        self.scene_layout.setStretch(1, 1)  # list
-        self.scene_layout.setStretch(2, 0)  # progress
+        # Stretch priorities within the panel - queue list gets all available space
+        self.scene_layout.setStretch(0, 0)  # header - fixed size
+        self.scene_layout.setStretch(1, 1)  # list - expands to fill space
+        self.scene_layout.setStretch(2, 0)  # progress - fixed size
 
         # Initial population
         self._update_scene_queue_panel()
@@ -429,13 +446,42 @@ class HomeScreen(BaseScreen):
             btn.setParent(None)
         self.category_buttons = []
 
-        while getattr(self, "category_bar", None) and self.category_bar.count():
-            item = self.category_bar.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+        # Clear the grid layout
+        if hasattr(self, 'category_grid'):
+            while self.category_grid.count():
+                item = self.category_grid.takeAt(0)
+                if item.widget():
+                    item.widget().setParent(None)
 
-        # Recreate the category bar and refresh queue
-        self._create_category_bar(self.right_frame.layout())
+        # Find the category widget in the right frame layout and remove it
+        right_layout = self.right_frame.layout()
+        for i in range(right_layout.count()):
+            item = right_layout.itemAt(i)
+            if item and item.widget() and hasattr(item.widget(), 'layout') and isinstance(item.widget().layout(), QGridLayout):
+                widget = right_layout.takeAt(i).widget()
+                if widget:
+                    widget.setParent(None)
+                break
+
+        # Recreate the category bar at the correct position (after header)
+        header_inserted = False
+        for i in range(right_layout.count()):
+            item = right_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), QLabel):
+                if item.widget().text() == "SCENE SELECTION":
+                    # Insert category bar after header
+                    self._create_category_bar(right_layout)
+                    header_inserted = True
+                    break
+        
+        if not header_inserted:
+            # Fallback: add at position 1 (after header)
+            temp_layout = QVBoxLayout()
+            self._create_category_bar(temp_layout)
+            if temp_layout.count() > 0:
+                widget = temp_layout.itemAt(0).widget()
+                right_layout.insertWidget(1, widget)
+        
         self._update_scene_queue_panel()
         self.logger.info("Categories reloaded from updated scene configuration")
 
