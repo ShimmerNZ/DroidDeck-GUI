@@ -13,7 +13,7 @@
     "max": 1900,
     "speed": 20,
     "accel": 10,
-    "home": 1302
+    "home": 1000
   },
   "m1_ch2": {
     "name": "Eye Left",
@@ -21,7 +21,7 @@
     "max": 1800,
     "speed": 30,
     "accel": 15,
-    "home": 1601
+    "home": 1100
   },
   "m1_ch3": {
     "name": "Eye Right",
@@ -29,7 +29,7 @@
     "max": 1797,
     "speed": 30,
     "accel": 15,
-    "home": 1450
+    "home": 1099
   },
   "m1_ch4": {
     "name": "Neck Lift",
@@ -37,7 +37,7 @@
     "max": 1700,
     "speed": 15,
     "accel": 8,
-    "home": 1450
+    "home": 1204
   },
   "m1_ch5": {
     "name": "Left Arm",
@@ -45,7 +45,7 @@
     "max": 2200,
     "speed": 25,
     "accel": 12,
-    "home": 1500
+    "home": 800
   },
   "m1_ch6": {
     "name": "Right Arm",
@@ -53,7 +53,7 @@
     "max": 2200,
     "speed": 25,
     "accel": 12,
-    "home": 1496
+    "home": 800
   },
   "m1_ch7": {
     "name": "Left Hand",
@@ -61,22 +61,22 @@
     "max": 2000,
     "speed": 0,
     "accel": 0,
-    "home": 1000
+    "home": 1537
   },
   "m1_ch8": {
     "name": "Right Hand",
     "min": 1000,
     "max": 2000,
-    "speed": 40,
+    "speed": 100,
     "accel": 20,
-    "home": 2000
+    "home": 1000
   },
   "m1_ch9": {
     "name": "Body Lean",
     "min": 1300,
     "max": 1586,
     "speed": 10,
-    "accel": 5,
+    "accel": 6,
     "home": 1300
   },
   "m2_ch0": {
@@ -125,7 +125,7 @@
     "home": 992
   },
   "m1_ch11": {
-    "home": 1496
+    "home": 992
   },
   "m1_ch12": {
     "home": 992,

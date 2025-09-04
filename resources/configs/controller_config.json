@@ -1,58 +1,78 @@
 {
-  "left_stick_x": {
-    "type": "track_control",
-    "group": "Drive System",
-    "tracks": {
-      "left": {"maestro": "Maestro 2 / Ch 0", "invert": false},
-      "right": {"maestro": "Maestro 2 / Ch 1", "invert": true}
-    }
+  "left_stick": {
+    "behavior": "differential_tracks",
+    "input_type": "joystick",
+    "left_servo": "m2_ch0",
+    "right_servo": "m2_ch1",
+    "turn_sensitivity": 1.2
   },
-  "right_stick_y": {
-    "type": "control",
-    "movement": {
-      "name": "Head Tilt",
-      "maestro": "Maestro 1 / Ch 1",
-      "invert": false
-    }
+  "right_stick": {
+    "behavior": "joystick_pair",
+    "input_type": "joystick",
+    "x_servo": "m1_ch0",
+    "y_servo": "m1_ch1",
+    "invert_x": false,
+    "invert_y": false
   },
-  "right_stick_x": {
-    "type": "control",
-    "movement": {
-      "name": "Head Pan",
-      "maestro": "Maestro 1 / Ch 0",
-      "invert": false
-    }
+  "left_trigger": {
+    "behavior": "direct_servo",
+    "input_type": "trigger",
+    "target": "m1_ch5",
+    "invert": false
+  },
+  "right_trigger": {
+    "behavior": "direct_servo",
+    "input_type": "trigger",
+    "target": "m1_ch6",
+    "invert": false
   },
   "button_a": {
-    "type": "scene",
-    "emotion": "Happy"
+    "behavior": "scene_trigger",
+    "input_type": "button",
+    "scene": "Happy",
+    "trigger_timing": "on_press"
   },
   "button_b": {
-    "type": "scene",
-    "emotion": "Sad"
+    "behavior": "scene_trigger",
+    "input_type": "button",
+    "scene": "Sad",
+    "trigger_timing": "on_press"
   },
   "button_x": {
-    "type": "scene",
-    "emotion": "Curious"
+    "behavior": "toggle_scenes",
+    "input_type": "button",
+    "scene_1": "Curious",
+    "scene_2": "Alert",
+    "trigger_timing": "on_press"
   },
   "button_y": {
-    "type": "scene",
-    "emotion": "Excited"
+    "behavior": "scene_trigger",
+    "input_type": "button",
+    "scene": "Excited",
+    "trigger_timing": "on_press"
   },
   "shoulder_left": {
-    "type": "control",
-    "movement": {
-      "name": "Left Arm",
-      "maestro": "Maestro 1 / Ch 5",
-      "invert": false
-    }
+    "behavior": "direct_servo",
+    "input_type": "button",
+    "target": "m1_ch7",
+    "invert": false
   },
   "shoulder_right": {
-    "type": "control",
-    "movement": {
-      "name": "Right Arm",
-      "maestro": "Maestro 1 / Ch 6",
-      "invert": false
-    }
+    "behavior": "direct_servo",
+    "input_type": "button",
+    "target": "m1_ch8",
+    "invert": false
+  },
+  "dpad_up": {
+    "behavior": "scene_trigger",
+    "input_type": "dpad",
+    "scene": "Alert",
+    "trigger_timing": "on_press"
+  },
+  "dpad_down": {
+    "behavior": "scene_trigger",
+    "input_type": "dpad",
+    "scene": "Sleepy",
+    "trigger_timing": "on_press"
   }
 }

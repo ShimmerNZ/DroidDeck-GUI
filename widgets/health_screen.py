@@ -1,5 +1,5 @@
 """
-WALL-E Control System - Health Monitoring Screen (Updated with Styled Control Panel)
+WALL-E Control System - Health Monitoring Screen (Themed)
 Displays system telemetry, battery status, network quality, and performance graphs
 """
 
@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 import pyqtgraph as pg
 
 from widgets.base_screen import BaseScreen
+from core.theme_manager import theme_manager
 from threads.network_monitor import NetworkMonitorThread
 from core.utils import error_boundary
 
@@ -23,6 +24,18 @@ class HealthScreen(BaseScreen):
     # Qt signals for thread-safe updates
     voltage_update_signal = pyqtSignal(float)
     status_update_signal = pyqtSignal(dict)
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Register for theme change notifications
+        theme_manager.register_callback(self._on_theme_changed)
+
+    def __del__(self):
+        """Clean up theme manager callback on destruction"""
+        try:
+            theme_manager.unregister_callback(self._on_theme_changed)
+        except Exception:
+            pass
     
     def _setup_screen(self):
         """Initialize health monitoring interface"""
@@ -71,7 +84,7 @@ class HealthScreen(BaseScreen):
     def setup_telemetry_graph(self):
         """Setup battery voltage and current monitoring graph"""
         self.graph_widget = pg.PlotWidget()
-        self.graph_widget.setBackground('#1e1e1e')
+        self._update_graph_theme()
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
         self.graph_widget.setTitle("Battery Voltage & Current Draw", color='white', size='14pt')
         self.graph_widget.setLabel('left', 'Battery Voltage (V)', color='white')
@@ -93,9 +106,10 @@ class HealthScreen(BaseScreen):
         self.current_a1_data = deque(maxlen=self.max_data_points)
         self.time_data = deque(maxlen=self.max_data_points)
         
-        # Voltage curve (primary Y-axis)
+        # Voltage curve (primary Y-axis) - use theme green
+        green = theme_manager.get("green")
         self.voltage_curve = self.graph_widget.plot(
-            pen=pg.mkPen(color='#00FF00', width=4),
+            pen=pg.mkPen(color=green, width=4),
             name="Battery Voltage",
             antialias=True
         )
@@ -113,16 +127,19 @@ class HealthScreen(BaseScreen):
         # Link the views
         self.graph_widget.getPlotItem().getViewBox().sigResized.connect(self.update_views)
         
-        # Current plots
+        # Current plots with theme colors
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        
         self.current_a0_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color='#00FFFF', width=3), 
+            pen=pg.mkPen(color=primary, width=3), 
             name="Current Battery 1",
             antialias=True
         )
         self.current_view.addItem(self.current_a0_plot)
         
         self.current_a1_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color='#FF00FF', width=3), 
+            pen=pg.mkPen(color=primary_light, width=3), 
             name="Current Battery 2",
             antialias=True
         )
@@ -133,43 +150,32 @@ class HealthScreen(BaseScreen):
         legend.addItem(self.current_a0_plot, "Current A0")
         legend.addItem(self.current_a1_plot, "Current A1")
 
+    def _update_graph_theme(self):
+        """Update graph background and styling with theme colors"""
+        panel_bg = theme_manager.get("panel_bg")
+        self.graph_widget.setBackground(panel_bg)
+
     def setup_status_displays(self):
         """Setup system status display labels"""
         self.status_labels = {}
 
     def _create_control_panel(self):
-        """Create the styled health monitoring control panel"""
-        # Main panel with same styling as servo screen - wider for better readability
+        """Create the themed health monitoring control panel"""
+        # Main panel with theme styling
         control_panel = QWidget()
-        control_panel.setFixedWidth(340)  # Increased width
-        control_panel.setStyleSheet("""
-            QWidget {
-                background-color: #1e1e1e;
-                border: 2px solid #e1a014;
-                border-radius: 12px;
-                color: white;
-            }
-        """)
+        control_panel.setFixedWidth(340)
+        self._update_control_panel_style(control_panel)
         
         panel_layout = QVBoxLayout()
         panel_layout.setContentsMargins(15, 5, 15, 15)
         panel_layout.setSpacing(15)
         
-        # Header with same styling as settings
-        header = QLabel("SYSTEM HEALTH")
-        header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("""
-            QLabel {
-                border: none;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: #e1a014;
-                padding: 8px;
-                border-radius: 6px;
-                margin-bottom: 5px;
-            }
-        """)
-        panel_layout.addWidget(header)
+        # Header with theme styling
+        self.header = QLabel("SYSTEM HEALTH")
+        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_header_style()
+        panel_layout.addWidget(self.header)
         
         # Status display section
         status_section = self._create_status_display_section()
@@ -183,29 +189,51 @@ class HealthScreen(BaseScreen):
         
         panel_layout.addStretch()
         control_panel.setLayout(panel_layout)
+        self.control_panel = control_panel
         return control_panel
 
-    def _create_status_display_section(self):
-        """Create status display section within the control panel"""
-        status_frame = QWidget()
-        status_frame.setStyleSheet("""
-            QWidget {
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }
+    def _update_control_panel_style(self, panel):
+        """Apply themed styling to control panel"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        panel.setStyleSheet(f"""
+            QWidget {{
+                background-color: {panel_bg};
+                border: 2px solid {primary};
+                border-radius: 12px;
+                color: white;
+            }}
         """)
+
+    def _update_header_style(self):
+        """Apply themed styling to header"""
+        primary = theme_manager.get("primary_color")
+        self.header.setStyleSheet(f"""
+            QLabel {{
+                border: none;
+                background-color: rgba(0, 0, 0, 0.9);
+                color: {primary};
+                padding: 8px;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            }}
+        """)
+
+    def _create_status_display_section(self):
+        """Create themed status display section within the control panel"""
+        self.status_frame = QWidget()
+        self._update_status_frame_style()
         
         status_layout = QVBoxLayout()
         status_layout.setContentsMargins(12, 8, 12, 18)
         status_layout.setSpacing(4)
         
         # Status header
-        status_header = QLabel("STATUS")
-        status_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        status_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        status_header.setStyleSheet("color: #e1a014; border: none; margin-bottom: 3px;")
-        status_layout.addWidget(status_header)
+        self.status_header = QLabel("STATUS")
+        self.status_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.status_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.status_header)
+        status_layout.addWidget(self.status_header)
         
         # Create status labels within the panel
         label_configs = [
@@ -223,42 +251,77 @@ class HealthScreen(BaseScreen):
         for key, text in label_configs:
             label = QLabel(text)
             label.setFont(QFont("Arial", 14))
-            label.setStyleSheet("color: lime; padding: 1px;")
+            self._update_status_label_style(label)
             label.setWordWrap(True)
             self.status_labels[key] = label
             status_layout.addWidget(label)
         
-        status_frame.setLayout(status_layout)
-        return status_frame
+        self.status_frame.setLayout(status_layout)
+        return self.status_frame
 
-    def _create_system_controls_section(self):
-        """Create system control operations section"""
-        system_frame = QWidget()
-        system_frame.setStyleSheet("""
-            QWidget {
-                border: 1px solid #555;
+    def _update_status_frame_style(self):
+        """Apply themed styling to status frame"""
+        primary = theme_manager.get("primary_color")
+        self.status_frame.setStyleSheet(f"""
+            QWidget {{
+                border: 1px solid {primary};
                 border-radius: 8px;
                 background-color: rgba(0, 0, 0, 0.3);
-            }
+            }}
         """)
+
+    def _update_section_header_style(self, header):
+        """Apply themed styling to section header"""
+        primary = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary}; border: none; margin-bottom: 3px; background: transparent;")
+
+    def _update_status_label_style(self, label):
+        """Apply themed styling to status label"""
+        green = theme_manager.get("green")
+        label.setStyleSheet(f"color: {green}; padding: 1px; background: transparent;")
+
+    def _create_system_controls_section(self):
+        """Create themed system control operations section"""
+        self.system_frame = QWidget()
+        self._update_system_frame_style()
         
         system_layout = QVBoxLayout()
         system_layout.setContentsMargins(12, 8, 12, 12)
         system_layout.setSpacing(6)
         
         # System header
-        system_header = QLabel("NETWORK")
-        system_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        system_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        system_header.setStyleSheet("color: #e1a014; border: none; margin-bottom: 3px;")
-        system_layout.addWidget(system_header)
+        self.system_header = QLabel("NETWORK")
+        self.system_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.system_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.system_header)
+        system_layout.addWidget(self.system_header)
         
-        # Bandwidth test button with same styling as servo screen
+        # Bandwidth test button with themed styling
         self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
-        self.bandwidth_btn.setStyleSheet("""
-            QPushButton {
+        self._update_bandwidth_button_style()
+        system_layout.addWidget(self.bandwidth_btn)
+        
+        self.system_frame.setLayout(system_layout)
+        return self.system_frame
+
+    def _update_system_frame_style(self):
+        """Apply themed styling to system frame"""
+        primary = theme_manager.get("primary_color")
+        self.system_frame.setStyleSheet(f"""
+            QWidget {{
+                border: 1px solid {primary};
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.3);
+            }}
+        """)
+
+    def _update_bandwidth_button_style(self):
+        """Apply themed styling to bandwidth button"""
+        primary = theme_manager.get("primary_color")
+        self.bandwidth_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #4a4a4a, stop:1 #2a2a2a);
                 color: white;
@@ -267,39 +330,85 @@ class HealthScreen(BaseScreen):
                 padding: 6px;
                 text-align: center;
                 font-weight: bold;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #5a5a5a, stop:1 #3a3a3a);
-                border-color: #888;
-            }
-            QPushButton:pressed {
+                border-color: {primary};
+            }}
+            QPushButton:pressed {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #3a3a3a, stop:1 #1a1a1a);
-                border-color: #e1a014;
-            }
-            QPushButton:disabled {
+                border-color: {primary};
+            }}
+            QPushButton:disabled {{
                 background: #333;
                 color: #666;
                 border-color: #444;
-            }
+            }}
         """)
-        system_layout.addWidget(self.bandwidth_btn)
-        
-        system_frame.setLayout(system_layout)
-        return system_frame
 
+    def _on_theme_changed(self):
+        """Handle theme change by updating all styled components"""
+        try:
+            # Update control panel
+            if hasattr(self, 'control_panel'):
+                self._update_control_panel_style(self.control_panel)
+            if hasattr(self, 'header'):
+                self._update_header_style()
+            
+            # Update graph theme
+            self._update_graph_theme()
+            
+            # Update graph plot colors
+            if hasattr(self, 'voltage_curve'):
+                green = theme_manager.get("green")
+                self.voltage_curve.setPen(pg.mkPen(color=green, width=4))
+            
+            if hasattr(self, 'current_a0_plot') and hasattr(self, 'current_a1_plot'):
+                primary = theme_manager.get("primary_color")
+                primary_light = theme_manager.get("primary_light")
+                self.current_a0_plot.setPen(pg.mkPen(color=primary, width=3))
+                self.current_a1_plot.setPen(pg.mkPen(color=primary_light, width=3))
+            
+            # Update status section
+            if hasattr(self, 'status_frame'):
+                self._update_status_frame_style()
+            if hasattr(self, 'status_header'):
+                self._update_section_header_style(self.status_header)
+            
+            # Update system section
+            if hasattr(self, 'system_frame'):
+                self._update_system_frame_style()
+            if hasattr(self, 'system_header'):
+                self._update_section_header_style(self.system_header)
+            if hasattr(self, 'bandwidth_btn'):
+                self._update_bandwidth_button_style()
+            
+            # Update all status labels
+            for label in self.status_labels.values():
+                self._update_status_label_style(label)
+            
+            # Update graph frame
+            if hasattr(self, 'graph_frame'):
+                panel_bg = theme_manager.get("panel_bg")
+                self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
 
+            self.logger.info(f"Health screen updated for theme: {theme_manager.get_theme_name()}")
+        except Exception as e:
+            self.logger.warning(f"Failed to apply theme changes: {e}")
 
     def setup_layout(self):
         """Setup main layout with full-height graph and wider control panel"""
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(100, 15, 15, 10)
         
-        # Graph container - full height
-        graph_frame = QFrame()
-        graph_frame.setStyleSheet("border: 2px solid #444; border-radius: 10px; background-color: #1e1e1e;")
-        graph_layout = QVBoxLayout(graph_frame)
+        # Graph container - full height with theme styling
+        self.graph_frame = QFrame()
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
+        graph_layout = QVBoxLayout(self.graph_frame)
         graph_layout.setContentsMargins(15, 10, 15, 10)
         
         # Graph sizing - larger and full height
@@ -312,7 +421,7 @@ class HealthScreen(BaseScreen):
         control_panel = self._create_control_panel()
         
         # Add to main layout
-        main_layout.addWidget(graph_frame)
+        main_layout.addWidget(self.graph_frame)
         main_layout.addWidget(control_panel)
         
         self.setLayout(main_layout)
@@ -325,22 +434,27 @@ class HealthScreen(BaseScreen):
 
     @error_boundary
     def update_network_status(self, wifi_percent: int, status_text: str, ping_ms: float):
-        """Update network status display"""
+        """Update network status display with theme colors"""
         if ping_ms > 0:
             ping_text = f"Ping: {ping_ms:.1f}ms"
             
-            # Color coding based on ping quality
+            # Color coding based on ping quality using theme colors
+            green = theme_manager.get("green")
+            primary = theme_manager.get("primary_color")
+            red = theme_manager.get("red")
+            
             if ping_ms < 20:
-                ping_style = "color: #44FF44; padding: 2px;"  # Green
+                ping_style = f"color: {green}; padding: 2px; background: transparent;"
             elif ping_ms < 50:
-                ping_style = "color: #FFAA00; padding: 2px;"  # Yellow
+                ping_style = f"color: {primary}; padding: 2px; background: transparent;"
             elif ping_ms < 100:
-                ping_style = "color: #FF8800; padding: 2px;"  # Orange
+                ping_style = f"color: {primary}; padding: 2px; background: transparent;"
             else:
-                ping_style = "color: #FF4444; padding: 2px;"  # Red
+                ping_style = f"color: {red}; padding: 2px; background: transparent;"
         else:
             ping_text = "Ping: timeout"
-            ping_style = "color: #FF4444; padding: 2px; font-weight: bold;"  # Red for timeout
+            red = theme_manager.get("red")
+            ping_style = f"color: {red}; padding: 2px; font-weight: bold; background: transparent;"
         
         self.status_labels["ping"].setText(ping_text)
         self.status_labels["ping"].setStyleSheet(ping_style)
@@ -351,33 +465,6 @@ class HealthScreen(BaseScreen):
         self.bandwidth_btn.setEnabled(False)
         self.bandwidth_btn.setText("TESTING...")
         self.network_monitor.request_bandwidth_test()
-
-    @error_boundary
-    def run_ping_test(self):
-        """Run a quick ping test"""
-        # This method can be removed since we removed the ping button
-        pass
-        
-        # The actual ping results will come through the network monitor
-
-    @error_boundary
-    def reset_graph_time(self):
-        """Reset the graph time scale to start from 0"""
-        # This method can be removed since we removed the telemetry section
-        pass
-
-    @error_boundary
-    def clear_graph_data(self):
-        """Clear all graph data"""
-        # This method can be removed since we removed the telemetry section
-        pass
-
-    @error_boundary
-    def export_telemetry_data(self):
-        """Export telemetry data to CSV file"""
-        # This method can be removed since we removed the telemetry section
-        pass
-
 
     @error_boundary
     def show_bandwidth_results(self, download_mbps: float, upload_mbps: float, status_text: str):
@@ -405,20 +492,28 @@ class HealthScreen(BaseScreen):
             self.logger.warning(f"Bandwidth test failed: {status_text}")
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
-        """Get voltage status with color coding"""
+        """Get voltage status with theme color coding"""
+        red = theme_manager.get("red")
+        primary = theme_manager.get("primary_color")
+        green = theme_manager.get("green")
+        
         if voltage < 13.2:
-            return f"Battery: {voltage:.2f}V CRITICAL", "color: #FF4444; font-weight: bold;"
+            return f"Battery: {voltage:.2f}V CRITICAL", f"color: {red}; font-weight: bold; background: transparent;"
         elif voltage < 14.0:
-            return f"Battery: {voltage:.2f}V LOW", "color: #FFAA00; font-weight: bold;"
+            return f"Battery: {voltage:.2f}V LOW", f"color: {primary}; font-weight: bold; background: transparent;"
         elif voltage > 14.0:
-            return f"Battery: {voltage:.2f}V GOOD", "color: #44FF44;"
+            return f"Battery: {voltage:.2f}V GOOD", f"color: {green}; background: transparent;"
         else:
-            return f"Battery: {voltage:.2f}V OK", "color: #AAAAFF;"
+            return f"Battery: {voltage:.2f}V OK", f"color: {green}; background: transparent;"
 
     def get_maestro_status_text(self, maestro_data: dict, maestro_name: str) -> tuple:
-        """Format detailed Maestro status information"""
+        """Format detailed Maestro status information with theme colors"""
+        red = theme_manager.get("red")
+        primary = theme_manager.get("primary_color")
+        green = theme_manager.get("green")
+        
         if not maestro_data or not maestro_data.get('connected', False):
-            return f"{maestro_name}: Disconnected", "color: #FF4444;"
+            return f"{maestro_name}: Disconnected", f"color: {red}; background: transparent;"
         
         # Extract detailed status
         channels = maestro_data.get('channel_count', 0)
@@ -433,11 +528,11 @@ class HealthScreen(BaseScreen):
             error_list = [k.replace('_error', '') for k, v in error_details.items() if v]
             error_text = ', '.join(error_list[:2])
             status = f"{maestro_name}: {channels}ch, Errors: {error_text}"
-            color = "color: #FFAA00; font-weight: bold;"
+            color = f"color: {primary}; font-weight: bold; background: transparent;"
         else:
             move_text = "Moving" if moving else "Idle"
             status = f"{maestro_name}: {channels}ch, {script_status.title()}, {move_text}"
-            color = "color: #44FF44;"
+            color = f"color: {green}; background: transparent;"
         
         return status, color
 
@@ -498,7 +593,10 @@ class HealthScreen(BaseScreen):
         self.check_voltage_alarms(voltage)
 
     def _update_status_displays(self, data: dict):
-        """Thread-safe status display updates"""
+        """Thread-safe status display updates with theme colors"""
+        green = theme_manager.get("green")
+        red = theme_manager.get("red")
+        
         updates = {}
         
         # Basic system stats
@@ -528,18 +626,18 @@ class HealthScreen(BaseScreen):
         if m1_connected:
             channels = m1.get('channel_count', 0)
             updates["maestro1"] = f"M1: {channels}ch Connected"
-            m1_style = "color: #44FF44; padding: 1px;"
+            m1_style = f"color: {green}; padding: 1px; background: transparent;"
         else:
             updates["maestro1"] = "M1: Disconnected"
-            m1_style = "color: #FF4444; padding: 1px;"
+            m1_style = f"color: {red}; padding: 1px; background: transparent;"
             
         if m2_connected:
             channels = m2.get('channel_count', 0)
             updates["maestro2"] = f"M2: {channels}ch Connected"
-            m2_style = "color: #44FF44; padding: 1px;"
+            m2_style = f"color: {green}; padding: 1px; background: transparent;"
         else:
             updates["maestro2"] = "M2: Disconnected"
-            m2_style = "color: #FF4444; padding: 1px;"
+            m2_style = f"color: {red}; padding: 1px; background: transparent;"
         
         # Update all text labels
         for key, text in updates.items():

@@ -10,17 +10,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QFont, QPainter, QPalette
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
+from core.theme_manager import theme_manager  # Import theme manager
 from core.utils import error_boundary
-
-YELLOW = "#e1a014"
-YELLOW_LIGHT = "#f4c430"
-GREY = "#888"
-GREY_LIGHT = "#aaa"
-GREEN = "#44bb44"
-RED = "#cc4444"
-DARK_BG = "#1a1a1a"
-CARD_BG = "#252525"
-EXPANDED_BG = "#2a2a2a"
 
 # Category definitions with emojis
 CATEGORIES = {
@@ -56,26 +47,34 @@ class TouchFriendlyMultiSelect(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         
         self.display_label = QLabel(self.get_display_text())
+        self.update_style()
+        self.display_label.setMinimumHeight(45)
+        self.display_label.mousePressEvent = self.open_selector
+        
+        layout.addWidget(self.display_label)
+    
+    def update_style(self):
+        """Update styling based on current theme"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        card_bg = theme_manager.get("card_bg")
+        
         self.display_label.setStyleSheet(f"""
             QLabel {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
+                background-color: {card_bg};
+                border: 2px solid {primary};
                 border-radius: 6px;
-                color: {YELLOW};
+                color: {primary};
                 padding: 10px 15px;
                 font-size: 14px;
                 font-weight: 500;
             }}
             QLabel:hover {{
                 background-color: #2d2d2d;
-                border-color: {YELLOW_LIGHT};
-                color: {YELLOW_LIGHT};
+                border-color: {primary_light};
+                color: {primary_light};
             }}
         """)
-        self.display_label.setMinimumHeight(45)
-        self.display_label.mousePressEvent = self.open_selector
-        
-        layout.addWidget(self.display_label)
         
     def get_display_text(self):
         if not self.selected_categories:
@@ -112,10 +111,12 @@ class CategorySelectorDialog(QDialog):
         self.setWindowTitle("Select Categories")
         self.setModal(True)
         self.setFixedSize(350, 450)
+        
+        primary = theme_manager.get("primary_color")
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #222;
-                border: 3px solid {YELLOW};
+                border: 3px solid {primary};
                 border-radius: 12px;
             }}
         """)
@@ -126,16 +127,17 @@ class CategorySelectorDialog(QDialog):
         # Header
         header = QLabel("Select Categories:")
         header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        header.setStyleSheet(f"color: {YELLOW}; padding: 15px;")
+        header.setStyleSheet(f"color: {primary}; padding: 15px;")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
         
         # Scrollable area for categories
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        grey = theme_manager.get("grey")
         scroll.setStyleSheet(f"""
             QScrollArea {{
-                border: 2px solid {GREY};
+                border: 2px solid {grey};
                 border-radius: 8px;
                 background-color: #333;
             }}
@@ -152,7 +154,7 @@ class CategorySelectorDialog(QDialog):
             checkbox.setChecked(category in self.selected_categories)
             checkbox.setStyleSheet(f"""
                 QCheckBox {{
-                    color: {YELLOW};
+                    color: {primary};
                     font-size: 16px;
                     padding: 12px;
                     min-height: 40px;
@@ -163,13 +165,13 @@ class CategorySelectorDialog(QDialog):
                     height: 24px;
                 }}
                 QCheckBox::indicator:checked {{
-                    background-color: {YELLOW};
-                    border: 2px solid {YELLOW};
+                    background-color: {primary};
+                    border: 2px solid {primary};
                     border-radius: 4px;
                 }}
                 QCheckBox::indicator:unchecked {{
                     background-color: #555;
-                    border: 2px solid {GREY};
+                    border: 2px solid {grey};
                     border-radius: 4px;
                 }}
                 QCheckBox:hover {{
@@ -186,12 +188,14 @@ class CategorySelectorDialog(QDialog):
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        card_bg = theme_manager.get("card_bg")
+        primary_light = theme_manager.get("primary_light")
         button_box.setStyleSheet(f"""
             QDialogButtonBox QPushButton {{
-                background-color: {CARD_BG};
-                border: 2px solid {GREY};
+                background-color: {card_bg};
+                border: 2px solid {grey};
                 border-radius: 6px;
-                color: {YELLOW};
+                color: {primary};
                 font-weight: bold;
                 padding: 12px 24px;
                 font-size: 16px;
@@ -199,8 +203,8 @@ class CategorySelectorDialog(QDialog):
             }}
             QDialogButtonBox QPushButton:hover {{
                 background-color: #333;
-                border: 2px solid {YELLOW};
-                color: {YELLOW_LIGHT};
+                border: 2px solid {primary};
+                color: {primary_light};
             }}
         """)
         button_box.accepted.connect(self.accept)
@@ -213,7 +217,7 @@ class CategorySelectorDialog(QDialog):
             if checkbox.isChecked():
                 selected.append(category)
         return selected
-
+    
 class EnhancedSceneRow(QWidget):
     """Enhanced expandable scene row with better styling and layout"""
     
@@ -222,11 +226,14 @@ class EnhancedSceneRow(QWidget):
         self.scene_data = scene_data
         self.audio_files = audio_files
         self.row_index = row_index
-        self.parent_screen = parent_screen  # FIXED: Direct reference to parent
+        self.parent_screen = parent_screen
         self.is_expanded = False
         self.details_widget = None
         self.animation_group = None
         self.setup_ui()
+        
+        # Register for theme changes
+        theme_manager.register_callback(self.update_theme)
     
     def setup_ui(self):
         self.main_layout = QVBoxLayout(self)
@@ -242,23 +249,52 @@ class EnhancedSceneRow(QWidget):
         # Initially hide details
         self.details_widget.hide()
     
+    def update_theme(self):
+        """Update styling when theme changes"""
+        self.update_main_row_style()
+        self.update_details_style()
+        if hasattr(self, 'category_selector'):
+            self.category_selector.update_style()
+    
+    def update_main_row_style(self):
+        """Update main row styling"""
+        card_bg = theme_manager.get("card_bg")
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        grey = theme_manager.get("grey")
+        
+        if self.is_expanded:
+            self.main_row.setStyleSheet(f"""
+                QWidget {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 {card_bg}, stop:1 #1f1f1f);
+                    border: 2px solid {primary};
+                    border-bottom: 1px solid {grey};
+                    border-radius: 8px 8px 0px 0px;
+                    margin: 2px;
+                    margin-bottom: 0px;
+                }}
+            """)
+        else:
+            self.main_row.setStyleSheet(f"""
+                QWidget {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 {card_bg}, stop:1 #1f1f1f);
+                    border: 2px solid {grey};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+                QWidget:hover {{
+                    border: 2px solid {primary};
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #2a2a2a, stop:1 #232323);
+                }}
+            """)
+    
     def create_main_row(self):
         self.main_row = QWidget()
         self.main_row.setFixedHeight(70)
-        self.main_row.setStyleSheet(f"""
-            QWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {CARD_BG}, stop:1 #1f1f1f);
-                border: 2px solid {GREY};
-                border-radius: 8px;
-                margin: 2px;
-            }}
-            QWidget:hover {{
-                border: 2px solid {YELLOW};
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2a2a2a, stop:1 #232323);
-            }}
-        """)
+        self.update_main_row_style()
         
         # Make the main row clickable
         self.main_row.mousePressEvent = self.toggle_expansion
@@ -269,9 +305,10 @@ class EnhancedSceneRow(QWidget):
         
         # Expand/collapse indicator
         self.expand_indicator = QLabel("▶")
+        primary = theme_manager.get("primary_color")
         self.expand_indicator.setStyleSheet(f"""
             QLabel {{
-                color: {YELLOW};
+                color: {primary};
                 font-weight: bold;
                 font-size: 18px;
                 border: none;
@@ -284,18 +321,20 @@ class EnhancedSceneRow(QWidget):
         
         # Name field
         self.name_edit = QLineEdit(self.scene_data.get("label", ""))
+        card_bg = theme_manager.get("card_bg")
+        primary_light = theme_manager.get("primary_light")
         self.name_edit.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
+                background-color: {card_bg};
+                border: 2px solid {primary};
                 border-radius: 6px;
-                color: {YELLOW};
+                color: {primary};
                 padding: 5px 15px;
                 font-size: 16px;
                 font-weight: bold;
             }}
             QLineEdit:focus {{
-                border-color: {YELLOW_LIGHT};
+                border-color: {primary_light};
                 background-color: #2a2a2a;
             }}
         """)
@@ -321,12 +360,13 @@ class EnhancedSceneRow(QWidget):
         # Audio indicator
         audio_enabled = self.scene_data.get("audio_enabled", False)
         self.audio_indicator = QLabel("🎵 Audio" if audio_enabled else "Audio")
+        grey = theme_manager.get("grey")
         self.audio_indicator.setStyleSheet(f"""
             QLabel {{
                 font-size: 14px;
                 border: 2px solid #666;
-                background: {YELLOW if audio_enabled else 'transparent'};
-                color: {'white' if audio_enabled else GREY};
+                background: {primary if audio_enabled else 'transparent'};
+                color: {'white' if audio_enabled else grey};
                 padding: 4px;
                 font-weight: bold;
             }}
@@ -342,8 +382,8 @@ class EnhancedSceneRow(QWidget):
             QLabel {{
                 font-size: 14px;
                 border: 2px solid #666;
-                background: {YELLOW if script_enabled else 'transparent'};
-                color: {'white' if script_enabled else GREY};
+                background: {primary if script_enabled else 'transparent'};
+                color: {'white' if script_enabled else grey};
                 padding: 4px;
                 font-weight: bold;
             }}
@@ -360,11 +400,12 @@ class EnhancedSceneRow(QWidget):
         actions_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
         self.test_btn = QPushButton("Test")
+        green = theme_manager.get("green")
+        green_gradient = theme_manager.get("green_gradient", f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {green}, stop:1 #2d8f2d)")
         self.test_btn.setStyleSheet(f"""
             QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {GREEN}, stop:1 #2d8f2d);
-                border: 2px solid {GREEN};
+                background: {green_gradient};
+                border: 2px solid {green};
                 border-radius: 6px;
                 color: white;
                 font-weight: bold;
@@ -373,7 +414,7 @@ class EnhancedSceneRow(QWidget):
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #55dd55, stop:1 {GREEN});
+                    stop:0 #55dd55, stop:1 {green});
             }}
         """)
         self.test_btn.setFixedSize(70, 35)
@@ -381,11 +422,12 @@ class EnhancedSceneRow(QWidget):
         actions_layout.addWidget(self.test_btn)
         
         self.delete_btn = QPushButton("Delete")
+        red = theme_manager.get("red")
         self.delete_btn.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {RED}, stop:1 #8b2635);
-                border: 2px solid {RED};
+                    stop:0 {red}, stop:1 #8b2635);
+                border: 2px solid {red};
                 border-radius: 6px;
                 color: white;
                 font-weight: bold;
@@ -394,7 +436,7 @@ class EnhancedSceneRow(QWidget):
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ee5555, stop:1 {RED});
+                    stop:0 #ee5555, stop:1 {red});
             }}
         """)
         self.delete_btn.setFixedSize(80, 35)
@@ -404,19 +446,10 @@ class EnhancedSceneRow(QWidget):
         layout.addLayout(actions_layout)
         self.main_layout.addWidget(self.main_row)
 
-# CONTINUED FROM PART 1: EnhancedSceneRow methods
-    
     def create_details_row(self):
         self.details_widget = QWidget()
         self.details_widget.setFixedHeight(75)
-        self.details_widget.setStyleSheet(f"""
-            QWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {EXPANDED_BG}, stop:1 {DARK_BG});
-                margin: 2px;
-                margin-top: 0px;
-            }}
-        """)
+        self.update_details_style()
         
         layout = QHBoxLayout(self.details_widget)
         layout.setContentsMargins(20, 15, 25, 15)
@@ -425,30 +458,7 @@ class EnhancedSceneRow(QWidget):
         # Audio section
         self.audio_cb = QCheckBox("Audio:")
         self.audio_cb.setChecked(self.scene_data.get("audio_enabled", False))
-        self.audio_cb.setStyleSheet(f"""
-            QCheckBox {{
-                color: white;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 60px;
-                border: none;
-                background: transparent;
-            }}
-            QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {YELLOW};
-                border: 2px solid {YELLOW};
-                border-radius: 3px;
-            }}
-            QCheckBox::indicator:unchecked {{
-                background-color: #555;
-                border: 2px solid {GREY};
-                border-radius: 3px;
-            }}
-        """)
+        self.update_checkbox_style(self.audio_cb)
         
         # Audio file dropdown
         self.audio_file_combo = QComboBox()
@@ -460,41 +470,7 @@ class EnhancedSceneRow(QWidget):
             self.audio_file_combo.setCurrentIndex(0)
         
         self.audio_file_combo.setEnabled(self.audio_cb.isChecked())
-        self.audio_file_combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
-                border-radius: 4px;
-                color: {YELLOW};
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 25px;
-                min-width: 200px;
-            }}
-            QComboBox:disabled {{
-                background-color: #333;
-                border-color: {GREY};
-                color: {GREY};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid {YELLOW};
-                margin-right: 5px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
-                color: {YELLOW};
-                selection-background-color: {YELLOW};
-                selection-color: black;
-            }}
-        """)
+        self.update_combo_style(self.audio_file_combo)
         
         self.audio_cb.stateChanged.connect(
             lambda state: self.audio_file_combo.setEnabled(state == Qt.CheckState.Checked)
@@ -507,30 +483,7 @@ class EnhancedSceneRow(QWidget):
         # Script section
         self.script_cb = QCheckBox("Script:")
         self.script_cb.setChecked(self.scene_data.get("script_enabled", False))
-        self.script_cb.setStyleSheet(f"""
-            QCheckBox {{
-                color: white;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 60px;
-                border: none;
-                background: transparent;
-            }}
-            QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {YELLOW};
-                border: 2px solid {YELLOW};
-                border-radius: 3px;
-            }}
-            QCheckBox::indicator:unchecked {{
-                background-color: #555;
-                border: 2px solid {GREY};
-                border-radius: 3px;
-            }}
-        """)
+        self.update_checkbox_style(self.script_cb)
         
         # Script input
         self.script_input = QLineEdit()
@@ -542,26 +495,7 @@ class EnhancedSceneRow(QWidget):
         
         self.script_input.setPlaceholderText("Script #")
         self.script_input.setEnabled(self.script_cb.isChecked())
-        self.script_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
-                border-radius: 4px;
-                color: {YELLOW};
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 25px;
-                max-width: 80px;
-            }}
-            QLineEdit:disabled {{
-                background-color: #333;
-                border-color: {GREY};
-                color: {GREY};
-            }}
-            QLineEdit::placeholder {{
-                color: {GREY};
-            }}
-        """)
+        self.update_script_input_style()
         
         def update_script_input_enabled():
             enabled = self.script_cb.isChecked()
@@ -583,18 +517,7 @@ class EnhancedSceneRow(QWidget):
         self.duration_spin.setSingleStep(0.1)
         self.duration_spin.setValue(self.scene_data.get("duration", 1.0))
         self.duration_spin.setSuffix("s")
-        self.duration_spin.setStyleSheet(f"""
-            QDoubleSpinBox {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
-                border-radius: 4px;
-                color: white;
-                padding: 4px 6px 8px 6px;
-                font-size: 12px;
-                min-height: 25px;
-                max-width: 70px;
-            }}
-        """)
+        self.update_spin_style(self.duration_spin)
         
         layout.addWidget(duration_label)
         layout.addWidget(self.duration_spin)
@@ -608,18 +531,7 @@ class EnhancedSceneRow(QWidget):
         self.delay_spin.setValue(self.scene_data.get("delay", 0))
         self.delay_spin.setSuffix("ms")
         self.delay_spin.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
-        self.delay_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {CARD_BG};
-                border: 2px solid {YELLOW};
-                border-radius: 4px;
-                color: white;
-                padding: 4px 6px 8px 6px;
-                font-size: 12px;
-                min-height: 25px;
-                max-width: 70px;
-            }}
-        """)
+        self.update_spin_style(self.delay_spin)
         
         def update_delay_enabled():
             self.delay_spin.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
@@ -633,6 +545,137 @@ class EnhancedSceneRow(QWidget):
         
         self.main_layout.addWidget(self.details_widget)
     
+    def update_details_style(self):
+        """Update details widget styling"""
+        expanded_bg = theme_manager.get("expanded_bg")
+        dark_bg = theme_manager.get("dark_bg")
+        
+        self.details_widget.setStyleSheet(f"""
+            QWidget {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {expanded_bg}, stop:1 {dark_bg});
+                margin: 2px;
+                margin-top: 0px;
+            }}
+        """)
+    
+    def update_checkbox_style(self, checkbox):
+        """Update checkbox styling"""
+        primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
+        
+        checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: white;
+                font-weight: bold;
+                font-size: 13px;
+                min-width: 60px;
+                border: none;
+                background: transparent;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {primary};
+                border: 2px solid {primary};
+                border-radius: 3px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: #555;
+                border: 2px solid {grey};
+                border-radius: 3px;
+            }}
+        """)
+    
+    def update_combo_style(self, combo):
+        """Update combobox styling"""
+        card_bg = theme_manager.get("card_bg")
+        primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
+        
+        combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {card_bg};
+                border: 2px solid {primary};
+                border-radius: 4px;
+                color: {primary};
+                padding: 4px 8px;
+                font-size: 12px;
+                min-height: 25px;
+                min-width: 200px;
+            }}
+            QComboBox:disabled {{
+                background-color: #333;
+                border-color: {grey};
+                color: {grey};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid {primary};
+                margin-right: 5px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {card_bg};
+                border: 2px solid {primary};
+                color: {primary};
+                selection-background-color: {primary};
+                selection-color: black;
+            }}
+        """)
+    
+    def update_script_input_style(self):
+        """Update script input styling"""
+        card_bg = theme_manager.get("card_bg")
+        primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
+        
+        self.script_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {card_bg};
+                border: 2px solid {primary};
+                border-radius: 4px;
+                color: {primary};
+                padding: 4px 8px;
+                font-size: 12px;
+                min-height: 25px;
+                max-width: 80px;
+            }}
+            QLineEdit:disabled {{
+                background-color: #333;
+                border-color: {grey};
+                color: {grey};
+            }}
+            QLineEdit::placeholder {{
+                color: {grey};
+            }}
+        """)
+    
+    def update_spin_style(self, spin_widget):
+        """Update spinbox styling"""
+        card_bg = theme_manager.get("card_bg")
+        primary = theme_manager.get("primary_color")
+        
+        spin_widget.setStyleSheet(f"""
+            QDoubleSpinBox, QSpinBox {{
+                background-color: {card_bg};
+                border: 2px solid {primary};
+                border-radius: 4px;
+                color: white;
+                padding: 4px 6px 8px 6px;
+                font-size: 12px;
+                min-height: 25px;
+                max-width: 70px;
+            }}
+        """)
+    
     def validate_script_input(self, text):
         """Only allow digits in script input"""
         if text and not text.isdigit():
@@ -643,14 +686,16 @@ class EnhancedSceneRow(QWidget):
         """Update the type indicators based on checkbox states"""
         audio_enabled = self.audio_cb.isChecked()
         script_enabled = self.script_cb.isChecked()
+        primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
         
         self.audio_indicator.setText("🎵 Audio" if audio_enabled else "Audio")
         self.audio_indicator.setStyleSheet(f"""
             QLabel {{
                 font-size: 14px;
-                border: 2px solid {'#666' if not audio_enabled else YELLOW};
-                background: {YELLOW if audio_enabled else 'transparent'};
-                color: {'white' if audio_enabled else GREY};
+                border: 2px solid {'#666' if not audio_enabled else primary};
+                background: {primary if audio_enabled else 'transparent'};
+                color: {'white' if audio_enabled else grey};
                 padding: 4px;
                 font-weight: bold;
             }}
@@ -660,9 +705,9 @@ class EnhancedSceneRow(QWidget):
         self.script_indicator.setStyleSheet(f"""
             QLabel {{
                 font-size: 14px;
-                border: 2px solid {'#666' if not script_enabled else YELLOW};
-                background: {YELLOW if script_enabled else 'transparent'};
-                color: {'white' if script_enabled else GREY};
+                border: 2px solid {'#666' if not script_enabled else primary};
+                background: {primary if script_enabled else 'transparent'};
+                color: {'white' if script_enabled else grey};
                 padding: 4px;
                 font-weight: bold;
             }}
@@ -679,10 +724,11 @@ class EnhancedSceneRow(QWidget):
         """Expand to show details"""
         if not self.is_expanded:
             self.is_expanded = True
+            primary_light = theme_manager.get("primary_light")
             self.expand_indicator.setText("▼")
             self.expand_indicator.setStyleSheet(f"""
                 QLabel {{
-                    color: {YELLOW_LIGHT};
+                    color: {primary_light};
                     font-weight: bold;
                     font-size: 18px;
                     border: none;
@@ -690,27 +736,17 @@ class EnhancedSceneRow(QWidget):
                 }}
             """)
             self.details_widget.show()
-            
-            self.main_row.setStyleSheet(f"""
-                QWidget {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {CARD_BG}, stop:1 #1f1f1f);
-                    border: 2px solid {YELLOW};
-                    border-bottom: 1px solid {GREY};
-                    border-radius: 8px 8px 0px 0px;
-                    margin: 2px;
-                    margin-bottom: 0px;
-                }}
-            """)
+            self.update_main_row_style()
     
     def collapse(self):
         """Collapse to hide details"""
         if self.is_expanded:
             self.is_expanded = False
+            primary = theme_manager.get("primary_color")
             self.expand_indicator.setText("▶")
             self.expand_indicator.setStyleSheet(f"""
                 QLabel {{
-                    color: {YELLOW};
+                    color: {primary};
                     font-weight: bold;
                     font-size: 18px;
                     border: none;
@@ -718,30 +754,16 @@ class EnhancedSceneRow(QWidget):
                 }}
             """)
             self.details_widget.hide()
-            
-            self.main_row.setStyleSheet(f"""
-                QWidget {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {CARD_BG}, stop:1 #1f1f1f);
-                    border: 2px solid {GREY};
-                    border-radius: 8px;
-                    margin: 2px;
-                }}
-                QWidget:hover {{
-                    border: 2px solid {YELLOW};
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #2a2a2a, stop:1 #232323);
-                }}
-            """)
+            self.update_main_row_style()
     
     def test_scene(self):
         """Test this scene"""
         scene_data = self.get_scene_data()
-        self.parent_screen.test_scene_data(scene_data)  # FIXED: Use direct reference
+        self.parent_screen.test_scene_data(scene_data)
     
     def delete_scene(self):
         """Delete this scene"""
-        self.parent_screen.delete_scene_row(self.row_index)  # FIXED: Use direct reference
+        self.parent_screen.delete_scene_row(self.row_index)
     
     def get_scene_data(self):
         """Extract current scene data from widgets"""
@@ -764,7 +786,6 @@ class EnhancedSceneRow(QWidget):
             "duration": self.duration_spin.value(),
             "delay": self.delay_spin.value() if (self.audio_cb.isChecked() and self.script_cb.isChecked()) else 0
         }
-
 class SceneScreen(BaseScreen):
     """Interface for managing emotion scenes and audio mappings with enhanced accordion layout"""
     
@@ -776,14 +797,99 @@ class SceneScreen(BaseScreen):
         self.audio_files = []
         self.scene_rows = []
         
+        # Register for theme changes
+        theme_manager.register_callback(self.update_theme)
+        
         self.init_ui()
         
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_message)
         
-        # FIXED: Load from local cache first, then get audio files from backend
+        # Load from local cache first, then get audio files from backend
         self.load_local_config()
         self.request_audio_files()
+
+    def update_theme(self):
+        """Update all UI elements when theme changes"""
+        self.update_main_frame_style()
+        self.update_scroll_area_style()
+        self.update_button_styles()
+        
+        # Update all scene rows
+        for row in self.scene_rows:
+            row.update_theme()
+
+    def update_main_frame_style(self):
+        """Update main frame styling"""
+        primary = theme_manager.get("primary_color")
+        self.main_frame.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a1a1a, stop:1 #0f0f0f);
+                border: 2px solid {primary};
+                border-radius: 15px;
+                padding: 10px;
+            }}
+        """)
+
+    def update_scroll_area_style(self):
+        """Update scroll area styling"""
+        grey = theme_manager.get("grey")
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        dark_bg = theme_manager.get("dark_bg")
+        
+        self.scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: 3px solid {grey};
+                border-radius: 12px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e1e1e, stop:1 #141414);
+            }}
+            QScrollArea::corner {{
+                background: {dark_bg};
+            }}
+            QScrollBar:vertical {{
+                background: {dark_bg};
+                width: 16px;
+                border-radius: 8px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {primary};
+                border-radius: 8px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {primary_light};
+            }}
+        """)
+
+    def update_button_styles(self):
+        """Update button styling"""
+        # Update add button
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        
+        self.add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {primary_light}, stop:1 {primary});
+                border: 3px solid {primary};
+                border-radius: 10px;
+                color: black;
+                font-weight: bold;
+                padding: 15px 25px;
+                min-width: 180px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #f8d547, stop:1 {primary_light});
+            }}
+        """)
+        
+        # Update other buttons
+        self.refresh_btn.setStyleSheet(self.get_enhanced_button_style(False))
+        self.save_btn.setStyleSheet(self.get_enhanced_button_style(False))
 
     def init_ui(self):
         self.layout = QVBoxLayout()
@@ -791,15 +897,7 @@ class SceneScreen(BaseScreen):
         
         # Main container with enhanced styling
         self.main_frame = QFrame()
-        self.main_frame.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1a1a1a, stop:1 #0f0f0f);
-                border: 2px solid {YELLOW};
-                border-radius: 15px;
-                padding: 10px;
-            }}
-        """)
+        self.update_main_frame_style()
         
         frame_layout = QVBoxLayout(self.main_frame)
         frame_layout.setSpacing(5)
@@ -811,33 +909,10 @@ class SceneScreen(BaseScreen):
         self.setLayout(self.layout)
 
     def create_enhanced_scroll_area(self, parent_layout):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(520)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
-                border: 3px solid {GREY};
-                border-radius: 12px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1e1e1e, stop:1 #141414);
-            }}
-            QScrollArea::corner {{
-                background: {DARK_BG};
-            }}
-            QScrollBar:vertical {{
-                background: {DARK_BG};
-                width: 16px;
-                border-radius: 8px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {YELLOW};
-                border-radius: 8px;
-                min-height: 30px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {YELLOW_LIGHT};
-            }}
-        """)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setMaximumHeight(520)
+        self.update_scroll_area_style()
         
         main_container = QWidget()
         main_layout = QVBoxLayout(main_container)
@@ -852,8 +927,8 @@ class SceneScreen(BaseScreen):
         self.scenes_layout.addStretch()
         
         main_layout.addWidget(self.scenes_container)
-        scroll.setWidget(main_container)
-        parent_layout.addWidget(scroll)
+        self.scroll.setWidget(main_container)
+        parent_layout.addWidget(self.scroll)
 
     def create_enhanced_control_buttons(self, parent_layout):
         btn_container = QWidget()
@@ -865,29 +940,14 @@ class SceneScreen(BaseScreen):
         # Add Scene button
         self.add_btn = QPushButton("✨ Add New Scene")
         self.add_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {YELLOW_LIGHT}, stop:1 {YELLOW});
-                border: 3px solid {YELLOW};
-                border-radius: 10px;
-                color: black;
-                font-weight: bold;
-                padding: 15px 25px;
-                min-width: 180px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #f8d547, stop:1 {YELLOW_LIGHT});
-            }}
-        """)
         self.add_btn.clicked.connect(lambda: self.add_scene())
         
         # Status indicator
         self.status_label = QLabel("Ready")
+        green = theme_manager.get("green")
         self.status_label.setStyleSheet(f"""
             QLabel {{
-                color: {GREEN};
+                color: {green};
                 font-size: 14px;
                 font-weight: bold;
                 padding: 10px;
@@ -898,13 +958,13 @@ class SceneScreen(BaseScreen):
         
         # Action buttons
         self.refresh_btn = QPushButton("🔄 Refresh from Backend")
-        self.refresh_btn.setStyleSheet(self.get_enhanced_button_style(False))
-
         self.refresh_btn.clicked.connect(lambda: self.refresh_from_backend())
         
         self.save_btn = QPushButton("💾 Save Configuration")
-        self.save_btn.setStyleSheet(self.get_enhanced_button_style(False))
         self.save_btn.clicked.connect(lambda: self.save_config())
+        
+        # Apply initial styling
+        self.update_button_styles()
         
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.status_label)
@@ -916,11 +976,13 @@ class SceneScreen(BaseScreen):
 
     def get_enhanced_button_style(self, primary=False):
         if primary:
+            primary_color = theme_manager.get("primary_color")
+            primary_light = theme_manager.get("primary_light")
             return f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {YELLOW_LIGHT}, stop:1 {YELLOW});
-                    border: 3px solid {YELLOW};
+                        stop:0 {primary_light}, stop:1 {primary_color});
+                    border: 3px solid {primary_color};
                     border-radius: 10px;
                     color: black;
                     font-weight: bold;
@@ -930,6 +992,7 @@ class SceneScreen(BaseScreen):
                 }}
             """
         else:
+            primary = theme_manager.get("primary_color")
             return f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -945,14 +1008,15 @@ class SceneScreen(BaseScreen):
                 QPushButton:hover {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                         stop:0 #5a5a5a, stop:1 #3a3a3a);
-                    border: 2px solid {YELLOW};
-                    color: {YELLOW};
+                    border: 2px solid {primary};
+                    color: {primary};
                 }}
             """
 
     @error_boundary
     def request_audio_files(self):
-        self.update_status("Requesting audio files...", YELLOW)
+        primary = theme_manager.get("primary_color")
+        self.update_status("Requesting audio files...", primary)
         success = self.send_websocket_message("get_audio_files")
         if not success:
             self.logger.warning("Failed to request audio files - using fallback list")
@@ -965,11 +1029,11 @@ class SceneScreen(BaseScreen):
                 "Audio-clip-_CILW-2022_-Thank-you.mp3"
             ]
 
-
     @error_boundary
     def refresh_from_backend(self):
         """Refresh both scenes and audio files from backend in parallel"""
-        self.update_status("Refreshing from backend...", YELLOW)
+        primary = theme_manager.get("primary_color")
+        self.update_status("Refreshing from backend...", primary)
         
         # Initialize refresh tracking
         self.refresh_status = {
@@ -989,8 +1053,10 @@ class SceneScreen(BaseScreen):
             self.update_status("Backend unavailable - keeping local data", "orange")
             self.logger.warning("Failed to refresh from backend")
 
-    def update_status(self, message, color=GREEN):
+    def update_status(self, message, color=None):
         """Update the status indicator"""
+        if color is None:
+            color = theme_manager.get("green")
         self.status_label.setText(message)
         self.status_label.setStyleSheet(f"""
             QLabel {{
@@ -1009,6 +1075,9 @@ class SceneScreen(BaseScreen):
             msg = json.loads(message)
             msg_type = msg.get("type")
             
+            green = theme_manager.get("green")
+            red = theme_manager.get("red")
+            
             if msg_type == "scene_list":
                 scenes = msg.get("scenes", [])
                 if scenes:
@@ -1021,7 +1090,7 @@ class SceneScreen(BaseScreen):
                         self.refresh_status["scenes_success"] = True
                         self.check_refresh_completion()
                     else:
-                        self.update_status(f"Loaded {len(scenes)} scenes from backend", GREEN)
+                        self.update_status(f"Loaded {len(scenes)} scenes from backend", green)
                 else:
                     self.logger.warning("No scenes received from backend")
                     if hasattr(self, 'refresh_status'):
@@ -1052,7 +1121,7 @@ class SceneScreen(BaseScreen):
                         self.refresh_status["audio_success"] = True
                         self.check_refresh_completion()
                     else:
-                        self.update_status(f"Loaded {len(files)} audio files", GREEN)
+                        self.update_status(f"Loaded {len(files)} audio files", green)
                 else:
                     self.logger.warning("No audio files received from backend")
                     if hasattr(self, 'refresh_status'):
@@ -1067,21 +1136,25 @@ class SceneScreen(BaseScreen):
                 success = msg.get("success", False)
                 if success:
                     QMessageBox.information(self, "Saved", "Scenes saved successfully to backend.")
-                    self.update_status("Saved successfully", GREEN)
+                    self.update_status("Saved successfully", green)
                     self.scenes_updated.emit()
                 else:
                     error = msg.get("error", "Unknown error")
                     QMessageBox.critical(self, "Error", f"Failed to save to backend: {error}")
-                    self.update_status("Save failed", RED)
+                    self.update_status("Save failed", red)
                     
         except Exception as e:
+            red = theme_manager.get("red")
             self.logger.error(f"Failed to handle message: {e}")
-            self.update_status("Communication error", RED)
+            self.update_status("Communication error", red)
 
     def check_refresh_completion(self):
         """Check if refresh is complete and update status accordingly"""
         if not hasattr(self, 'refresh_status'):
             return
+        
+        green = theme_manager.get("green")
+        red = theme_manager.get("red")
         
         # Check if both are complete
         if self.refresh_status["scenes_complete"] and self.refresh_status["audio_complete"]:
@@ -1091,34 +1164,35 @@ class SceneScreen(BaseScreen):
             audio_ok = self.refresh_status["audio_success"]
             
             if scenes_ok and audio_ok:
-                self.update_status(f"Loaded {scenes_count} scenes and {audio_count} audio files", GREEN)
+                self.update_status(f"Loaded {scenes_count} scenes and {audio_count} audio files", green)
             elif scenes_ok:
                 self.update_status(f"Loaded {scenes_count} scenes, audio failed", "orange")
             elif audio_ok:
                 self.update_status(f"Scenes failed, loaded {audio_count} audio files", "orange")
             else:
-                self.update_status("Failed to load scenes and audio files", RED)
+                self.update_status("Failed to load scenes and audio files", red)
             
             # Clear refresh tracking
             del self.refresh_status
 
     @error_boundary
     def load_local_config(self):
-        """FIXED: Load from standardized path that matches backend"""
+        """Load from standardized path that matches backend"""
         # Try primary config path first (matches backend)
         config = config_manager.get_config("resources/configs/scenes_config.json")
         if isinstance(config, list) and config:
             self.scenes_data = config
             self.update_scene_rows()
-            self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", GREEN)
+            green = theme_manager.get("green")
+            self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", green)
             self.logger.debug(f"Loaded {len(self.scenes_data)} scenes from resources/configs/scenes_config.json")
             return
-        
         
         # No config found - start with empty
         self.scenes_data = []
         self.update_scene_rows()
-        self.update_status("No local config found - starting empty", YELLOW)
+        primary = theme_manager.get("primary_color")
+        self.update_status("No local config found - starting empty", primary)
         self.logger.info("No local config found - starting with empty scene list")
 
     def convert_old_format(self, old_scenes):
@@ -1149,7 +1223,7 @@ class SceneScreen(BaseScreen):
         
         # Create new enhanced rows with proper parent reference
         for i, scene_data in enumerate(self.scenes_data):
-            scene_row = EnhancedSceneRow(scene_data, self.audio_files, i, self)  # FIXED: Added self reference
+            scene_row = EnhancedSceneRow(scene_data, self.audio_files, i, self)
             self.scene_rows.append(scene_row)
             # Insert before the stretch
             self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
@@ -1171,12 +1245,13 @@ class SceneScreen(BaseScreen):
         self.scenes_data.append(new_scene)
         
         # Create and add new enhanced row with proper parent reference
-        scene_row = EnhancedSceneRow(new_scene, self.audio_files, len(self.scene_rows), self)  # FIXED: Added self reference
+        scene_row = EnhancedSceneRow(new_scene, self.audio_files, len(self.scene_rows), self)
         self.scene_rows.append(scene_row)
         self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
         
         scene_row.collapse()
-        self.update_status(f"Added new scene", GREEN)
+        green = theme_manager.get("green")
+        self.update_status(f"Added new scene", green)
 
     @error_boundary
     def delete_scene_row(self, row_index):
@@ -1203,7 +1278,8 @@ class SceneScreen(BaseScreen):
                 for i, row in enumerate(self.scene_rows):
                     row.row_index = i
                 
-                self.update_status(f"Deleted scene: {scene_name}", GREEN)
+                green = theme_manager.get("green")
+                self.update_status(f"Deleted scene: {scene_name}", green)
                 self.logger.info(f"Deleted scene: {scene_name} (index: {row_index})")
 
     @error_boundary
@@ -1211,7 +1287,8 @@ class SceneScreen(BaseScreen):
         """Test a scene with given data"""
         scene_name = scene_data.get("label", "Test Scene")
         self.logger.info(f"Testing scene: {scene_name}")
-        self.update_status(f"Testing: {scene_name}", YELLOW)
+        primary = theme_manager.get("primary_color")
+        self.update_status(f"Testing: {scene_name}", primary)
         
         # Send test command to backend
         test_data = {
@@ -1220,12 +1297,16 @@ class SceneScreen(BaseScreen):
         }
         success = self.send_websocket_message(test_data)
         if not success:
-            self.update_status(f"Failed to test {scene_name}", RED)
+            red = theme_manager.get("red")
+            self.update_status(f"Failed to test {scene_name}", red)
 
     @error_boundary
     def save_config(self):
         """Save configuration from accordion rows"""
-        self.update_status("Validating configuration...", YELLOW)
+        primary = theme_manager.get("primary_color")
+        red = theme_manager.get("red")
+        
+        self.update_status("Validating configuration...", primary)
         
         # Validate unique names and collect data
         names = []
@@ -1239,22 +1320,22 @@ class SceneScreen(BaseScreen):
         # Check for unique names
         if len(names) != len(set(names)):
             QMessageBox.critical(self, "Error", "Scene names must be unique.")
-            self.update_status("Validation failed: Duplicate names", RED)
+            self.update_status("Validation failed: Duplicate names", red)
             return
         
         # Check for empty names
         if any(not name.strip() for name in names):
             QMessageBox.critical(self, "Error", "All scenes must have names.")
-            self.update_status("Validation failed: Empty names", RED)
+            self.update_status("Validation failed: Empty names", red)
             return
         
-        self.update_status("Saving configuration...", YELLOW)
+        self.update_status("Saving configuration...", primary)
         
-        # FIXED: Save locally first using standardized path
+        # Save locally first using standardized path
         success = config_manager.save_config("resources/configs/scenes_config.json", scene_data)
         if not success:
             QMessageBox.critical(self, "Error", "Failed to save local configuration.")
-            self.update_status("Local save failed", RED)
+            self.update_status("Local save failed", red)
             return
         
         # Update internal data
@@ -1269,7 +1350,7 @@ class SceneScreen(BaseScreen):
         
         if backend_success:
             self.logger.info("Scene configuration saved locally and sent to backend")
-            self.update_status("Saved locally, waiting for backend...", YELLOW)
+            self.update_status("Saved locally, waiting for backend...", primary)
         else:
             QMessageBox.warning(self, "Warning", 
                 "Scenes saved locally but could not sync to backend. "

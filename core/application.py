@@ -1,5 +1,5 @@
 """
-WALL-E Control System - Main Application Class (Updated)
+WALL-E Control System - Main Application Class (Updated with Theme Support)
 """
 
 import os
@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize
 from .config_manager import config_manager
 from .logger import get_logger, logger_manager
 from .websocket_manager import WebSocketManager
+from .theme_manager import theme_manager
 from .utils import MemoryManager, error_boundary
 from widgets.base_screen import DynamicHeader
 from widgets.home_screen import HomeScreen
@@ -22,7 +23,7 @@ from widgets.scene_screen import SceneScreen
 
 
 class WalleApplication(QMainWindow):
-    """Main WALL-E application window managing all screens and navigation"""
+    """Main WALL-E application window managing all screens and navigation with theme support"""
     
     def __init__(self):
         super().__init__()
@@ -30,6 +31,10 @@ class WalleApplication(QMainWindow):
         
         # Initialize logging system
         self._setup_logging()
+        
+        # Initialize theme manager
+        theme_manager.initialize()
+        theme_manager.register_callback(self._apply_theme)
         
         # Setup main window
         self.setWindowTitle("WALL-E Control System")
@@ -63,10 +68,13 @@ class WalleApplication(QMainWindow):
         self._setup_navigation()
         self._setup_layout()
         
+        # Apply initial theme
+        self._apply_theme()
+        
         # Connect telemetry updates to header (voltage only, WiFi handled by network monitor)
         self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
         
-        self.logger.info(f"WALL-E Control System initialized with Pi IP: {self.pi_ip}")
+        self.logger.info(f"WALL-E Control System initialized with Pi IP: {self.pi_ip}, Theme: {theme_manager.get_display_name()}")
     
     def _setup_logging(self):
         """Initialize the logging system with configuration"""
@@ -77,12 +85,16 @@ class WalleApplication(QMainWindow):
         )
     
     def _setup_background(self):
-        """Set application background if available"""
-        if os.path.exists("resources/images/background.png"):
-            background = QPixmap("resources/images/background.png")
+        """Set application background using theme manager"""
+        background_path = theme_manager.get_image_path("background")
+        if os.path.exists(background_path):
+            background = QPixmap(background_path)
             palette = QPalette()
             palette.setBrush(QPalette.ColorRole.Window, QBrush(background))
             self.setPalette(palette)
+            self.logger.debug(f"Applied background: {background_path}")
+        else:
+            self.logger.warning(f"Background image not found: {background_path}")
     
     def _setup_websocket(self) -> WebSocketManager:
         """Setup WebSocket connection"""
@@ -110,6 +122,10 @@ class WalleApplication(QMainWindow):
         self.stack.addWidget(self.controller_screen)
         self.stack.addWidget(self.settings_screen)
         self.stack.addWidget(self.scene_screen)
+        
+        # Connect scene screen signals to home screen for updates
+        if hasattr(self.scene_screen, 'scenes_updated') and hasattr(self.home_screen, 'connect_scene_screen_signals'):
+            self.home_screen.connect_scene_screen_signals(self.scene_screen)
     
     def _setup_memory_management(self):
         """Setup periodic memory cleanup"""
@@ -118,39 +134,31 @@ class WalleApplication(QMainWindow):
         self.memory_timer.start(30000)  # 30 seconds
     
     def _setup_navigation(self):
-        """Setup navigation bar with screen buttons"""
+        """Setup navigation bar with screen buttons using themed icons"""
         self.nav_bar = QHBoxLayout()
         self.nav_bar.addSpacing(100)
         
         # Define navigation buttons
         navigation_items = [
-            ("Home", self.home_screen),
-            ("Camera", self.camera_screen),
-            ("Health", self.health_screen),
-            ("ServoConfig", self.servo_screen),
-            ("Controller", self.controller_screen),
-            ("Settings", self.settings_screen),
-            ("Scene", self.scene_screen)
+            ("Home", self.home_screen, "home"),
+            ("Camera", self.camera_screen, "camera"),
+            ("Health", self.health_screen, "health"),
+            ("ServoConfig", self.servo_screen, "servo"),
+            ("Controller", self.controller_screen, "controller"),
+            ("Settings", self.settings_screen, "settings"),
+            ("Scene", self.scene_screen, "scene")
         ]
         
-        # Create navigation buttons
-        for name, screen in navigation_items:
+        # Create navigation buttons with themed icons
+        for name, screen, icon_key in navigation_items:
             btn = QPushButton()
-            icon_path = f"resources/icons/{name}.png"
-            if os.path.exists(icon_path):
-                btn.setIcon(QIcon(icon_path))
-                btn.setIconSize(QSize(64, 64))
             btn.clicked.connect(lambda _, s=screen, n=name: self.switch_screen(s, n))
             self.nav_bar.addWidget(btn)
-            self.nav_buttons[name] = btn
+            self.nav_buttons[name] = {"button": btn, "icon_key": icon_key}
         
-        # Failsafe button
+        # Failsafe button with themed icon
         self.failsafe_button = QPushButton()
         self.failsafe_button.setCheckable(True)
-        failsafe_icon = "resources/icons/failsafe.png"
-        if os.path.exists(failsafe_icon):
-            self.failsafe_button.setIcon(QIcon(failsafe_icon))
-            self.failsafe_button.setIconSize(QSize(300, 70))
         self.failsafe_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
         self.failsafe_button.clicked.connect(self._toggle_failsafe)
         
@@ -190,36 +198,78 @@ class WalleApplication(QMainWindow):
         # Set initial screen
         self.switch_screen(self.home_screen, "Home")
     
+    def _apply_theme(self):
+        """Apply current theme to all UI elements"""
+        # Update background
+        self._setup_background()
+        
+        # Update navigation icons
+        for name, nav_info in self.nav_buttons.items():
+            button = nav_info["button"]
+            icon_key = nav_info["icon_key"]
+            
+            # Set normal icon
+            normal_icon_path = theme_manager.get_icon_path(icon_key, pressed=False)
+            if os.path.exists(normal_icon_path):
+                button.setIcon(QIcon(normal_icon_path))
+                button.setIconSize(QSize(64, 64))
+            else:
+                self.logger.warning(f"Icon not found: {normal_icon_path}")
+        
+        # Update failsafe button icon
+        failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
+        if os.path.exists(failsafe_icon_path):
+            self.failsafe_button.setIcon(QIcon(failsafe_icon_path))
+            self.failsafe_button.setIconSize(QSize(300, 70))
+        else:
+            self.logger.warning(f"Failsafe icon not found: {failsafe_icon_path}")
+        
+        # Update window title with theme name
+        self.setWindowTitle(f"WALL-E Control System - {theme_manager.get_display_name()} Theme")
+        
+        self.logger.info(f"Applied {theme_manager.get_display_name()} theme")
+    
     @error_boundary
     def switch_screen(self, screen, name: str):
-        """Switch to specified screen and update navigation"""
+        """Switch to specified screen and update navigation with themed icons"""
         self.stack.setCurrentWidget(screen)
         self.header.set_screen_name(name)
         
-        # Update navigation icons
-        for btn_name, btn in self.nav_buttons.items():
-            pressed_icon = f"resources/icons/{btn_name}_pressed.png"
-            normal_icon = f"resources/icons/{btn_name}.png"
+        # Update navigation icons with theme support
+        for btn_name, nav_info in self.nav_buttons.items():
+            button = nav_info["button"]
+            icon_key = nav_info["icon_key"]
             
-            if btn_name == name and os.path.exists(pressed_icon):
-                btn.setIcon(QIcon(pressed_icon))
-            elif os.path.exists(normal_icon):
-                btn.setIcon(QIcon(normal_icon))
+            if btn_name == name:
+                # Use pressed/active icon
+                pressed_icon_path = theme_manager.get_icon_path(icon_key, pressed=True)
+                if os.path.exists(pressed_icon_path):
+                    button.setIcon(QIcon(pressed_icon_path))
+                else:
+                    # Fallback to normal icon
+                    normal_icon_path = theme_manager.get_icon_path(icon_key, pressed=False)
+                    if os.path.exists(normal_icon_path):
+                        button.setIcon(QIcon(normal_icon_path))
+            else:
+                # Use normal icon
+                normal_icon_path = theme_manager.get_icon_path(icon_key, pressed=False)
+                if os.path.exists(normal_icon_path):
+                    button.setIcon(QIcon(normal_icon_path))
         
         self.logger.debug(f"Switched to {name} screen")
     
     @error_boundary
     def _toggle_failsafe(self, checked):
-        """Toggle failsafe state and send to backend"""
-        # Update button icon
+        """Toggle failsafe state and send to backend with themed icons"""
+        # Update button icon based on state
         if checked:
-            pressed_icon = "resources/icons/failsafe_pressed.png"
-            if os.path.exists(pressed_icon):
-                self.failsafe_button.setIcon(QIcon(pressed_icon))
+            pressed_icon_path = theme_manager.get_icon_path("failsafe", pressed=True)
+            if os.path.exists(pressed_icon_path):
+                self.failsafe_button.setIcon(QIcon(pressed_icon_path))
         else:
-            normal_icon = "resources/icons/failsafe.png"
-            if os.path.exists(normal_icon):
-                self.failsafe_button.setIcon(QIcon(normal_icon))
+            normal_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
+            if os.path.exists(normal_icon_path):
+                self.failsafe_button.setIcon(QIcon(normal_icon_path))
         
         # Send command to backend
         self.websocket.send_command("failsafe", state=checked)
@@ -242,6 +292,9 @@ class WalleApplication(QMainWindow):
         """Handle application shutdown with proper cleanup"""
         self.logger.info("Application closing - cleaning up resources")
         
+        # Unregister from theme manager
+        theme_manager.unregister_callback(self._apply_theme)
+        
         # Stop network monitoring in header
         if hasattr(self.header, 'cleanup'):
             self.header.cleanup()
@@ -257,6 +310,10 @@ class WalleApplication(QMainWindow):
         # Stop health screen network monitoring
         if hasattr(self.health_screen, 'cleanup'):
             self.health_screen.cleanup()
+        
+        # Cleanup settings screen
+        if hasattr(self.settings_screen, 'cleanup'):
+            self.settings_screen.cleanup()
         
         # Close WebSocket connection
         if hasattr(self, 'websocket'):

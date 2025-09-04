@@ -1,16 +1,10 @@
 """
-WALL-E Control System - Servo Configuration Screen
-Real-time servo control and configuration interface
+WALL-E Control System - Servo Configuration Screen (Themed)
+Real-time servo control and configuration interface with theme support
 """
 
 import json
 import os
-from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, 
-                            QScrollArea, QWidget, QFrame, QLineEdit, QSpinBox, QSlider,
-                            QCheckBox, QButtonGroup)
-from PyQt6.QtGui import QFont, QIcon
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
-
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, 
                             QScrollArea, QWidget, QFrame, QLineEdit, QSpinBox, QSlider,
                             QCheckBox, QButtonGroup)
@@ -19,6 +13,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QPoint
 
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
+from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.logger import get_logger
 
@@ -29,28 +24,36 @@ class HomePositionSlider(QSlider):
     def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
         super().__init__(orientation, parent)
         self.home_position = None
-        self.setStyleSheet("""
-            QSlider {
+        self._update_slider_style()
+        # Register for theme changes
+        theme_manager.register_callback(self._update_slider_style)
+    
+    def _update_slider_style(self):
+        """Apply themed styling to slider"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        self.setStyleSheet(f"""
+            QSlider {{
                 border: none;
                 background: transparent;
-            }
-            QSlider::groove:horizontal {
+            }}
+            QSlider::groove:horizontal {{
                 border: none;
                 height: 6px;
                 background: #333;
                 border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #00AAFF;
+            }}
+            QSlider::handle:horizontal {{
+                background: {primary};
                 border: none;
                 width: 16px;
                 height: 16px;
                 margin: -5px 0;
                 border-radius: 8px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #0099FF;
-            }
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: {primary_light};
+            }}
         """)
     
     def set_home_position(self, position):
@@ -86,7 +89,7 @@ class HomePositionSlider(QSlider):
         diamond_x = groove_rect.x() + int(home_ratio * groove_rect.width())
         diamond_y = groove_rect.center().y()
         
-        # Draw diamond
+        # Draw diamond with theme color
         diamond_size = 4
         diamond = QPolygon([
             QPoint(diamond_x, diamond_y - diamond_size),      # Top
@@ -95,8 +98,10 @@ class HomePositionSlider(QSlider):
             QPoint(diamond_x - diamond_size, diamond_y)       # Left
         ])
         
-        painter.setBrush(QColor("#FFD700"))  # Gold color for home indicator
-        painter.setPen(QColor("#FFD700"))
+        # Use theme primary color for home indicator
+        home_color = theme_manager.get("primary_color", "#FFD700")
+        painter.setBrush(QColor(home_color))
+        painter.setPen(QColor(home_color))
         painter.drawPolygon(diamond)
 
 
@@ -106,11 +111,18 @@ class ServoConfigScreen(BaseScreen):
     # Qt signals for thread-safe communication
     position_update_signal = pyqtSignal(str, int)
     status_update_signal = pyqtSignal(str, bool, bool)
-    """Real-time servo control and configuration interface"""
     
-    # Qt signals for thread-safe communication
-    position_update_signal = pyqtSignal(str, int)
-    status_update_signal = pyqtSignal(str, bool, bool)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Register for theme change notifications
+        theme_manager.register_callback(self._on_theme_changed)
+    
+    def __del__(self):
+        """Clean up theme manager callback on destruction"""
+        try:
+            theme_manager.unregister_callback(self._on_theme_changed)
+        except Exception:
+            pass
     
     def _setup_screen(self):
         """Initialize servo configuration screen"""
@@ -159,12 +171,13 @@ class ServoConfigScreen(BaseScreen):
         self.grid_layout.setContentsMargins(2, 5, 2, 5)
         self.grid_layout.setVerticalSpacing(6)
         self.grid_widget.setLayout(self.grid_layout)
-        self.grid_widget.setStyleSheet("QWidget { border: 1px solid #555; border-radius: 12px; }")
+        self._update_grid_widget_style()
         
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setWidget(self.grid_widget)
+        self._update_scroll_area_style(scroll_area)
         
         # Create themed control panel
         control_panel = self._create_control_panel()
@@ -172,9 +185,9 @@ class ServoConfigScreen(BaseScreen):
         # Status label
         self.status_label = QLabel("Initializing...")
         self.status_label.setFont(QFont("Arial", 12))
-        self.status_label.setStyleSheet("color: #FFAA00; padding: 3px;")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setFixedWidth(1050)
+        self._update_status_label_style()
         
         # Main layout assembly
         grid_and_selector_layout = QHBoxLayout()
@@ -192,69 +205,123 @@ class ServoConfigScreen(BaseScreen):
         layout.addLayout(grid_and_selector_layout)
         self.setLayout(layout)
 
+    def _update_grid_widget_style(self):
+        """Apply themed styling to grid widget"""
+        primary = theme_manager.get("primary_color")
+        self.grid_widget.setStyleSheet(f"""
+            QWidget {{ 
+                border: 1px solid {primary}; 
+                border-radius: 12px; 
+                background: transparent;
+            }}
+        """)
+
+    def _update_scroll_area_style(self, scroll_area):
+        """Apply themed styling to scroll area"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        scroll_area.setStyleSheet(f"""
+        QScrollArea {{
+            border: none;
+            background-color: transparent;
+        }}
+        QScrollBar:vertical {{
+            background: #2d2d2d;
+            width: 12px;
+            border-radius: 6px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {primary};
+            border-radius: 6px;
+            min-height: 20px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {primary_light};
+        }}
+        """)
+
+    def _update_status_label_style(self):
+        """Update status label with theme colors"""
+        primary = theme_manager.get("primary_color")
+        self.status_label.setStyleSheet(f"color: {primary}; padding: 3px;")
+
     def _create_control_panel(self):
         """Create the themed servo control panel"""
-        # Main panel with settings page styling
+        # Main panel with theme styling
         control_panel = QWidget()
         control_panel.setFixedWidth(240)
-        control_panel.setStyleSheet("""
-            QWidget {
-                background-color: #1e1e1e;
-                border: 2px solid #e1a014;
-                border-radius: 12px;
-                color: white;
-            }
-        """)
+        self._update_control_panel_style(control_panel)
         
         panel_layout = QVBoxLayout()
         panel_layout.setContentsMargins(15, 5, 15, 15)
         panel_layout.setSpacing(15)
         
-        # Header with same styling as settings
-        header = QLabel("SERVO CONTROL")
-        header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("""
-            QLabel {
-                border: none;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: #e1a014;
-                padding: 8px;
-                border-radius: 6px;
-                margin-bottom: 5px;
-            }
-        """)
-        panel_layout.addWidget(header)
+        # Header with theme styling
+        self.header = QLabel("SERVO CONTROL")
+        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_header_style()
+        panel_layout.addWidget(self.header)
         
-        # Maestro selection with exciting buttons
+        # Maestro selection with theme buttons
         maestro_layout = self._create_maestro_section()
         panel_layout.addLayout(maestro_layout)
         panel_layout.addSpacing(20)
+        
         # Operations section
         operations_section = self._create_operations_section()
         panel_layout.addWidget(operations_section)
         
         panel_layout.addStretch()
         control_panel.setLayout(panel_layout)
+        self.control_panel = control_panel
         return control_panel
 
+    def _update_control_panel_style(self, panel):
+        """Apply themed styling to control panel"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        panel.setStyleSheet(f"""
+            QWidget {{
+                background-color: {panel_bg};
+                border: 2px solid {primary};
+                border-radius: 12px;
+                color: white;
+            }}
+        """)
+
+    def _update_header_style(self):
+        """Apply themed styling to header"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        self.header.setStyleSheet(f"""
+            QLabel {{
+                border: none;
+                background-color: rgba(0, 0, 0, 0.9);
+                color: {primary};
+                padding: 8px;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            }}
+        """)
+
     def _create_maestro_section(self):
-        """Create exciting Maestro selection buttons"""
+        """Create themed Maestro selection buttons"""
         maestro_layout = QVBoxLayout()
         maestro_layout.setSpacing(10)
         
         # Maestro label
-        maestro_label = QLabel("MAESTRO")
-        maestro_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        maestro_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        maestro_label.setStyleSheet("color: #e1a014; border: none;")
-        maestro_layout.addWidget(maestro_label)
+        self.maestro_label = QLabel("MAESTRO")
+        self.maestro_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.maestro_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_maestro_label_style()
+        maestro_layout.addWidget(self.maestro_label)
         
         # Button container
         button_container = QHBoxLayout()
         button_container.setSpacing(10)
         
-        # Create exciting M1 and M2 buttons
+        # Create themed M1 and M2 buttons
         self.maestro1_btn = self._create_maestro_button("1", True)
         self.maestro2_btn = self._create_maestro_button("2", False)
         
@@ -270,15 +337,27 @@ class ServoConfigScreen(BaseScreen):
         maestro_layout.addLayout(button_container)
         return maestro_layout
 
+    def _update_maestro_label_style(self):
+        """Apply themed styling to maestro label"""
+        primary = theme_manager.get("primary_color")
+        self.maestro_label.setStyleSheet(f"color: {primary}; border: none; background: transparent;")
+
     def _create_maestro_button(self, number: str, is_selected: bool):
-        """Create an exciting Maestro selection button"""
+        """Create a themed Maestro selection button"""
         btn = QPushButton(f"M{number}")
         btn.setCheckable(True)
         btn.setChecked(is_selected)
         btn.setFixedSize(80, 60)
         btn.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        self._update_maestro_button_style(btn)
+        return btn
+
+    def _update_maestro_button_style(self, btn):
+        """Apply themed styling to maestro button"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        primary_gradient = theme_manager.get("primary_gradient")
         
-        # Exciting styling with glow effects and gradients
         btn.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -291,50 +370,41 @@ class ServoConfigScreen(BaseScreen):
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #5a5a5a, stop:1 #3a3a3a);
-                border: 2px solid #888;
-                color: white;
+                border: 2px solid {primary};
+                color: {primary};
             }}
             QPushButton:checked {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FFD700, stop:1 #e1a014);
-                border: 2px solid #FFD700;
+                background: {primary_gradient};
+                border: 2px solid {primary};
                 color: black;
                 font-weight: bold;
             }}
             QPushButton:checked:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FFEA00, stop:1 #f1b024);
-                border: 2px solid #FFEA00;
+                    stop:0 {primary_light}, stop:1 {primary});
+                border: 2px solid {primary_light};
             }}
             QPushButton:pressed {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #3a3a3a, stop:1 #1a1a1a);
             }}
         """)
-        
-        return btn
 
     def _create_operations_section(self):
-        """Create the operations section with consistent styling"""
-        operations_frame = QWidget()
-        operations_frame.setStyleSheet("""
-            QWidget {
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }
-        """)
-        
+        """Create the operations section with themed styling"""
+        self.operations_frame = QWidget()
+        self._update_operations_frame_style(self.operations_frame)
+
         ops_layout = QVBoxLayout()
         ops_layout.setContentsMargins(15, 10, 15, 15)
         ops_layout.setSpacing(8)
         
         # Operations header
-        ops_header = QLabel("OPERATIONS")
-        ops_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        ops_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ops_header.setStyleSheet("color: #e1a014; border: none; margin-bottom: 5px;")
-        ops_layout.addWidget(ops_header)
+        self.ops_header = QLabel("OPERATIONS")
+        self.ops_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.ops_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_ops_header_style()
+        ops_layout.addWidget(self.ops_header)
         
         # Create operation buttons
         button_configs = [
@@ -345,37 +415,206 @@ class ServoConfigScreen(BaseScreen):
             ("⚡ TOGGLE LIVE", self.toggle_all_live_checkboxes, "Toggle all live updates")
         ]
         
+        self.operation_buttons = []
         for text, callback, tooltip in button_configs:
             btn = QPushButton(text)
             btn.setFont(QFont("Arial", 14))  
             btn.setToolTip(tooltip)
             btn.clicked.connect(callback)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #4a4a4a, stop:1 #2a2a2a);
-                    color: white;
-                    border: 1px solid #666;
-                    border-radius: 6px;
-                    padding: 6px;
-                    text-align: center;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #5a5a5a, stop:1 #3a3a3a);
-                    border-color: #888;
-                }
-                QPushButton:pressed {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #3a3a3a, stop:1 #1a1a1a);
-                    border-color: #e1a014;
-                }
-            """)
+            self._update_operation_button_style(btn)
             ops_layout.addWidget(btn)
+            self.operation_buttons.append(btn)
         
-        operations_frame.setLayout(ops_layout)
-        return operations_frame
+        self.operations_frame.setLayout(ops_layout)
+        return self.operations_frame
+
+    def _update_operations_frame_style(self, frame):
+        """Apply themed styling to operations frame"""
+        primary = theme_manager.get("primary_color")
+        frame.setStyleSheet(f"""
+            QWidget {{
+                border: 1px solid {primary};
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.3);
+            }}
+        """)
+
+    def _update_ops_header_style(self):
+        """Apply themed styling to operations header"""
+        primary = theme_manager.get("primary_color")
+        self.ops_header.setStyleSheet(f"color: {primary}; border: none; margin-bottom: 5px; background: transparent;")
+
+    def _update_operation_button_style(self, btn):
+        """Apply themed styling to operation button"""
+        primary = theme_manager.get("primary_color")
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4a4a4a, stop:1 #2a2a2a);
+                color: white;
+                border: 1px solid #666;
+                border-radius: 6px;
+                padding: 6px;
+                text-align: center;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #5a5a5a, stop:1 #3a3a3a);
+                border-color: {primary};
+            }}
+            QPushButton:pressed {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #3a3a3a, stop:1 #1a1a1a);
+                border-color: {primary};
+            }}
+        """)
+
+    def _on_theme_changed(self):
+        """Handle theme change by updating all styled components"""
+        try:
+            # Update main panel styling
+            if hasattr(self, 'main_frame'):
+                self._update_control_panel_style(self.main_frame)
+
+            if hasattr(self, 'control_panel'):
+                self._update_control_panel_style(self.control_panel)
+
+            # Update grid widget
+            self._update_grid_widget_style()
+            
+            # Update status label
+            self._update_status_label_style()
+            
+            # Update header
+            if hasattr(self, 'header'):
+                self._update_header_style()
+            
+            # Update maestro section
+            if hasattr(self, 'maestro_label'):
+                self._update_maestro_label_style()
+            if hasattr(self, 'maestro1_btn'):
+                self._update_maestro_button_style(self.maestro1_btn)
+            if hasattr(self, 'maestro2_btn'):
+                self._update_maestro_button_style(self.maestro2_btn)
+            
+            # Update operations section
+            if hasattr(self, 'ops_header'):
+                self._update_ops_header_style()
+            if hasattr(self, 'operation_buttons'):
+                for btn in self.operation_buttons:
+                    self._update_operation_button_style(btn)
+            if hasattr(self, 'operations_frame'):
+                self._update_operations_frame_style(self.operations_frame)
+       
+            
+            # Update scroll area if it exists
+            scroll_areas = self.findChildren(QScrollArea)
+            for scroll_area in scroll_areas:
+                self._update_scroll_area_style(scroll_area)
+            
+            # Update all servo widgets in grid
+            self._update_servo_widgets_theme()
+            
+            self.logger.info(f"Servo screen updated for theme: {theme_manager.get_theme_name()}")
+        except Exception as e:
+            self.logger.warning(f"Failed to apply theme changes: {e}")
+
+    def _update_servo_widgets_theme(self):
+        """Update theme for all servo control widgets"""
+        primary = theme_manager.get("primary_color")
+        
+        # Update all input widgets
+        for edit in self.findChildren(QLineEdit):
+            self._update_input_style(edit)
+        for spin in self.findChildren(QSpinBox):
+            self._update_spinbox_style(spin)
+        for checkbox in self.findChildren(QCheckBox):
+            self._update_checkbox_style(checkbox)
+        for label in self.findChildren(QLabel):
+            if label not in [self.status_label, self.header, self.maestro_label, self.ops_header]:
+                label.setStyleSheet("color: white; background: transparent;")
+        
+        # Update play buttons
+        play_buttons = [widgets[2] for widgets in self.servo_widgets.values() if len(widgets) > 2]
+        for btn in play_buttons:
+            self._update_play_button_style(btn)
+
+    def _update_input_style(self, input_field):
+        """Apply themed styling to input field"""
+        primary = theme_manager.get("primary_color")
+        input_field.setStyleSheet(f"""
+        QLineEdit {{
+            background-color: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 6px;
+            color: white;
+        }}
+        QLineEdit:focus {{ 
+            border-color: {primary}; 
+            background-color: #333333;
+        }}
+        """)
+
+    def _update_spinbox_style(self, spinbox):
+        """Apply themed styling to spinbox"""
+        primary = theme_manager.get("primary_color")
+        spinbox.setStyleSheet(f"""
+        QSpinBox {{
+            background-color: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 6px;
+            color: white;
+        }}
+        QSpinBox:focus {{ 
+            border-color: {primary}; 
+            background-color: #333333;
+        }}
+        """)
+
+    def _update_checkbox_style(self, checkbox):
+        """Apply themed styling to checkbox"""
+        green = theme_manager.get("green")
+        checkbox.setStyleSheet(f"""
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: #333;
+                border: 1px solid #666;
+                border-radius: 2px;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {green};
+                border: 1px solid {green};
+                border-radius: 2px;
+            }}
+        """)
+
+    def _update_play_button_style(self, btn):
+        """Apply themed styling to play button"""
+        red = theme_manager.get("red")
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                border: none;
+                background-color: #444;
+                color: white;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: #555;
+            }}
+            QPushButton:pressed {{
+                background-color: #333;
+            }}
+            QPushButton:checked {{
+                background-color: {red};
+                color: white;
+            }}
+        """)
         
     def safe_initialization(self):
         """Safe initialization that queries the selected Maestro"""
@@ -502,9 +741,10 @@ class ServoConfigScreen(BaseScreen):
             slider.setValue(position)
             slider.blockSignals(False)
             
-            # Update position label
+            # Update position label with theme color
+            green = theme_manager.get("green")
             pos_label.setText(f"V: {position}")
-            pos_label.setStyleSheet("color: #44FF44;")
+            pos_label.setStyleSheet(f"color: {green}; background: transparent;")
             
             self.logger.debug(f"Updated display: {channel_key} = {position}")
     
@@ -513,11 +753,14 @@ class ServoConfigScreen(BaseScreen):
         self.status_label.setText(message)
         
         if error:
-            self.status_label.setStyleSheet("color: #FF4444; padding: 3px;")
+            red = theme_manager.get("red")
+            self.status_label.setStyleSheet(f"color: {red}; padding: 3px;")
         elif warning:
-            self.status_label.setStyleSheet("color: #FFAA00; padding: 3px;")
+            primary = theme_manager.get("primary_color")
+            self.status_label.setStyleSheet(f"color: {primary}; padding: 3px;")
         else:
-            self.status_label.setStyleSheet("color: #44FF44; padding: 3px;")
+            green = theme_manager.get("green")
+            self.status_label.setStyleSheet(f"color: {green}; padding: 3px;")
         
         self.logger.info(f"Status: {message}")
     
@@ -594,15 +837,17 @@ class ServoConfigScreen(BaseScreen):
             label = QLabel(f"Ch{i}")
             label.setFont(font)
             label.setFixedWidth(35)
+            label.setStyleSheet("color: white; background: transparent;")
             self.grid_layout.addWidget(label, row, 0)
             
             # Name edit
             name_edit = QLineEdit(config.get("name", ""))
             name_edit.setFont(QFont("Arial", 16))
             name_edit.setMaxLength(25)
-            name_edit.setFixedWidth(180)
+            name_edit.setFixedWidth(140)
             name_edit.setPlaceholderText("Servo Name")
             name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
+            self._update_input_style(name_edit)
             self.grid_layout.addWidget(name_edit, row, 1)
             
             # Slider for position control with custom styling and home indicator
@@ -613,7 +858,7 @@ class ServoConfigScreen(BaseScreen):
             slider.setMinimum(min_val)
             slider.setMaximum(max_val)
             slider.setValue((min_val + max_val) // 2)
-            slider.setFixedWidth(150)
+            slider.setFixedWidth(140)
             slider.setMinimumHeight(24)
             
             # Set home position indicator if available
@@ -626,18 +871,20 @@ class ServoConfigScreen(BaseScreen):
             min_spin.setFont(QFont("Arial", 16))
             min_spin.setRange(0, 2500)
             min_spin.setValue(min_val)
-            min_spin.setFixedWidth(60)
+            min_spin.setFixedWidth(75)
             min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
             min_spin.valueChanged.connect(lambda val, s=slider: s.setMinimum(val))
+            self._update_spinbox_style(min_spin)
             self.grid_layout.addWidget(min_spin, row, 3)
             
             max_spin = QSpinBox()
             max_spin.setFont(QFont("Arial", 16))
             max_spin.setRange(0, 2500)
             max_spin.setValue(max_val)
-            max_spin.setFixedWidth(60)
+            max_spin.setFixedWidth(75)
             max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
             max_spin.valueChanged.connect(lambda val, s=slider: s.setMaximum(val))
+            self._update_spinbox_style(max_spin)
             self.grid_layout.addWidget(max_spin, row, 4)
             
             # Speed/Acceleration controls
@@ -645,24 +892,27 @@ class ServoConfigScreen(BaseScreen):
             speed_spin.setFont(QFont("Arial", 16))
             speed_spin.setRange(0, 100)
             speed_spin.setValue(config.get("speed", 0))
-            speed_spin.setFixedWidth(50)
+            speed_spin.setFixedWidth(60)
             speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "speed", val))
+            self._update_spinbox_style(speed_spin)
             self.grid_layout.addWidget(speed_spin, row, 5)
             
             accel_spin = QSpinBox()
             accel_spin.setFont(QFont("Arial", 16))
             accel_spin.setRange(0, 100)
             accel_spin.setValue(config.get("accel", 0))
-            accel_spin.setFixedWidth(50)
+            accel_spin.setFixedWidth(60)
             accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
+            self._update_spinbox_style(accel_spin)
             self.grid_layout.addWidget(accel_spin, row, 6)
             
             # Position label
             pos_label = QLabel("---")
             pos_label.setFont(QFont("Arial", 16))
-            pos_label.setStyleSheet("color: #FFAA00;")
             pos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             pos_label.setFixedWidth(60)
+            primary = theme_manager.get("primary_color")
+            pos_label.setStyleSheet(f"color: {primary}; background: transparent;")
             self.grid_layout.addWidget(pos_label, row, 7)
             
             # Live update checkbox
@@ -670,47 +920,15 @@ class ServoConfigScreen(BaseScreen):
             live_checkbox.setChecked(False)
             live_checkbox.setToolTip("Enable live servo updates")
             live_checkbox.setFixedSize(20, 20)
-            live_checkbox.setStyleSheet("""
-                QCheckBox::indicator {
-                    width: 16px;
-                    height: 16px;
-                }
-                QCheckBox::indicator:unchecked {
-                    background-color: #333;
-                    border: 1px solid #666;
-                    border-radius: 2px;
-                }
-                QCheckBox::indicator:checked {
-                    background-color: #44FF44;
-                    border: 1px solid #44FF44;
-                    border-radius: 2px;
-                }
-            """)
+            self._update_checkbox_style(live_checkbox)
             self.grid_layout.addWidget(live_checkbox, row, 8)
             
-            # Play/sweep button with custom styling
+            # Play/sweep button with themed styling
             play_btn = QPushButton("▶️")
             play_btn.setFont(QFont("Arial", 12))
             play_btn.setCheckable(True)
             play_btn.setFixedSize(30, 30)
-            play_btn.setStyleSheet("""
-                QPushButton {
-                    border: none;
-                    background-color: #444;
-                    color: white;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #555;
-                }
-                QPushButton:pressed {
-                    background-color: #333;
-                }
-                QPushButton:checked {
-                    background-color: #FF6600;
-                    color: white;
-                }
-            """)
+            self._update_play_button_style(play_btn)
             play_btn.clicked.connect(
                 lambda checked, k=channel_key, p=pos_label, b=play_btn,
                 min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin:
@@ -773,6 +991,7 @@ class ServoConfigScreen(BaseScreen):
         self.update_status(f"Maestro {maestro_num} not responding - check connection", error=True)
         
         # Set all sliders to center position as fallback
+        primary = theme_manager.get("primary_color")
         for channel_key, widgets in self.servo_widgets.items():
             if channel_key.startswith(f"m{maestro_num}_"):
                 slider = widgets[0]
@@ -784,7 +1003,7 @@ class ServoConfigScreen(BaseScreen):
                 slider.blockSignals(False)
                 
                 pos_label.setText(f"V: {center}")
-                pos_label.setStyleSheet("color: #FFAA00;")
+                pos_label.setStyleSheet(f"color: {primary}; background: transparent;")
     
     def update_servo_position_conditionally(self, channel_key: str, pos_label: QLabel, 
                                            value: int, live_checkbox: QCheckBox):
@@ -793,9 +1012,10 @@ class ServoConfigScreen(BaseScreen):
         
         if live_checkbox.isChecked():
             self.update_servo_position(channel_key, pos_label, value)
-            pos_label.setStyleSheet("color: #FF4444;")
+            red = theme_manager.get("red")
+            pos_label.setStyleSheet(f"color: {red}; background: transparent;")
         else:
-            pos_label.setStyleSheet("color: #AAAAAA;")
+            pos_label.setStyleSheet("color: #AAAAAA; background: transparent;")
     
     def update_servo_position(self, channel_key: str, pos_label: QLabel, value: int):
         """Send servo position command with configuration"""
@@ -865,29 +1085,29 @@ class ServoConfigScreen(BaseScreen):
                 config = self.servo_config.get(channel_key, {})
                 home_pos = config.get("home")
                 
-            if home_pos is not None:
-                # Apply configured speed and acceleration first
-                config = self.servo_config.get(channel_key, {})
-                speed = config.get("speed", 0)
-                accel = config.get("accel", 0)
+                if home_pos is not None:
+                    # Apply configured speed and acceleration first
+                    speed = config.get("speed", 0)
+                    accel = config.get("accel", 0)
 
-                self.send_websocket_message("servo_speed", channel=channel_key, speed=speed)
-                self.send_websocket_message("servo_acceleration", channel=channel_key, acceleration=accel)
-                self.send_websocket_message("servo", channel=channel_key, pos=home_pos)
-                
-                # Update slider to home position
-                widgets = self.servo_widgets[channel_key]
-                slider = widgets[0]
-                pos_label = widgets[1]
-                
-                slider.blockSignals(True)
-                slider.setValue(home_pos)
-                slider.blockSignals(False)
-                
-                pos_label.setText(f"H: {home_pos}")
-                pos_label.setStyleSheet("color: #FFD700;")  # Gold for home
-                
-                home_count += 1
+                    self.send_websocket_message("servo_speed", channel=channel_key, speed=speed)
+                    self.send_websocket_message("servo_acceleration", channel=channel_key, acceleration=accel)
+                    self.send_websocket_message("servo", channel=channel_key, pos=home_pos)
+                    
+                    # Update slider to home position
+                    widgets = self.servo_widgets[channel_key]
+                    slider = widgets[0]
+                    pos_label = widgets[1]
+                    
+                    slider.blockSignals(True)
+                    slider.setValue(home_pos)
+                    slider.blockSignals(False)
+                    
+                    pos_label.setText(f"H: {home_pos}")
+                    primary = theme_manager.get("primary_color")  # Gold equivalent for home
+                    pos_label.setStyleSheet(f"color: {primary}; background: transparent;")
+                    
+                    home_count += 1
         
         if home_count > 0:
             self.update_status(f"Moving {home_count} servos to home positions")
@@ -899,8 +1119,6 @@ class ServoConfigScreen(BaseScreen):
                                        home_positions=self.get_maestro_home_positions(maestro_num))
         else:
             self.update_status("No home positions set", warning=True)
-    
-
     
     def get_maestro_home_positions(self, maestro_num: int) -> dict:
         """Get home positions for specific maestro"""
@@ -934,7 +1152,7 @@ class ServoConfigScreen(BaseScreen):
         # Create new sweep
         sweep = MinMaxSweep(self, channel_key, pos_label, button, actual_min, actual_max, actual_speed)
         self.active_sweeps[channel_key] = sweep
-        button.setText("⏹️")
+        button.setText("⏸️")
         self.logger.info(f"Started sweep for {channel_key}")
     
     def toggle_all_live_checkboxes(self):
@@ -1063,9 +1281,10 @@ class MinMaxSweep:
         # Send move command
         self.parent_screen.send_websocket_message("servo", channel=self.channel_key, pos=self.current_target)
         
-        # Update UI
+        # Update UI with theme color
         self.label.setText(f"->{self.current_target}")
-        self.label.setStyleSheet("color: #FFFF44;")
+        primary = theme_manager.get("primary_color")
+        self.label.setStyleSheet(f"color: {primary}; background: transparent;")
     
     def check_position(self):
         """Request current position for sweep validation"""
@@ -1081,7 +1300,8 @@ class MinMaxSweep:
             
             # Update UI to show reached
             self.label.setText(f"@{actual_position}")
-            self.label.setStyleSheet("color: #44FF44;")
+            green = theme_manager.get("green")
+            self.label.setStyleSheet(f"color: {green}; background: transparent;")
             
             # Stop position checking during hold delay
             self.check_timer.stop()
@@ -1092,7 +1312,8 @@ class MinMaxSweep:
         else:
             # Still moving, update display
             self.label.setText(f"V:{actual_position}")
-            self.label.setStyleSheet("color: #FFAA44;")
+            primary_light = theme_manager.get("primary_light")
+            self.label.setStyleSheet(f"color: {primary_light}; background: transparent;")
             self.logger.debug(f"{self.channel_key}: {actual_position}/{self.current_target}")
     
     def continue_after_hold(self):
@@ -1117,7 +1338,7 @@ class MinMaxSweep:
         
         # Update UI
         self.label.setText(f"C:{center_pos}")
-        self.label.setStyleSheet("color: #AAAAAA;")
+        self.label.setStyleSheet("color: #AAAAAA; background: transparent;")
         self.btn.setText("▶️")
         self.btn.setChecked(False)
         

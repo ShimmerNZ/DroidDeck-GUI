@@ -1,9 +1,9 @@
 """
-WALL-E Control System - Camera Feed Screen (Refined)
+WALL-E Control System - Camera Feed Screen (Themed)
+- Integrated with theme manager for dynamic theming
 - Wider right panel (380px) to prevent button crowding
-- Scoped yellow border only to the outer control panel (no yellow XCLK border)
-- Mirror H/V buttons use yellow gradient when toggled (checked)
-- Full yellow border wraps the entire right-side (header/settings/actions/status)
+- Theme-aware color styling throughout
+- Full theme support for all UI elements
 """
 import os
 import time
@@ -20,85 +20,17 @@ from PyQt6.QtCore import Qt, QSize
 from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread
 from core.config_manager import config_manager
+from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.logger import get_logger
 
 
-# ---------- Shared theme helpers (greyscale base + variants) ----------
-
-def _greyscale_button_css() -> str:
-    """Base greyscale gradient button styling."""
-    return """
-    QPushButton {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #4a4a4a, stop:1 #2a2a2a);
-        color: white;
-        border: 1px solid #666;
-        border-radius: 6px;
-        padding: 6px;
-        text-align: center;
-        font-weight: bold;
-    }
-    QPushButton:hover {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #5a5a5a, stop:1 #3a3a3a);
-        border-color: #888;
-    }
-    QPushButton:pressed {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #3a3a3a, stop:1 #1a1a1a);
-        border-color: #e1a014;
-    }
-    QPushButton:disabled {
-        background: #333;
-        color: #666;
-        border-color: #444;
-    }
-    """
-
-
-def _checked_yellow_css() -> str:
-    """Yellow gradient for checked (Start Stream ON / toggled buttons that should be yellow)."""
-    return """
-    QPushButton:checked {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #FFD700, stop:1 #e1a014);
-        border: 2px solid #FFD700;
-        color: black;
-        font-weight: bold;
-    }
-    QPushButton:checked:hover {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #FFEA00, stop:1 #f1b024);
-        border: 2px solid #FFEA00;
-    }
-    """
-
-
-def _checked_green_css() -> str:
-    """Green gradient for checked (Track Person ON)."""
-    return """
-    QPushButton:checked {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #44FF44, stop:1 #228B22);
-        border: 2px solid #44FF44;
-        color: black;
-        font-weight: bold;
-    }
-    QPushButton:checked:hover {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-            stop:0 #66FF66, stop:1 #2FAE2F);
-        border: 2px solid #66FF66;
-    }
-    """
-
-
 class CameraControlsWidget(QWidget):
     """
-    Camera controls panel (unified side panel)
-    - Yellow bordered outer wrapper (header/settings/actions/status)
+    Camera controls panel (unified side panel) with theme manager integration
+    - Theme-aware bordered outer wrapper (header/settings/actions/status)
     - ESP32 SETTINGS contains all camera/image controls
-    - ACTIONS contains Reset + Start Stream (yellow on) + Track Person (green on)
+    - ACTIONS contains Reset + Start Stream + Track Person toggle buttons
     """
 
     def __init__(self, stream_button: QPushButton, track_button: QPushButton, parent=None):
@@ -113,43 +45,30 @@ class CameraControlsWidget(QWidget):
         self.stream_button = stream_button
         self.track_button = track_button
 
+        # Register for theme change notifications
+        theme_manager.register_callback(self._on_theme_changed)
+
         self.init_ui()
         self.load_current_settings()
 
     def init_ui(self):
-        """Initialize the camera controls UI with consistent styling."""
-        # Scope the outer panel styles using objectName, so children don't inherit the yellow border
+        """Initialize the camera controls UI with theme-aware styling."""
+        # Scope the outer panel styles using objectName, so children don't inherit the border
         self.setObjectName("cameraPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(380)  # wider to prevent button crowding
-        self.setStyleSheet("""
-            #cameraPanel {
-                background-color: #1e1e1e;
-                border: 2px solid #e1a014;
-                border-radius: 12px;
-                color: white;
-            }
-        """)
+        self._update_panel_style()
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(15, 10, 15, 15)
         main_layout.setSpacing(12)
 
         # Header - "CAMERA SETTINGS"
-        header = QLabel("CAMERA SETTINGS")
-        header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("""
-            QLabel {
-                border: none;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: #e1a014;
-                padding: 8px;
-                border-radius: 6px;
-                margin-bottom: 5px;
-            }
-        """)
-        main_layout.addWidget(header)
+        self.header = QLabel("CAMERA SETTINGS")
+        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_header_style()
+        main_layout.addWidget(self.header)
 
         # Combined settings section (ESP32 SETTINGS + Image controls)
         esp32_section = self._create_esp32_section()
@@ -163,40 +82,107 @@ class CameraControlsWidget(QWidget):
         # Status label
         self.status_label = QLabel("Ready")
         self.status_label.setFont(QFont("Arial", 12))
-        self.status_label.setStyleSheet("color: #AAAAAA; border: none; padding: 3px; text-align: center;")
+        self._update_status_label_style()
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.status_label)
 
         main_layout.addStretch()
         self.setLayout(main_layout)
 
+    def _update_panel_style(self):
+        """Update panel style based on current theme"""
+        primary_color = theme_manager.get("primary_color")
+        panel_dark = theme_manager.get("panel_dark")
+        self.setStyleSheet(f"""
+            #cameraPanel {{
+                background-color: {panel_dark};
+                border: 2px solid {primary_color};
+                border-radius: 12px;
+                color: white;
+            }}
+        """)
+
+    def _update_header_style(self):
+        """Update header style based on current theme"""
+        primary_color = theme_manager.get("primary_color")
+        self.header.setStyleSheet(f"""
+            QLabel {{
+                border: none;
+                background-color: rgba(0, 0, 0, 0.9);
+                color: {primary_color};
+                padding: 8px;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            }}
+        """)
+
+    def _update_status_label_style(self):
+        """Update status label style based on current theme"""
+        grey_light = theme_manager.get("grey_light")
+        self.status_label.setStyleSheet(f"color: {grey_light}; border: none; padding: 3px; text-align: center;")
+
+    def _get_base_button_style(self) -> str:
+        """Get base button style using theme manager"""
+        return theme_manager.get_button_style("default")
+
+    def _get_yellow_checked_style(self) -> str:
+        """Get yellow checked button style using theme colors"""
+        primary_color = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        return f"""
+        QPushButton:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {primary_light}, stop:1 {primary_color});
+            border: 2px solid {primary_light};
+            color: black;
+            font-weight: bold;
+        }}
+        QPushButton:checked:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #FFEA00, stop:1 {primary_light});
+            border: 2px solid #FFEA00;
+        }}
+        """
+
+    def _get_green_checked_style(self) -> str:
+        """Get green checked button style using theme colors"""
+        green = theme_manager.get("green")
+        green_gradient = theme_manager.get("green_gradient")
+        return f"""
+        QPushButton:checked {{
+            background: {green_gradient};
+            border: 2px solid {green};
+            color: black;
+            font-weight: bold;
+        }}
+        QPushButton:checked:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #66FF66, stop:1 #2FAE2F);
+            border: 2px solid #66FF66;
+        }}
+        """
+
     def _create_esp32_section(self):
         """Create ESP32 camera settings section holding all camera settings."""
         esp32_frame = QWidget()
         esp32_frame.setObjectName("esp32Frame")
-        esp32_frame.setStyleSheet("""
-            #esp32Frame {
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }
-        """)
+        self._update_section_frame_style(esp32_frame)
         esp32_layout = QVBoxLayout()
         esp32_layout.setContentsMargins(12, 8, 12, 12)
         esp32_layout.setSpacing(8)
 
         # Section header
-        esp32_header = QLabel("ESP32 SETTINGS")
-        esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        esp32_header.setStyleSheet("color: #e1a014; border: none; margin-bottom: 5px;")
-        esp32_layout.addWidget(esp32_header)
+        self.esp32_header = QLabel("ESP32 SETTINGS")
+        self.esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.esp32_header)
+        esp32_layout.addWidget(self.esp32_header)
 
         # XCLK Frequency
         xclk_layout = QHBoxLayout()
         xclk_label = QLabel("XCLK MHz:")
         xclk_label.setFont(QFont("Arial", 12))
-        xclk_label.setStyleSheet("border: none; color: white;")
+        self._update_control_label_style(xclk_label)
         xclk_label.setFixedWidth(80)
 
         self.xclk_spin = QSpinBox()
@@ -204,23 +190,13 @@ class CameraControlsWidget(QWidget):
         self.xclk_spin.setValue(10)
         self.xclk_spin.setFont(QFont("Arial", 12))
         self.xclk_spin.setFixedWidth(60)
-        self.xclk_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #2a2a2a;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
-                color: white;
-            }
-            /* keep focus border neutral (no yellow) */
-            QSpinBox:focus { border-color: #555; }
-        """)
+        self._update_spinbox_style(self.xclk_spin)
 
         xclk_btn = QPushButton("SET")
         xclk_btn.setFont(QFont("Arial", 11))
         xclk_btn.setFixedSize(45, 28)
         xclk_btn.clicked.connect(lambda: self.update_setting("xclk_freq", self.xclk_spin.value()))
-        xclk_btn.setStyleSheet(_greyscale_button_css())
+        xclk_btn.setStyleSheet(self._get_base_button_style())
 
         xclk_layout.addWidget(xclk_label)
         xclk_layout.addWidget(self.xclk_spin)
@@ -232,7 +208,7 @@ class CameraControlsWidget(QWidget):
         res_layout = QHBoxLayout()
         res_label = QLabel("Resolution:")
         res_label.setFont(QFont("Arial", 12))
-        res_label.setStyleSheet("border: none; color: white;")
+        self._update_control_label_style(res_label)
         res_label.setFixedWidth(80)
 
         self.resolution_combo = QComboBox()
@@ -243,18 +219,7 @@ class CameraControlsWidget(QWidget):
         ])
         self.resolution_combo.setCurrentIndex(5)  # VGA
         self.resolution_combo.setFont(QFont("Arial", 11))
-        self.resolution_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
-                color: white;
-            }
-            QComboBox:focus { border-color: #555; }  /* no yellow highlight */
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; border: none; }
-        """)
+        self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(
             lambda idx: self.update_setting("resolution", idx)
         )
@@ -284,11 +249,11 @@ class CameraControlsWidget(QWidget):
         )
         esp32_layout.addLayout(saturation_layout)
 
-        # Mirror controls (H, V) with yellow when toggled
+        # Mirror controls (H, V) with theme-aware styling when toggled
         mirror_layout = QHBoxLayout()
         mirror_label = QLabel("Mirror:")
         mirror_label.setFont(QFont("Arial", 12))
-        mirror_label.setStyleSheet("border: none; color: white;")
+        self._update_control_label_style(mirror_label)
         mirror_label.setFixedWidth(80)
 
         self.h_mirror_btn = QPushButton("Horizontal")
@@ -299,7 +264,7 @@ class CameraControlsWidget(QWidget):
         self.h_mirror_btn.clicked.connect(
             lambda checked: self.update_setting("h_mirror", checked)
         )
-        self.h_mirror_btn.setStyleSheet(_greyscale_button_css() + _checked_yellow_css())
+        self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
         self.v_flip_btn = QPushButton("Vertical")
         self.v_flip_btn.setCheckable(True)
@@ -309,7 +274,7 @@ class CameraControlsWidget(QWidget):
         self.v_flip_btn.clicked.connect(
             lambda checked: self.update_setting("v_flip", checked)
         )
-        self.v_flip_btn.setStyleSheet(_greyscale_button_css() + _checked_yellow_css())
+        self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
         mirror_layout.addWidget(mirror_label)
         mirror_layout.addWidget(self.h_mirror_btn)
@@ -324,41 +289,35 @@ class CameraControlsWidget(QWidget):
         """Create camera actions section: Reset + Start Stream + Track Person (toggles)"""
         actions_frame = QWidget()
         actions_frame.setObjectName("actionsFrame")
-        actions_frame.setStyleSheet("""
-            #actionsFrame {
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }
-        """)
+        self._update_section_frame_style(actions_frame)
         actions_layout = QVBoxLayout()
         actions_layout.setContentsMargins(12, 8, 12, 12)
         actions_layout.setSpacing(8)
 
-        actions_header = QLabel("ACTIONS")
-        actions_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        actions_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        actions_header.setStyleSheet("color: #e1a014; border: none; margin-bottom: 5px;")
-        actions_layout.addWidget(actions_header)
+        self.actions_header = QLabel("ACTIONS")
+        self.actions_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.actions_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.actions_header)
+        actions_layout.addWidget(self.actions_header)
 
         # Reset button
-        reset_btn = QPushButton("🔄 RESET TO DEFAULTS")
-        reset_btn.setFont(QFont("Arial", 12))
-        reset_btn.clicked.connect(self.reset_to_defaults)
-        reset_btn.setStyleSheet(_greyscale_button_css())
-        actions_layout.addWidget(reset_btn)
+        self.reset_btn = QPushButton("🔄 RESET TO DEFAULTS")
+        self.reset_btn.setFont(QFont("Arial", 12))
+        self.reset_btn.clicked.connect(self.reset_to_defaults)
+        self.reset_btn.setStyleSheet(self._get_base_button_style())
+        actions_layout.addWidget(self.reset_btn)
 
         # Row for toggle buttons (now has more width; use Expanding policies to avoid crowding)
         toggles_row = QHBoxLayout()
         toggles_row.setSpacing(10)
 
-        # Stream button (yellow when checked)
+        # Stream button (primary color when checked)
         self.stream_button.setText("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
         self.stream_button.setMinimumHeight(40)
         self.stream_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.stream_button.setStyleSheet(_greyscale_button_css() + _checked_yellow_css())
+        self.stream_button.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
         toggles_row.addWidget(self.stream_button, stretch=1)
 
         # Track button (green when checked, disabled until streaming)
@@ -368,51 +327,79 @@ class CameraControlsWidget(QWidget):
         self.track_button.setEnabled(False)
         self.track_button.setMinimumHeight(40)
         self.track_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.track_button.setStyleSheet(_greyscale_button_css() + _checked_green_css())
+        self.track_button.setStyleSheet(self._get_base_button_style() + self._get_green_checked_style())
         toggles_row.addWidget(self.track_button, stretch=1)
 
         actions_layout.addLayout(toggles_row)
         actions_frame.setLayout(actions_layout)
         return actions_frame
 
+    def _update_section_frame_style(self, frame):
+        """Update section frame style based on current theme"""
+        frame.setStyleSheet("""
+            QWidget {
+                border: 1px solid #555;
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.3);
+            }
+        """)
+
+    def _update_section_header_style(self, label):
+        """Update section header style based on current theme"""
+        primary_color = theme_manager.get("primary_color")
+        label.setStyleSheet(f"color: {primary_color}; border: none; margin-bottom: 5px;")
+
+    def _update_control_label_style(self, label):
+        """Update control label style based on current theme"""
+        label.setStyleSheet("border: none; color: white;")
+
+    def _update_spinbox_style(self, spinbox):
+        """Update spinbox style based on current theme"""
+        spinbox.setStyleSheet("""
+            QSpinBox {
+                background-color: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px;
+                color: white;
+            }
+            QSpinBox:focus { border-color: #555; }
+        """)
+
+    def _update_combobox_style(self, combobox):
+        """Update combobox style based on current theme"""
+        combobox.setStyleSheet("""
+            QComboBox {
+                background-color: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px;
+                color: white;
+            }
+            QComboBox:focus { border-color: #555; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; border: none; }
+        """)
+
     def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name):
-        """Create a slider control with consistent styling."""
+        """Create a slider control with theme-aware styling."""
         layout = QHBoxLayout()
         layout.setSpacing(8)
 
         label = QLabel(label_text)
         label.setFont(QFont("Arial", 12))
-        label.setStyleSheet("border: none; color: white;")
+        self._update_control_label_style(label)
         label.setFixedWidth(80)
 
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(min_val, max_val)
         slider.setValue(default_val)
         slider.setFixedWidth(160)  # a bit wider with the new panel width
-        slider.setStyleSheet("""
-            QSlider { border: none; background: transparent; }
-            QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 6px;
-                background: #333;
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #e1a014;
-                border: 1px solid #e1a014;
-                width: 16px; height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #f1b024;
-                border-color: #f1b024;
-            }
-        """)
+        self._update_slider_style(slider)
 
         value_label = QLabel(str(default_val))
         value_label.setFont(QFont("Arial", 12))
-        value_label.setStyleSheet("border: none; color: #e1a014;")
+        self._update_value_label_style(value_label)
         value_label.setFixedWidth(30)
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -424,6 +411,96 @@ class CameraControlsWidget(QWidget):
         layout.addWidget(value_label)
         layout.addStretch()
         return slider, layout
+
+    def _update_slider_style(self, slider):
+        """Update slider style based on current theme"""
+        primary_color = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        slider.setStyleSheet(f"""
+            QSlider {{ border: none; background: transparent; }}
+            QSlider::groove:horizontal {{
+                border: 1px solid #555;
+                height: 6px;
+                background: #333;
+                border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {primary_color};
+                border: 1px solid {primary_color};
+                width: 16px; height: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: {primary_light};
+                border-color: {primary_light};
+            }}
+        """)
+
+    def _update_value_label_style(self, label):
+        """Update value label style based on current theme"""
+        primary_color = theme_manager.get("primary_color")
+        label.setStyleSheet(f"border: none; color: {primary_color};")
+
+    def _on_theme_changed(self):
+        """Handle theme change by updating all styled components"""
+        try:
+            # Update main panel
+            self._update_panel_style()
+            self._update_header_style()
+            self._update_status_label_style()
+            
+            # Update section headers
+            self._update_section_header_style(self.esp32_header)
+            self._update_section_header_style(self.actions_header)
+            
+            # Update all sliders
+            for slider_name in ['quality_slider', 'brightness_slider', 'contrast_slider', 'saturation_slider']:
+                if hasattr(self, slider_name):
+                    self._update_slider_style(getattr(self, slider_name))
+            
+            # Update all value labels (find them in the layout)
+            for i in range(self.layout().count()):
+                item = self.layout().itemAt(i)
+                if item and item.widget():
+                    self._update_widget_themes_recursive(item.widget())
+            
+            # Update buttons with new theme colors
+            button_style = self._get_base_button_style()
+            yellow_checked = self._get_yellow_checked_style()
+            green_checked = self._get_green_checked_style()
+            
+            if hasattr(self, 'reset_btn'):
+                self.reset_btn.setStyleSheet(button_style)
+            
+            if hasattr(self, 'h_mirror_btn'):
+                self.h_mirror_btn.setStyleSheet(button_style + yellow_checked)
+            
+            if hasattr(self, 'v_flip_btn'):
+                self.v_flip_btn.setStyleSheet(button_style + yellow_checked)
+            
+            # Update external buttons
+            self.stream_button.setStyleSheet(button_style + yellow_checked)
+            self.track_button.setStyleSheet(button_style + green_checked)
+            
+            self.logger.info(f"Camera controls updated for theme: {theme_manager.get_display_name()}")
+        except Exception as e:
+            self.logger.error(f"Error updating camera controls theme: {e}")
+
+    def _update_widget_themes_recursive(self, widget):
+        """Recursively update widget themes"""
+        # Update specific widget types
+        if isinstance(widget, QLabel) and widget.text().isdigit():
+            # Value labels for sliders
+            self._update_value_label_style(widget)
+        elif isinstance(widget, QLabel) and any(text in widget.text().lower() for text in ['xclk', 'resolution', 'quality', 'brightness', 'contrast', 'saturation', 'mirror']):
+            # Control labels
+            self._update_control_label_style(widget)
+        
+        # Recursively check children
+        for child in widget.findChildren(QWidget):
+            if child.parent() == widget:  # Only immediate children
+                self._update_widget_themes_recursive(child)
 
     @error_boundary
     def load_current_settings(self):
@@ -453,11 +530,13 @@ class CameraControlsWidget(QWidget):
                     self.v_flip_btn.setChecked(settings["v_flip"])
 
                 self.status_label.setText("Settings loaded")
-                self.status_label.setStyleSheet("color: #44FF44; border: none; padding: 3px; text-align: center;")
+                green = theme_manager.get("green")
+                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
                 self.logger.info("Loaded camera settings")
         except Exception as e:
             self.status_label.setText("Failed to load settings")
-            self.status_label.setStyleSheet("color: #FF4444; border: none; padding: 3px; text-align: center;")
+            red = theme_manager.get("red")
+            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
             self.logger.error(f"Failed to load camera settings: {e}")
 
     @error_boundary
@@ -473,15 +552,18 @@ class CameraControlsWidget(QWidget):
             )
             if response.status_code == 200:
                 self.status_label.setText(f"Updated {setting_name}")
-                self.status_label.setStyleSheet("color: #44FF44; border: none; padding: 3px; text-align: center;")
+                green = theme_manager.get("green")
+                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
                 self.current_settings[setting_name] = value
                 self.logger.info(f"Updated {setting_name} = {value}")
             else:
                 self.status_label.setText(f"Failed to update {setting_name}")
-                self.status_label.setStyleSheet("color: #FF4444; border: none; padding: 3px; text-align: center;")
+                red = theme_manager.get("red")
+                self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
         except Exception as e:
             self.status_label.setText(f"Error: {str(e)[:30]}")
-            self.status_label.setStyleSheet("color: #FF4444; border: none; padding: 3px; text-align: center;")
+            red = theme_manager.get("red")
+            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
             self.logger.error(f"Failed to update {setting_name}: {e}")
 
     @error_boundary
@@ -508,19 +590,34 @@ class CameraControlsWidget(QWidget):
             response = requests.post(f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3)
             if response.status_code == 200:
                 self.status_label.setText("Reset to defaults")
-                self.status_label.setStyleSheet("color: #44FF44; border: none; padding: 3px; text-align: center;")
+                green = theme_manager.get("green")
+                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
                 self.current_settings = defaults
             else:
                 self.status_label.setText("Failed to reset")
-                self.status_label.setStyleSheet("color: #FF4444; border: none; padding: 3px; text-align: center;")
+                red = theme_manager.get("red")
+                self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
         except Exception as e:
             self.status_label.setText(f"Error: {str(e)[:30]}")
-            self.status_label.setStyleSheet("color: #FF4444; border: none; padding: 3px; text-align: center;")
+            red = theme_manager.get("red")
+            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
             self.logger.error(f"Failed to reset to defaults: {e}")
+
+    def __del__(self):
+        """Clean up theme manager callback on destruction"""
+        try:
+            theme_manager.unregister_callback(self._on_theme_changed)
+        except:
+            pass  # Ignore errors during cleanup
 
 
 class CameraFeedScreen(BaseScreen):
     """Live camera stream display with tracking and unified controls."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Register for theme change notifications
+        theme_manager.register_callback(self._on_theme_changed)
 
     def _setup_screen(self):
         wave_config = config_manager.get_wave_config()
@@ -554,21 +651,11 @@ class CameraFeedScreen(BaseScreen):
         # Video display
         self.video_label = QLabel()
         self.video_label.setFixedSize(640, 480)
-        self.video_label.setStyleSheet("""
-            border: 2px solid #555;
-            padding: 2px;
-            background-color: black;
-        """)
+        self._update_video_label_style()
 
         # Stats display
         self.stats_label = QLabel("Stream Stats: Initializing...")
-        self.stats_label.setStyleSheet("""
-            border: 1px solid #555;
-            border-radius: 4px;
-            padding: 1px;
-            background-color: black;
-            color: #aaa;
-        """)
+        self._update_stats_label_style()
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.stats_label.setFixedWidth(640)
 
@@ -585,14 +672,35 @@ class CameraFeedScreen(BaseScreen):
         # Layouts
         self.setup_layout()
 
+    def _update_video_label_style(self):
+        """Update video label style based on current theme"""
+        grey = theme_manager.get("grey")
+        self.video_label.setStyleSheet(f"""
+            border: 2px solid {grey};
+            padding: 2px;
+            background-color: black;
+        """)
+
+    def _update_stats_label_style(self):
+        """Update stats label style based on current theme"""
+        grey = theme_manager.get("grey")
+        grey_light = theme_manager.get("grey_light")
+        self.stats_label.setStyleSheet(f"""
+            border: 1px solid {grey};
+            border-radius: 4px;
+            padding: 1px;
+            background-color: black;
+            color: {grey_light};
+        """)
+
     def setup_control_buttons(self):
-        """Create stream and tracking buttons with consistent styling (no icons)."""
+        """Create stream and tracking buttons with theme-aware styling."""
         # Stream toggle
         self.stream_button = QPushButton("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
         self.stream_button.setMinimumSize(150, 40)
-        self.stream_button.setStyleSheet(_greyscale_button_css() + _checked_yellow_css())
+        self._update_stream_button_style()
         self.stream_button.toggled.connect(self.toggle_stream)
 
         # Tracking toggle (disabled until stream is active)
@@ -602,10 +710,51 @@ class CameraFeedScreen(BaseScreen):
         self.tracking_button.setMinimumSize(150, 40)
         self.tracking_button.setToolTip("Toggle Wave Detection / Person Tracking")
         self.tracking_button.setEnabled(False)
-        self.tracking_button.setStyleSheet(_greyscale_button_css() + _checked_green_css())
+        self._update_tracking_button_style()
         self.tracking_button.toggled.connect(self.toggle_tracking)
 
-        self.logger.info("Camera control buttons initialized (styled, no icons)")
+        self.logger.info("Camera control buttons initialized (themed, no icons)")
+
+    def _update_stream_button_style(self):
+        """Update stream button style based on current theme"""
+        base_style = theme_manager.get_button_style("default")
+        primary_color = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        checked_style = f"""
+        QPushButton:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {primary_light}, stop:1 {primary_color});
+            border: 2px solid {primary_light};
+            color: black;
+            font-weight: bold;
+        }}
+        QPushButton:checked:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #FFEA00, stop:1 {primary_light});
+            border: 2px solid #FFEA00;
+        }}
+        """
+        self.stream_button.setStyleSheet(base_style + checked_style)
+
+    def _update_tracking_button_style(self):
+        """Update tracking button style based on current theme"""
+        base_style = theme_manager.get_button_style("default")
+        green = theme_manager.get("green")
+        green_gradient = theme_manager.get("green_gradient")
+        checked_style = f"""
+        QPushButton:checked {{
+            background: {green_gradient};
+            border: 2px solid {green};
+            color: black;
+            font-weight: bold;
+        }}
+        QPushButton:checked:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #66FF66, stop:1 #2FAE2F);
+            border: 2px solid #66FF66;
+        }}
+        """
+        self.tracking_button.setStyleSheet(base_style + checked_style)
 
     def setup_layout(self):
         """Layout with video display left and unified controls right."""
@@ -639,6 +788,21 @@ class CameraFeedScreen(BaseScreen):
             self.stream_button.setText("Start Stream")
             self.stream_button.setToolTip("Click to start camera stream")
             self.stream_button.setChecked(False)
+
+    def _on_theme_changed(self):
+        """Handle theme change by updating all styled components"""
+        try:
+            # Update video and stats labels
+            self._update_video_label_style()
+            self._update_stats_label_style()
+            
+            # Update control buttons
+            self._update_stream_button_style()
+            self._update_tracking_button_style()
+            
+            self.logger.info(f"Camera screen updated for theme: {theme_manager.get_display_name()}")
+        except Exception as e:
+            self.logger.error(f"Error updating camera screen theme: {e}")
 
     @error_boundary
     def toggle_stream(self, checked):
@@ -795,3 +959,10 @@ class CameraFeedScreen(BaseScreen):
 
     def cleanup(self):
         self.stop_camera_thread()
+
+    def __del__(self):
+        """Clean up theme manager callback on destruction"""
+        try:
+            theme_manager.unregister_callback(self._on_theme_changed)
+        except:
+            pass  # Ignore errors during cleanup
