@@ -4,7 +4,7 @@
     "input_type": "joystick",
     "left_servo": "m2_ch0",
     "right_servo": "m2_ch1",
-    "turn_sensitivity": 1.2
+    "turn_sensitivity": 1.24
   },
   "right_stick": {
     "behavior": "joystick_pair",

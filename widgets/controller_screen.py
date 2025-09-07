@@ -1,6 +1,7 @@
 """
 WALL-E Control System - Clean Controller Configuration Screen
 All issues fixed: Config loading, joystick naming, scene names, padding, theming, header alignment
+Theme integration fully implemented for dynamic color switching
 """
 
 import json
@@ -383,15 +384,14 @@ class ControllerConfigScreen(BaseScreen):
             
             target_text = self._get_target_display_text(behavior, control_config)
             target_label = QLabel(target_text)
-            grey = theme_manager.get("grey", "#888")
-            target_label.setStyleSheet(f"color: {grey}; padding: 8px; border: 1px solid #555; border-radius: 4px;")
+            target_label.setStyleSheet(self._get_target_label_style())
             
             actions_layout = QHBoxLayout()
             select_btn = QPushButton("Configure")
             select_btn.clicked.connect(lambda: self._select_row_for_config(row))
             select_btn.setStyleSheet(self._get_small_button_style())
             
-            remove_btn = QPushButton("✖")
+            remove_btn = QPushButton("×")
             remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
             remove_btn.setStyleSheet(self._get_remove_button_style())
             
@@ -468,22 +468,19 @@ class ControllerConfigScreen(BaseScreen):
     def _create_config_section(self):
         """Create the main configuration grid section"""
         self.config_frame = QFrame()
-        panel_bg = theme_manager.get("panel_bg", "#181818")
-        primary = theme_manager.get("primary_color", "#e1a014")
-        self.config_frame.setStyleSheet(f"border: 2px solid {primary}; border-radius: 10px; background-color: {panel_bg};")
+        self.update_config_frame_style()
         layout = QVBoxLayout(self.config_frame)
         layout.setContentsMargins(15, 15, 15, 15)
         
-        header = QLabel("CONTROLLER CONFIGURATION")
-        header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet(f"color: {primary}; padding: 10px; border: none;")
-        layout.addWidget(header)
+        self.header = QLabel("CONTROLLER CONFIGURATION")
+        self.header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_header_style()
+        layout.addWidget(self.header)
         
         self.conflict_warning = QLabel("")
         self.conflict_warning.setWordWrap(True)
-        red = theme_manager.get("red", "#cc4444")
-        self.conflict_warning.setStyleSheet(f"color: {red}; background-color: rgba(204, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 5px 0px;")
+        self.update_conflict_warning_style()
         self.conflict_warning.hide()
         layout.addWidget(self.conflict_warning)
         
@@ -491,12 +488,14 @@ class ControllerConfigScreen(BaseScreen):
         headers_layout = QGridLayout()
         headers = ["Input", "Type", "Behavior", "Target(s)", "Actions"]
         
+        self.header_labels = []
         for i, header_text in enumerate(headers):
             header_label = QLabel(header_text)
             header_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-            header_label.setStyleSheet(f"color: {primary}; padding: 8px;")
+            self.update_column_header_style(header_label)
             header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             headers_layout.addWidget(header_label, 0, i)
+            self.header_labels.append(header_label)
         
         # Set column stretch factors for proper alignment
         headers_layout.setColumnStretch(0, 2)  # Input column
@@ -507,10 +506,9 @@ class ControllerConfigScreen(BaseScreen):
         
         layout.addLayout(headers_layout)
         
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        expanded_bg = theme_manager.get("expanded_bg", "#2a2a2a")
-        scroll_area.setStyleSheet(f"border: 1px solid #555; background-color: {expanded_bg};")
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.update_scroll_area_style()
         
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout(self.grid_widget)
@@ -522,22 +520,22 @@ class ControllerConfigScreen(BaseScreen):
         self.grid_layout.setColumnStretch(3, 3)  # Target(s) column
         self.grid_layout.setColumnStretch(4, 1)  # Actions column
         
-        scroll_area.setWidget(self.grid_widget)
+        self.scroll_area.setWidget(self.grid_widget)
         
-        layout.addWidget(scroll_area)
+        layout.addWidget(self.scroll_area)
         
         buttons_layout = QHBoxLayout()
-        add_btn = QPushButton("Add Mapping")
-        add_btn.clicked.connect(self._add_mapping_row)
-        add_btn.setStyleSheet(self._get_button_style())
+        self.add_btn = QPushButton("Add Mapping")
+        self.add_btn.clicked.connect(self._add_mapping_row)
+        self.update_button_style(self.add_btn)
         
-        save_btn = QPushButton("Save All")
-        save_btn.clicked.connect(self._save_all_mappings)
-        save_btn.setStyleSheet(self._get_button_style())
+        self.save_btn = QPushButton("Save All")
+        self.save_btn.clicked.connect(self._save_all_mappings)
+        self.update_button_style(self.save_btn)
         
-        buttons_layout.addWidget(add_btn)
+        buttons_layout.addWidget(self.add_btn)
         buttons_layout.addStretch()
-        buttons_layout.addWidget(save_btn)
+        buttons_layout.addWidget(self.save_btn)
         
         layout.addLayout(buttons_layout)
         return self.config_frame
@@ -546,25 +544,16 @@ class ControllerConfigScreen(BaseScreen):
         """Create the parameters panel section"""
         self.parameters_panel = QFrame()
         self.parameters_panel.setFixedWidth(280)
-        primary = theme_manager.get("primary_color", "#e1a014")
-        panel_bg = theme_manager.get("panel_bg", "#181818")
-        self.parameters_panel.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel_bg};
-                border: 2px solid {primary};
-                border-radius: 10px;
-                color: white;
-            }}
-        """)
+        self.update_parameters_panel_style()
         
         layout = QVBoxLayout(self.parameters_panel)
         layout.setContentsMargins(12, 12, 12, 12)
         
-        header = QLabel("BEHAVIOR PARAMETERS")
-        header.setFont(QFont("Arial", 13, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet(f"color: {primary}; padding: 6px; border: none;")
-        layout.addWidget(header)
+        self.params_header = QLabel("BEHAVIOR PARAMETERS")
+        self.params_header.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        self.params_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_params_header_style()
+        layout.addWidget(self.params_header)
         
         self.params_container = QWidget()
         self.params_layout = QVBoxLayout(self.params_container)
@@ -579,12 +568,11 @@ class ControllerConfigScreen(BaseScreen):
         """Show message when no row is selected"""
         self._clear_parameters_layout()
         
-        label = QLabel("Select a mapping row to configure behavior-specific parameters.\n\nNote: Combined joystick behaviors use both X and Y axes.")
-        label.setWordWrap(True)
-        grey = theme_manager.get("grey", "#888")
-        label.setStyleSheet(f"color: {grey}; padding: 15px; text-align: center; font-size: 11px;")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.params_layout.addWidget(label)
+        self.no_selection_label = QLabel("Select a mapping row to configure behavior-specific parameters.\n\nNote: Combined joystick behaviors use both X and Y axes.")
+        self.no_selection_label.setWordWrap(True)
+        self.update_no_selection_style()
+        self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.params_layout.addWidget(self.no_selection_label)
 
     def _add_mapping_row(self):
         """Add a new mapping configuration row"""
@@ -603,15 +591,14 @@ class ControllerConfigScreen(BaseScreen):
         behavior_combo.setStyleSheet(self._get_combo_style())
         
         target_label = QLabel("Configure targets →")
-        grey = theme_manager.get("grey", "#888")
-        target_label.setStyleSheet(f"color: {grey}; padding: 8px; border: 1px solid #555; border-radius: 4px;")
+        target_label.setStyleSheet(self._get_target_label_style())
         
         actions_layout = QHBoxLayout()
         select_btn = QPushButton("Configure")
         select_btn.clicked.connect(lambda: self._select_row_for_config(row))
         select_btn.setStyleSheet(self._get_small_button_style())
         
-        remove_btn = QPushButton("✖")
+        remove_btn = QPushButton("×")
         remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
         remove_btn.setStyleSheet(self._get_remove_button_style())
         
@@ -709,9 +696,8 @@ class ControllerConfigScreen(BaseScreen):
         
         # Show warning if conflicts exist
         if row_data.get('conflict_detected', False):
-            red = theme_manager.get("red", "#cc4444")
             warning = QLabel("⚠️ Configuration conflict detected. Please resolve before saving.")
-            warning.setStyleSheet(f"color: {red}; background-color: rgba(204, 68, 68, 0.1); padding: 6px; border-radius: 4px; margin-bottom: 8px; font-size: 10px;")
+            self.update_warning_style(warning)
             warning.setWordWrap(True)
             self.params_layout.addWidget(warning)
         
@@ -732,9 +718,8 @@ class ControllerConfigScreen(BaseScreen):
         
         control_name = row_data['input_combo'].currentText()
         if control_name != "Select Input...":
-            grey = theme_manager.get("grey", "#888")
             axis_info = QLabel(f"Maps {control_name} to one servo")
-            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px;")
+            self.update_axis_info_style(axis_info)
             self.params_layout.addWidget(axis_info)
         
         servo_combo = QComboBox()
@@ -762,9 +747,8 @@ class ControllerConfigScreen(BaseScreen):
         
         control_name = row_data['input_combo'].currentText()
         if control_name != "Select Input...":
-            grey = theme_manager.get("grey", "#888")
             axis_info = QLabel(f"Uses both X and Y axes of {control_name}")
-            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px;")
+            self.update_axis_info_style(axis_info)
             self.params_layout.addWidget(axis_info)
         
         x_servo_combo = QComboBox()
@@ -795,9 +779,8 @@ class ControllerConfigScreen(BaseScreen):
         
         control_name = row_data['input_combo'].currentText()
         if control_name != "Select Input...":
-            primary_light = theme_manager.get("primary_light", "#f4c430")
             axis_info = QLabel(f"Uses both X and Y axes of {control_name} for tank steering")
-            axis_info.setStyleSheet(f"color: {primary_light}; font-weight: bold; padding: 3px 0px; font-size: 10px;")
+            self.update_tank_steering_info_style(axis_info)
             self.params_layout.addWidget(axis_info)
         
         left_servo_combo = QComboBox()
@@ -905,15 +888,14 @@ class ControllerConfigScreen(BaseScreen):
         """Add a parameter section header"""
         header = QLabel(text)
         header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        primary = theme_manager.get("primary_color", "#e1a014")
-        header.setStyleSheet(f"color: {primary}; padding: 6px 0px; margin-bottom: 10px;")
+        self.update_param_header_style(header)
         self.params_layout.addWidget(header)
 
     def _add_param_row(self, label_text: str, widget: QWidget):
         """Add a parameter row with label and control"""
         if label_text:
             label = QLabel(label_text)
-            label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px;")
+            self.update_param_label_style(label)
             self.params_layout.addWidget(label)
         
         widget.setStyleSheet(self._get_param_widget_style())
@@ -1084,17 +1066,143 @@ class ControllerConfigScreen(BaseScreen):
                 self.logger.error(f"Error handling controller input: {e}")
 
     # ========================================
+    # THEME UPDATE METHODS
+    # ========================================
+    
+    def update_theme(self):
+        """Update all UI elements when theme changes"""
+        self.update_config_frame_style()
+        self.update_parameters_panel_style()
+        self.update_header_style()
+        self.update_conflict_warning_style()
+        self.update_scroll_area_style()
+        self.update_params_header_style()
+        
+        # Update column headers
+        if hasattr(self, 'header_labels'):
+            for header_label in self.header_labels:
+                self.update_column_header_style(header_label)
+        
+        # Update buttons
+        if hasattr(self, 'add_btn'):
+            self.update_button_style(self.add_btn)
+        if hasattr(self, 'save_btn'):
+            self.update_button_style(self.save_btn)
+            
+        # Update all existing row widgets
+        for row_data in self.mapping_rows:
+            row_data['input_combo'].setStyleSheet(self._get_combo_style())
+            row_data['type_combo'].setStyleSheet(self._get_combo_style())
+            row_data['behavior_combo'].setStyleSheet(self._get_combo_style())
+            row_data['target_label'].setStyleSheet(self._get_target_label_style())
+            row_data['select_btn'].setStyleSheet(self._get_small_button_style())
+            row_data['remove_btn'].setStyleSheet(self._get_remove_button_style())
+        
+        # Update no selection message if visible
+        if hasattr(self, 'no_selection_label'):
+            self.update_no_selection_style()
+
+    def update_config_frame_style(self):
+        """Update main config frame styling"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        self.config_frame.setStyleSheet(f"border: 2px solid {primary}; border-radius: 10px; background-color: {panel_bg};")
+
+    def update_parameters_panel_style(self):
+        """Update parameters panel styling"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        self.parameters_panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {panel_bg};
+                border: 2px solid {primary};
+                border-radius: 10px;
+                color: white;
+            }}
+        """)
+
+    def update_header_style(self):
+        """Update main header styling"""
+        primary = theme_manager.get("primary_color")
+        self.header.setStyleSheet(f"color: {primary}; padding: 10px; border: none;")
+
+    def update_column_header_style(self, header_label):
+        """Update column header styling"""
+        primary = theme_manager.get("primary_color")
+        header_label.setStyleSheet(f"color: {primary}; padding: 8px;")
+
+    def update_conflict_warning_style(self):
+        """Update conflict warning styling"""
+        red = theme_manager.get("red")
+        self.conflict_warning.setStyleSheet(f"color: {red}; background-color: rgba(204, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 5px 0px;")
+
+    def update_scroll_area_style(self):
+        """Update scroll area styling"""
+        expanded_bg = theme_manager.get("expanded_bg")
+        self.scroll_area.setStyleSheet(f"border: 1px solid #555; background-color: {expanded_bg};")
+
+    def update_params_header_style(self):
+        """Update parameters header styling"""
+        primary = theme_manager.get("primary_color")
+        self.params_header.setStyleSheet(f"color: {primary}; padding: 6px; border: none;")
+
+    def update_param_header_style(self, header):
+        """Update parameter section header styling"""
+        primary = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary}; padding: 6px 0px; margin-bottom: 10px;")
+
+    def update_param_label_style(self, label):
+        """Update parameter label styling"""
+        label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px;")
+
+    def update_axis_info_style(self, label):
+        """Update axis info label styling"""
+        grey = theme_manager.get("grey")
+        label.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px;")
+
+    def update_tank_steering_info_style(self, label):
+        """Update tank steering info label styling"""
+        primary_light = theme_manager.get("primary_light")
+        label.setStyleSheet(f"color: {primary_light}; font-weight: bold; padding: 3px 0px; font-size: 10px;")
+
+    def update_warning_style(self, warning):
+        """Update warning label styling"""
+        red = theme_manager.get("red")
+        warning.setStyleSheet(f"color: {red}; background-color: rgba(204, 68, 68, 0.1); padding: 6px; border-radius: 4px; margin-bottom: 8px; font-size: 10px;")
+
+    def update_no_selection_style(self):
+        """Update no selection message styling"""
+        grey = theme_manager.get("grey")
+        self.no_selection_label.setStyleSheet(f"color: {grey}; padding: 15px; text-align: center; font-size: 11px;")
+
+    def update_button_style(self, button):
+        """Update button styling"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        button.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {primary_light}, stop:1 {primary});
+                border: 2px solid {primary};
+                border-radius: 8px;
+                color: black;
+                font-weight: bold;
+                padding: 10px 20px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background: {primary_light};
+            }}
+        """)
+
+    # ========================================
     # STYLING METHODS
     # ========================================
     
-    def _get_button_style(self):
-        """Get standard button styling"""
-        return theme_manager.get_button_style("default")
-    
     def _get_small_button_style(self, selected=False):
         """Get small button styling"""
-        primary = theme_manager.get("primary_color", "#e1a014")
-        primary_dark = theme_manager.get("primary_dark", "#b8850f")
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
         
         if selected:
             return f"""
@@ -1108,7 +1216,7 @@ class ControllerConfigScreen(BaseScreen):
                     font-weight: bold;
                 }}
                 QPushButton:hover {{
-                    background-color: {primary_dark};
+                    background-color: {primary_light};
                 }}
             """
         else:
@@ -1129,7 +1237,7 @@ class ControllerConfigScreen(BaseScreen):
     
     def _get_remove_button_style(self):
         """Get remove button styling"""
-        red = theme_manager.get("red", "#cc4444")
+        red = theme_manager.get("red")
         return f"""
             QPushButton {{
                 background-color: transparent;
@@ -1148,9 +1256,9 @@ class ControllerConfigScreen(BaseScreen):
     
     def _get_combo_style(self, error=False):
         """Get combobox styling"""
-        primary = theme_manager.get("primary_color", "#e1a014")
-        red = theme_manager.get("red", "#cc4444") 
-        panel_bg = theme_manager.get("panel_bg", "#181818")
+        primary = theme_manager.get("primary_color")
+        red = theme_manager.get("red") 
+        panel_bg = theme_manager.get("panel_bg")
         border_color = red if error else primary
         
         return f"""
@@ -1181,11 +1289,16 @@ class ControllerConfigScreen(BaseScreen):
                 selection-color: black;
             }}
         """
+
+    def _get_target_label_style(self):
+        """Get target label styling"""
+        grey = theme_manager.get("grey")
+        return f"color: {grey}; padding: 8px; border: 1px solid #555; border-radius: 4px;"
     
     def _get_param_widget_style(self):
         """Get parameter widget styling"""
-        primary = theme_manager.get("primary_color", "#e1a014")
-        panel_bg = theme_manager.get("panel_bg", "#181818")
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
         
         return f"""
             QWidget {{
@@ -1230,28 +1343,8 @@ class ControllerConfigScreen(BaseScreen):
         """
 
     # ========================================
-    # COMPATIBILITY & THEME METHODS
+    # COMPATIBILITY & CLEANUP METHODS
     # ========================================
-    
-    def update_theme(self):
-        """Theme update compatibility method"""
-        primary = theme_manager.get("primary_color", "#e1a014")
-        panel_bg = theme_manager.get("panel_bg", "#181818")
-        
-        # Update parameters panel
-        if hasattr(self, 'parameters_panel') and self.parameters_panel:
-            self.parameters_panel.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {panel_bg};
-                    border: 2px solid {primary};
-                    border-radius: 10px;
-                    color: white;
-                }}
-            """)
-        
-        # Update main config frame
-        if hasattr(self, 'config_frame') and self.config_frame:
-            self.config_frame.setStyleSheet(f"border: 2px solid {primary}; border-radius: 10px; background-color: {panel_bg};")
     
     def cleanup(self):
         """Cleanup resources"""

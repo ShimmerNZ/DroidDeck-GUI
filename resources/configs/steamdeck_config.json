@@ -3,10 +3,10 @@
     "esp32_cam_url": "http://10.1.1.203:81/stream",
     "camera_proxy_url": "http://10.1.1.230:8081/stream",
     "control_websocket_url": "ws://10.1.1.230:8766",
-    "debug_level": "ERROR",
+    "debug_level": "INFO",
     "module_debug": {
       "camera": "ERROR",
-      "servo": "ERROR",
+      "servo": "DEBUG",
       "network": "ERROR",
       "websocket": "WARNING",
       "telemetry": "INFO",

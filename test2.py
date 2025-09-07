@@ -354,13 +354,10 @@ if __name__ == "__main__":
         def warning(self, msg): print(f"WARNING: {msg}")
         def error(self, msg): print(f"ERROR: {msg}")
     
-    # Mock the core.logger module for standalone testing
-    import types
-    mock_logger_module = types.ModuleType('core.logger')
-    mock_logger_module.get_logger = lambda name: SimpleLogger()
-    sys.modules['core.logger'] = mock_logger_module
+    # Override logger for standalone testing
+    import core.logger
+    core.logger.get_logger = lambda name: SimpleLogger()
     
-    # Now we can create the monitor
     monitor = NetworkMonitorThread(pi_ip='10.1.1.230')
     
     print("\n=== Testing Ping ===")

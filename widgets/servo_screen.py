@@ -112,10 +112,22 @@ class ServoConfigScreen(BaseScreen):
     position_update_signal = pyqtSignal(str, int)
     status_update_signal = pyqtSignal(str, bool, bool)
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, websocket=None):
+
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
+        
+        # Add WebSocket connection monitoring
+        self.ws_connection_timer = QTimer()
+        self.ws_connection_timer.timeout.connect(self.check_websocket_and_detect)
+        self.ws_connection_timer.start(2000)  # Check every 2 seconds
+        
+        # Track if we've done initial detection
+        self.initial_detection_done = False
+        
+        # Call existing init
+        super().__init__(websocket)
+
     
     def __del__(self):
         """Clean up theme manager callback on destruction"""
@@ -615,7 +627,48 @@ class ServoConfigScreen(BaseScreen):
                 color: white;
             }}
         """)
+
+    def check_websocket_and_detect(self):
+        """Check if WebSocket is connected and trigger detection if needed"""
+        if self.websocket and self.websocket.is_connected():
+            if not self.initial_detection_done:
+                self.logger.info("WebSocket connected - triggering automatic maestro detection")
+                self.detect_all_maestros()
+                self.initial_detection_done = True
+                # Stop the timer once we've done initial detection
+                self.ws_connection_timer.stop()
+        else:
+            # Reset detection flag if WebSocket disconnects
+            self.initial_detection_done = False
+
+    def detect_all_maestros(self):
+        """Detect both Maestro 1 and 2 automatically"""
+        if not self.websocket or not self.websocket.is_connected():
+            self.update_status("Cannot detect maestros: WebSocket not connected", error=True)
+            return
         
+        self.update_status("Auto-detecting maestro controllers...")
+        
+        # Request info for both maestros
+        for maestro_num in [1, 2]:
+            success = self.send_websocket_message("get_maestro_info", maestro=maestro_num)
+            if success:
+                self.logger.info(f"Requested auto-detection for Maestro {maestro_num}")
+            else:
+                self.logger.warning(f"Failed to request info for Maestro {maestro_num}")
+
+    def showEvent(self, event):
+        """Override showEvent to trigger detection when screen becomes visible"""
+        super().showEvent(event)
+        
+        # If WebSocket is connected but we haven't detected, do it now
+        if (self.websocket and 
+            self.websocket.is_connected() and 
+            not self.initial_detection_done):
+            
+            self.logger.info("Servo screen shown - triggering maestro detection")
+            QTimer.singleShot(500, self.detect_all_maestros)
+
     def safe_initialization(self):
         """Safe initialization that queries the selected Maestro"""
         try:
@@ -636,30 +689,51 @@ class ServoConfigScreen(BaseScreen):
             self.update_status(f"Initialization failed: {str(e)}", error=True)
     
     def request_current_maestro_info(self):
-        """Request information for the currently selected Maestro"""
+        """Enhanced maestro info request with retry logic"""
         maestro_num = self.current_maestro + 1
         self.update_status(f"Detecting Maestro {maestro_num} controller...")
+        
+        if not self.websocket or not self.websocket.is_connected():
+            self.update_status("Cannot detect maestro: WebSocket not connected", error=True)
+            # Restart the connection monitoring timer
+            if not self.ws_connection_timer.isActive():
+                self.ws_connection_timer.start(2000)
+            return
         
         success = self.send_websocket_message("get_maestro_info", maestro=maestro_num)
         if success:
             self.logger.info(f"Requested info for Maestro {maestro_num}")
+            # Set a timeout to retry if no response
+            QTimer.singleShot(5000, self.check_detection_timeout)
         else:
-            self.update_status("Failed to request Maestro info: WebSocket not connected", error=True)
-    
+            self.update_status("Failed to request Maestro info: WebSocket error", error=True)
+
+        
+    # Enhanced refresh method
     def refresh_current_maestro(self):
-        """Refresh only the currently selected Maestro"""
+        """Enhanced refresh with better status feedback"""
         # Stop any active operations
         self.stop_all_sweeps()
         if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
             self.position_update_timer.stop()
         
         # Clear current state
-        self.maestro_connected[self.current_maestro + 1] = False
-        self.maestro_channel_counts[self.current_maestro + 1] = 0
+        maestro_num = self.current_maestro + 1
+        self.maestro_connected[maestro_num] = False
+        self.maestro_channel_counts[maestro_num] = 0
         
-        # Request fresh info
+        # Clear the grid immediately
+        self.clear_grid()
+        
+        # Request fresh info with better feedback
+        self.update_status(f"Refreshing Maestro {maestro_num}...")
         self.request_current_maestro_info()
         self.reload_servo_config()
+
+    def update_maestro_selector_status(self):
+        """Update the maestro selector to show which ones are detected"""
+        pass
+
         
     @error_boundary
     def handle_websocket_message(self, message: str):
@@ -674,6 +748,7 @@ class ServoConfigScreen(BaseScreen):
                 connected = data.get("connected", False)
                 
                 if maestro_num in [1, 2]:
+                    old_count = self.maestro_channel_counts.get(maestro_num, 0)
                     self.maestro_channel_counts[maestro_num] = channels
                     self.maestro_connected[maestro_num] = connected
                     self.logger.info(f"Maestro {maestro_num}: {channels} channels, connected: {connected}")
@@ -681,9 +756,17 @@ class ServoConfigScreen(BaseScreen):
                     if connected:
                         self.update_status(f"Maestro {maestro_num}: {channels} channels detected")
                         # Only update grid if this is the currently selected Maestro
-                        if maestro_num == self.current_maestro + 1:
+                        if (maestro_num == self.current_maestro + 1 and 
+                            channels != old_count and channels > 0):
+                            self.logger.info(f"Channel count changed for current maestro: {old_count} -> {channels}")
                             self.update_grid()
                             QTimer.singleShot(500, self.read_all_positions_now)
+                        # Only update grid if this is the currently selected Maestro (existing logic)
+                        elif maestro_num == self.current_maestro + 1:
+                            self.update_grid()
+                            QTimer.singleShot(500, self.read_all_positions_now)
+
+                        self.update_maestro_selector_status()
                     else:
                         self.update_status(f"Maestro {maestro_num}: Not connected", error=True)
             
@@ -747,6 +830,14 @@ class ServoConfigScreen(BaseScreen):
             pos_label.setStyleSheet(f"color: {green}; background: transparent;")
             
             self.logger.debug(f"Updated display: {channel_key} = {position}")
+
+    def check_detection_timeout(self):
+        """Check if detection timed out and retry if needed"""
+        maestro_num = self.current_maestro + 1
+        
+        if not self.maestro_connected.get(maestro_num, False):
+            self.logger.warning(f"Maestro {maestro_num} detection timed out, retrying...")
+            self.request_current_maestro_info()
     
     def update_status_threadsafe(self, message: str, error: bool = False, warning: bool = False):
         """Thread-safe status update"""
@@ -1212,11 +1303,26 @@ class ServoConfigScreen(BaseScreen):
         if key not in self.servo_config:
             self.servo_config[key] = {}
         self.servo_config[key][field] = value
+        
+        # Send specific websocket messages for speed and acceleration
+        if field == "speed":
+            self.send_websocket_message("servo_speed", channel=key, speed=value)
+            self.logger.debug(f"Sent servo_speed: {key} = {value}")
+        elif field == "accel":
+            self.send_websocket_message("servo_acceleration", channel=key, acceleration=value)
+            self.logger.debug(f"Sent servo_acceleration: {key} = {value}")
+        
         self.save_config()
     
     def cleanup(self):
-        """Cleanup servo screen resources"""
+        """Enhanced cleanup to stop timers"""
         self.stop_all_operations()
+        
+        # Stop the WebSocket monitoring timer
+        if hasattr(self, 'ws_connection_timer'):
+            self.ws_connection_timer.stop()
+        
+        self.logger.info("Servo screen cleanup completed")
 
 
 class MinMaxSweep:

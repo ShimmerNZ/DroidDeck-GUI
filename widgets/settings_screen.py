@@ -315,7 +315,7 @@ class SettingsScreen(BaseScreen):
             combo.setFont(font)
             combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
             combo.setFixedHeight(30)
-            combo.setMaximumWidth(120)
+            combo.setFixedWidth(120)
             self._update_combo_style(combo)
 
             self.debug_combos[key] = combo
@@ -654,12 +654,12 @@ class SettingsScreen(BaseScreen):
         # Theme selector state - ensure buttons reflect current theme
         self._update_theme_button_styles()
 
-    @error_boundary
+    
     def save_config(self):
         """Validate and save settings to file"""
         if not self._validate_inputs():
             return
-
+        
         try:
             existing = config_manager.get_config(self.config_path)
         except Exception:
@@ -689,8 +689,12 @@ class SettingsScreen(BaseScreen):
             },
             "defaults": existing.get("defaults", {})
         }
+        try:
+            success = config_manager.save_config(self.config_path, new_config)
+        except Exception as e:
+            self.logger.error(f"Error saving configuration: {e}")
+            success = False
 
-        success = config_manager.save_config(self.config_path, new_config)
         if success:
             if self.websocket:
                 self.send_websocket_message(

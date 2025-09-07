@@ -249,9 +249,10 @@ class HomeScreen(BaseScreen):
             btn = QPushButton(cat)
             btn.setCheckable(True)
             btn.setFont(font)
-            btn.setMinimumSize(10, 40)
+            btn.setMinimumSize(130, 40)
             btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
             btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
+            
             
             # Calculate row and column for grid placement
             row = idx // buttons_per_row
@@ -290,7 +291,16 @@ class HomeScreen(BaseScreen):
 
     def _get_category_button_style(self, selected: bool) -> str:
         """Get category button style based on current theme"""
-        return theme_manager.get_button_style("primary", checked=selected)
+        base_style = theme_manager.get_button_style("primary", checked=selected)
+        
+        # Add custom padding to prevent text cutoff
+        custom_padding = """
+            QPushButton {
+                padding: 2px 4px;
+            }
+        """
+        
+        return base_style + custom_padding
 
     def _on_category_selected(self, idx: int):
         # Ensure single-selection behaviour
@@ -365,7 +375,7 @@ class HomeScreen(BaseScreen):
                 border: 2px solid {grey};
                 border-radius: 6px;
                 color: {primary_color};
-                padding: 4px;
+                padding: 4px 0px;
             }}
         """)
 

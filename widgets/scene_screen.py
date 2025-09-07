@@ -253,6 +253,9 @@ class EnhancedSceneRow(QWidget):
         """Update styling when theme changes"""
         self.update_main_row_style()
         self.update_details_style()
+        self.update_name_edit_style()
+        self.update_button_theme_colors()
+        self.update_expand_indicator_style()  
         if hasattr(self, 'category_selector'):
             self.category_selector.update_style()
     
@@ -291,6 +294,80 @@ class EnhancedSceneRow(QWidget):
                 }}
             """)
     
+    def update_name_edit_style(self):
+        """Update name edit field styling"""
+        card_bg = theme_manager.get("card_bg")
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        
+        self.name_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {card_bg};
+                border: 2px solid {primary};
+                border-radius: 6px;
+                color: {primary};
+                padding: 5px 15px;
+                font-size: 16px;
+                font-weight: bold;
+            }}
+            QLineEdit:focus {{
+                border-color: {primary_light};
+                background-color: #2a2a2a;
+            }}
+        """)
+    
+    def update_button_theme_colors(self):
+        """Update Audio and Script button colors based on theme"""
+        primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
+        
+        audio_enabled = self.audio_cb.isChecked() if hasattr(self, 'audio_cb') else self.scene_data.get("audio_enabled", False)
+        script_enabled = self.script_cb.isChecked() if hasattr(self, 'script_cb') else self.scene_data.get("script_enabled", False)
+        
+        # Update audio indicator
+        self.audio_indicator.setStyleSheet(f"""
+            QLabel {{
+                font-size: 14px;
+                border: 2px solid {'#666' if not audio_enabled else primary};
+                background: {primary if audio_enabled else 'transparent'};
+                color: {'white' if audio_enabled else grey};
+                padding: 4px;
+                font-weight: bold;
+            }}
+        """)
+        
+        # Update script indicator  
+        self.script_indicator.setStyleSheet(f"""
+            QLabel {{
+                font-size: 14px;
+                border: 2px solid {'#666' if not script_enabled else primary};
+                background: {primary if script_enabled else 'transparent'};
+                color: {'white' if script_enabled else grey};
+                padding: 4px;
+                font-weight: bold;
+            }}
+        """)
+        
+    def update_expand_indicator_style(self):
+        """Update expand indicator color based on theme"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        
+        if self.is_expanded:
+            color = primary_light
+        else:
+            color = primary
+            
+        self.expand_indicator.setStyleSheet(f"""
+            QLabel {{
+                color: {color};
+                font-weight: bold;
+                font-size: 18px;
+                border: none;
+                background: transparent;
+            }}
+        """)
+
     def create_main_row(self):
         self.main_row = QWidget()
         self.main_row.setFixedHeight(70)
@@ -321,23 +398,7 @@ class EnhancedSceneRow(QWidget):
         
         # Name field
         self.name_edit = QLineEdit(self.scene_data.get("label", ""))
-        card_bg = theme_manager.get("card_bg")
-        primary_light = theme_manager.get("primary_light")
-        self.name_edit.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 6px;
-                color: {primary};
-                padding: 5px 15px;
-                font-size: 16px;
-                font-weight: bold;
-            }}
-            QLineEdit:focus {{
-                border-color: {primary_light};
-                background-color: #2a2a2a;
-            }}
-        """)
+        self.update_name_edit_style()
         self.name_edit.setMaxLength(32)
         self.name_edit.setFixedSize(220, 45)
         layout.addWidget(self.name_edit)
@@ -544,16 +605,18 @@ class EnhancedSceneRow(QWidget):
         layout.addStretch()
         
         self.main_layout.addWidget(self.details_widget)
-    
+        
     def update_details_style(self):
-        """Update details widget styling"""
+        """Update details styling when theme changes"""
         expanded_bg = theme_manager.get("expanded_bg")
-        dark_bg = theme_manager.get("dark_bg")
+        grey = theme_manager.get("grey")
         
         self.details_widget.setStyleSheet(f"""
             QWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {expanded_bg}, stop:1 {dark_bg});
+                background: {expanded_bg};
+                border: 2px solid {grey};
+                border-top: none;
+                border-radius: 0px 0px 8px 8px;
                 margin: 2px;
                 margin-top: 0px;
             }}
@@ -724,17 +787,8 @@ class EnhancedSceneRow(QWidget):
         """Expand to show details"""
         if not self.is_expanded:
             self.is_expanded = True
-            primary_light = theme_manager.get("primary_light")
             self.expand_indicator.setText("▼")
-            self.expand_indicator.setStyleSheet(f"""
-                QLabel {{
-                    color: {primary_light};
-                    font-weight: bold;
-                    font-size: 18px;
-                    border: none;
-                    background: transparent;
-                }}
-            """)
+            self.update_expand_indicator_style()  # Use theme-aware styling
             self.details_widget.show()
             self.update_main_row_style()
     
@@ -742,17 +796,8 @@ class EnhancedSceneRow(QWidget):
         """Collapse to hide details"""
         if self.is_expanded:
             self.is_expanded = False
-            primary = theme_manager.get("primary_color")
             self.expand_indicator.setText("▶")
-            self.expand_indicator.setStyleSheet(f"""
-                QLabel {{
-                    color: {primary};
-                    font-weight: bold;
-                    font-size: 18px;
-                    border: none;
-                    background: transparent;
-                }}
-            """)
+            self.update_expand_indicator_style()  # Use theme-aware styling
             self.details_widget.hide()
             self.update_main_row_style()
     
@@ -786,6 +831,7 @@ class EnhancedSceneRow(QWidget):
             "duration": self.duration_spin.value(),
             "delay": self.delay_spin.value() if (self.audio_cb.isChecked() and self.script_cb.isChecked()) else 0
         }
+
 class SceneScreen(BaseScreen):
     """Interface for managing emotion scenes and audio mappings with enhanced accordion layout"""
     
@@ -814,6 +860,7 @@ class SceneScreen(BaseScreen):
         self.update_main_frame_style()
         self.update_scroll_area_style()
         self.update_button_styles()
+        self.update_status_label_style()
         
         # Update all scene rows
         for row in self.scene_rows:
@@ -891,6 +938,20 @@ class SceneScreen(BaseScreen):
         self.refresh_btn.setStyleSheet(self.get_enhanced_button_style(False))
         self.save_btn.setStyleSheet(self.get_enhanced_button_style(False))
 
+    def update_status_label_style(self):
+        """Update status label styling"""
+        primary = theme_manager.get("primary_color")
+        self.status_label.setStyleSheet(f"""
+            QLabel {{
+                color: {primary};
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                background: transparent;
+                border: none;
+            }}
+        """)
+
     def init_ui(self):
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(100, 25, 40, 10)
@@ -944,10 +1005,10 @@ class SceneScreen(BaseScreen):
         
         # Status indicator
         self.status_label = QLabel("Ready")
-        green = theme_manager.get("green")
+        primary = theme_manager.get("primary_color")
         self.status_label.setStyleSheet(f"""
             QLabel {{
-                color: {green};
+                color: {primary};
                 font-size: 14px;
                 font-weight: bold;
                 padding: 10px;
@@ -1056,7 +1117,7 @@ class SceneScreen(BaseScreen):
     def update_status(self, message, color=None):
         """Update the status indicator"""
         if color is None:
-            color = theme_manager.get("green")
+            color = theme_manager.get("primary_color")
         self.status_label.setText(message)
         self.status_label.setStyleSheet(f"""
             QLabel {{
@@ -1183,8 +1244,8 @@ class SceneScreen(BaseScreen):
         if isinstance(config, list) and config:
             self.scenes_data = config
             self.update_scene_rows()
-            green = theme_manager.get("green")
-            self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", green)
+            primary = theme_manager.get("primary_color")
+            self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", primary)
             self.logger.debug(f"Loaded {len(self.scenes_data)} scenes from resources/configs/scenes_config.json")
             return
         
@@ -1250,8 +1311,8 @@ class SceneScreen(BaseScreen):
         self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
         
         scene_row.collapse()
-        green = theme_manager.get("green")
-        self.update_status(f"Added new scene", green)
+        primary = theme_manager.get("primary_color")
+        self.update_status(f"Added new scene", primary)
 
     @error_boundary
     def delete_scene_row(self, row_index):
@@ -1278,8 +1339,8 @@ class SceneScreen(BaseScreen):
                 for i, row in enumerate(self.scene_rows):
                     row.row_index = i
                 
-                green = theme_manager.get("green")
-                self.update_status(f"Deleted scene: {scene_name}", green)
+                primary = theme_manager.get("primary_color")
+                self.update_status(f"Deleted scene: {scene_name}", primary)
                 self.logger.info(f"Deleted scene: {scene_name} (index: {row_index})")
 
     @error_boundary

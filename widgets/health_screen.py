@@ -104,6 +104,7 @@ class HealthScreen(BaseScreen):
         self.battery_voltage_data = deque(maxlen=self.max_data_points)
         self.current_a0_data = deque(maxlen=self.max_data_points)
         self.current_a1_data = deque(maxlen=self.max_data_points)
+        self.current_a2_data = deque(maxlen=self.max_data_points)
         self.time_data = deque(maxlen=self.max_data_points)
         
         # Voltage curve (primary Y-axis) - use theme green
@@ -133,22 +134,31 @@ class HealthScreen(BaseScreen):
         
         self.current_a0_plot = pg.PlotCurveItem(
             pen=pg.mkPen(color=primary, width=3), 
-            name="Current Battery 1",
+            name="Left Track Current",
             antialias=True
         )
         self.current_view.addItem(self.current_a0_plot)
         
         self.current_a1_plot = pg.PlotCurveItem(
             pen=pg.mkPen(color=primary_light, width=3), 
-            name="Current Battery 2",
+            name="Right Track Current",
             antialias=True
         )
         self.current_view.addItem(self.current_a1_plot)
+
+        orange = "#FF8C00"  # Orange color for electronics
+        self.current_a2_plot = pg.PlotCurveItem(
+            pen=pg.mkPen(color=orange, width=3), 
+            name="Electronics Current",
+            antialias=True
+        )
+        self.current_view.addItem(self.current_a2_plot)
         
         # Add current items to legend
         legend = self.graph_widget.addLegend(offset=(30, 30))
-        legend.addItem(self.current_a0_plot, "Current A0")
-        legend.addItem(self.current_a1_plot, "Current A1")
+        legend.addItem(self.current_a0_plot, "Left Track (A0)")
+        legend.addItem(self.current_a1_plot, "Right Track (A1)")
+        legend.addItem(self.current_a2_plot, "Electronics (A2)")
 
     def _update_graph_theme(self):
         """Update graph background and styling with theme colors"""
@@ -242,7 +252,7 @@ class HealthScreen(BaseScreen):
             ("temp", "Temp: 0°C"),
             ("battery", "Battery: 0.0V"),
             ("ping", "Ping: -- ms"),
-            ("stream", "Stream: 0 FPS"),
+            ("adc_info", "ADC: 4-Channel Mode"),
             ("dfplayer", "Audio: Disconnected"),
             ("maestro1", "M1: Disconnected"),
             ("maestro2", "M2: Disconnected")
@@ -368,9 +378,12 @@ class HealthScreen(BaseScreen):
             if hasattr(self, 'current_a0_plot') and hasattr(self, 'current_a1_plot'):
                 primary = theme_manager.get("primary_color")
                 primary_light = theme_manager.get("primary_light")
+                orange = "#FF8C00"  # Orange color for electronics
                 self.current_a0_plot.setPen(pg.mkPen(color=primary, width=3))
                 self.current_a1_plot.setPen(pg.mkPen(color=primary_light, width=3))
-            
+                if hasattr(self, 'current_a2_plot'):
+                    self.current_a2_plot.setPen(pg.mkPen(color=orange, width=3))
+
             # Update status section
             if hasattr(self, 'status_frame'):
                 self._update_status_frame_style()
@@ -564,13 +577,16 @@ class HealthScreen(BaseScreen):
             self.status_update_signal.emit(data)
             
             # Update graph data
-            current_a0 = data.get("current", 0.0)
-            current_a1 = data.get("current_a1", 0.0)
+            current_a0 = (data.get("current_left_track"))
+            current_a1 = (data.get("current_right_track"))
+            current_a2 = (data.get("current_electronics"))
+                          
             relative_time = current_time - self.start_time
             
             self.battery_voltage_data.append(float(battery_voltage))
             self.current_a0_data.append(float(current_a0))
             self.current_a1_data.append(float(current_a1))
+            self.current_a2_data.append(float(current_a2))
             self.time_data.append(relative_time)
             
             # Update graphs
@@ -608,14 +624,17 @@ class HealthScreen(BaseScreen):
         updates["mem"] = f"Memory: {mem}%"
         updates["temp"] = f"Temp: {temp}°C"
         
-        # Stream info
-        stream = data.get("stream", {})
-        updates["stream"] = f"Stream: {stream.get('fps', 0)} FPS"
-        
         # Audio system
         audio = data.get("audio_system", {})
         updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}"
-        
+                
+        # ADC info with 4-channel status
+        adc_available = data.get("adc_available", False)
+        if adc_available:
+            updates["adc_info"] = "ADC: 4-Ch Active"
+        else:
+            updates["adc_info"] = "ADC: Simulated"
+
         # Maestro status - shortened for panel
         m1 = data.get("maestro1", {})
         m2 = data.get("maestro2", {})
@@ -657,12 +676,14 @@ class HealthScreen(BaseScreen):
             voltage_list = list(self.battery_voltage_data)
             current_a0_list = list(self.current_a0_data)
             current_a1_list = list(self.current_a1_data)
+            current_a2_list = list(self.current_a2_data)
             
             if len(time_list) > 1 and len(voltage_list) > 1:
                 # Update curves
                 self.voltage_curve.setData(time_list, voltage_list)
                 self.current_a0_plot.setData(time_list, current_a0_list)
                 self.current_a1_plot.setData(time_list, current_a1_list)
+                self.current_a2_plot.setData(time_list, current_a2_list)
                 
                 self.graph_widget.update()
                 
