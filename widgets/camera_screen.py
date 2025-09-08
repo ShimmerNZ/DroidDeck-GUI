@@ -4,18 +4,20 @@ WALL-E Control System - Camera Feed Screen (Themed)
 - Wider right panel (380px) to prevent button crowding
 - Theme-aware color styling throughout
 - Full theme support for all UI elements
+- Added debouncing for camera settings to prevent excessive HTTP requests
 """
 import os
 import time
 import requests
 from collections import deque
+from typing import Dict, Any, Callable
 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
     QCheckBox, QWidget, QSizePolicy
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QTimer
 
 from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread
@@ -25,12 +27,124 @@ from core.utils import error_boundary
 from core.logger import get_logger
 
 
+class CameraSettingsDebouncer:
+    """
+    Debounces camera settings changes to prevent excessive HTTP requests.
+    Collects multiple rapid changes and sends them as a single batch request.
+    """
+    
+    def __init__(self, proxy_base_url: str, delay_ms: int = 500):
+        self.proxy_base_url = proxy_base_url
+        self.delay_ms = delay_ms
+        self.logger = get_logger("camera")
+        
+        # Timer for debouncing
+        self.debounce_timer = QTimer()
+        self.debounce_timer.setSingleShot(True)
+        self.debounce_timer.timeout.connect(self._send_batched_settings)
+        
+        # Pending settings to send
+        self.pending_settings: Dict[str, Any] = {}
+        
+        # Status callback for UI updates
+        self.status_callback: Callable[[str, str], None] = None
+    
+    def set_status_callback(self, callback: Callable[[str, str], None]):
+        """Set callback for status updates (message, color)"""
+        self.status_callback = callback
+    
+    def update_setting(self, key: str, value: Any):
+        """
+        Queue a setting change for debounced sending.
+        
+        Args:
+            key: Setting name (e.g., 'brightness', 'contrast', 'resolution')
+            value: Setting value
+        """
+        self.pending_settings[key] = value
+        
+        # Restart the timer - this cancels any previous timer
+        self.debounce_timer.stop()
+        self.debounce_timer.start(self.delay_ms)
+        
+        # Update UI to show pending state
+        if self.status_callback:
+            pending_count = len(self.pending_settings)
+            self.status_callback(
+                f"Pending: {pending_count} setting{'s' if pending_count != 1 else ''}...", 
+                "#FFAA00"  # Orange for pending
+            )
+        
+        self.logger.debug(f"Queued setting: {key}={value}, pending: {list(self.pending_settings.keys())}")
+    
+    def _send_batched_settings(self):
+        """Send all pending settings in a single HTTP request"""
+        if not self.pending_settings:
+            return
+        
+        settings_to_send = self.pending_settings.copy()
+        self.pending_settings.clear()
+        
+        try:
+            self.logger.info(f"Sending batched settings: {settings_to_send}")
+            
+            if self.status_callback:
+                self.status_callback("Updating camera...", "#FFAA00")
+            
+            response = requests.post(
+                f"{self.proxy_base_url}/camera/settings", 
+                json=settings_to_send, 
+                timeout=3
+            )
+            
+            if response.status_code == 200:
+                success_msg = f"Updated {len(settings_to_send)} setting{'s' if len(settings_to_send) != 1 else ''}"
+                if self.status_callback:
+                    self.status_callback(success_msg, "#44FF44")  # Green for success
+                self.logger.info(f"Successfully updated settings: {list(settings_to_send.keys())}")
+            else:
+                error_msg = f"Update failed: HTTP {response.status_code}"
+                if self.status_callback:
+                    self.status_callback(error_msg, "#FF4444")  # Red for error
+                self.logger.error(f"Settings update failed: HTTP {response.status_code}")
+                
+        except requests.exceptions.Timeout:
+            error_msg = "Update timeout"
+            if self.status_callback:
+                self.status_callback(error_msg, "#FF4444")
+            self.logger.error("Settings update timeout")
+            
+        except Exception as e:
+            error_msg = f"Update error: {str(e)[:30]}"
+            if self.status_callback:
+                self.status_callback(error_msg, "#FF4444")
+            self.logger.error(f"Settings update error: {e}")
+    
+    def force_send_now(self):
+        """Immediately send any pending settings (for critical changes)"""
+        if self.debounce_timer.isActive():
+            self.debounce_timer.stop()
+            self._send_batched_settings()
+    
+    def has_pending_changes(self) -> bool:
+        """Check if there are pending changes"""
+        return bool(self.pending_settings) or self.debounce_timer.isActive()
+    
+    def clear_pending(self):
+        """Clear all pending changes without sending"""
+        self.debounce_timer.stop()
+        self.pending_settings.clear()
+        if self.status_callback:
+            self.status_callback("Ready", "#44FF44")
+
+
 class CameraControlsWidget(QWidget):
     """
-    Camera controls panel (unified side panel) with theme manager integration
+    Camera controls panel (unified side panel) with theme manager integration and debouncing
     - Theme-aware bordered outer wrapper (header/settings/actions/status)
     - ESP32 SETTINGS contains all camera/image controls
     - ACTIONS contains Reset + Start Stream + Track Person toggle buttons
+    - Debounced settings to prevent excessive HTTP requests
     """
 
     def __init__(self, stream_button: QPushButton, track_button: QPushButton, parent=None):
@@ -45,11 +159,26 @@ class CameraControlsWidget(QWidget):
         self.stream_button = stream_button
         self.track_button = track_button
 
+        # Initialize debouncer
+        self.settings_debouncer = CameraSettingsDebouncer(
+            proxy_base_url=self.proxy_base_url,
+            delay_ms=500  # 500ms delay
+        )
+        self.settings_debouncer.set_status_callback(self._update_status_display)
+
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
 
         self.init_ui()
         self.load_current_settings()
+
+    def _update_status_display(self, message: str, color: str):
+        """Update status display with color"""
+        if hasattr(self, 'status_label'):
+            self.status_label.setText(message)
+            self.status_label.setStyleSheet(
+                f"color: {color}; border: none; padding: 3px; text-align: center;"
+            )
 
     def init_ui(self):
         """Initialize the camera controls UI with theme-aware styling."""
@@ -178,7 +307,7 @@ class CameraControlsWidget(QWidget):
         self._update_section_header_style(self.esp32_header)
         esp32_layout.addWidget(self.esp32_header)
 
-        # XCLK Frequency
+        # XCLK Frequency - immediate update (affects stream)
         xclk_layout = QHBoxLayout()
         xclk_label = QLabel("XCLK MHz:")
         xclk_label.setFont(QFont("Arial", 12))
@@ -195,7 +324,7 @@ class CameraControlsWidget(QWidget):
         xclk_btn = QPushButton("SET")
         xclk_btn.setFont(QFont("Arial", 11))
         xclk_btn.setFixedSize(45, 28)
-        xclk_btn.clicked.connect(lambda: self.update_setting("xclk_freq", self.xclk_spin.value()))
+        xclk_btn.clicked.connect(lambda: self.settings_debouncer.force_send_now() if self._update_xclk() else None)
         xclk_btn.setStyleSheet(self._get_base_button_style())
 
         xclk_layout.addWidget(xclk_label)
@@ -204,7 +333,7 @@ class CameraControlsWidget(QWidget):
         xclk_layout.addStretch()
         esp32_layout.addLayout(xclk_layout)
 
-        # Resolution
+        # Resolution - immediate update (affects stream significantly)
         res_layout = QHBoxLayout()
         res_label = QLabel("Resolution:")
         res_label.setFont(QFont("Arial", 12))
@@ -220,15 +349,13 @@ class CameraControlsWidget(QWidget):
         self.resolution_combo.setCurrentIndex(5)  # VGA
         self.resolution_combo.setFont(QFont("Arial", 11))
         self._update_combobox_style(self.resolution_combo)
-        self.resolution_combo.currentIndexChanged.connect(
-            lambda idx: self.update_setting("resolution", idx)
-        )
+        self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
 
         res_layout.addWidget(res_label)
         res_layout.addWidget(self.resolution_combo)
         esp32_layout.addLayout(res_layout)
 
-        # ---- Image Controls (sliders) ----
+        # ---- Image Controls (sliders) - all debounced ----
         self.quality_slider, quality_layout = self.create_slider_control(
             "Quality:", 4, 63, 12, "quality"
         )
@@ -249,7 +376,7 @@ class CameraControlsWidget(QWidget):
         )
         esp32_layout.addLayout(saturation_layout)
 
-        # Mirror controls (H, V) with theme-aware styling when toggled
+        # Mirror controls (H, V) with debounced updates
         mirror_layout = QHBoxLayout()
         mirror_label = QLabel("Mirror:")
         mirror_label.setFont(QFont("Arial", 12))
@@ -262,7 +389,7 @@ class CameraControlsWidget(QWidget):
         self.h_mirror_btn.setFont(QFont("Arial", 11))
         self.h_mirror_btn.setToolTip("Horizontal Mirror")
         self.h_mirror_btn.clicked.connect(
-            lambda checked: self.update_setting("h_mirror", checked)
+            lambda checked: self.settings_debouncer.update_setting("h_mirror", checked)
         )
         self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
@@ -272,7 +399,7 @@ class CameraControlsWidget(QWidget):
         self.v_flip_btn.setFont(QFont("Arial", 11))
         self.v_flip_btn.setToolTip("Vertical Flip")
         self.v_flip_btn.clicked.connect(
-            lambda checked: self.update_setting("v_flip", checked)
+            lambda checked: self.settings_debouncer.update_setting("v_flip", checked)
         )
         self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
@@ -284,6 +411,16 @@ class CameraControlsWidget(QWidget):
 
         esp32_frame.setLayout(esp32_layout)
         return esp32_frame
+
+    def _update_xclk(self) -> bool:
+        """Update XCLK frequency immediately and return True"""
+        self.settings_debouncer.update_setting("xclk_freq", self.xclk_spin.value())
+        return True
+
+    def _on_resolution_changed(self, index: int):
+        """Handle resolution change - send immediately due to stream impact"""
+        self.settings_debouncer.update_setting("resolution", index)
+        self.settings_debouncer.force_send_now()  # Immediate send for resolution
 
     def _create_actions_section(self):
         """Create camera actions section: Reset + Start Stream + Track Person (toggles)"""
@@ -303,7 +440,7 @@ class CameraControlsWidget(QWidget):
         # Reset button
         self.reset_btn = QPushButton("🔄 RESET TO DEFAULTS")
         self.reset_btn.setFont(QFont("Arial", 12))
-        self.reset_btn.clicked.connect(self.reset_to_defaults)
+        self.reset_btn.clicked.connect(lambda: self.reset_to_defaults)
         self.reset_btn.setStyleSheet(self._get_base_button_style())
         actions_layout.addWidget(self.reset_btn)
 
@@ -382,7 +519,7 @@ class CameraControlsWidget(QWidget):
         """)
 
     def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name):
-        """Create a slider control with theme-aware styling."""
+        """Create a slider control with debounced updates and theme-aware styling."""
         layout = QHBoxLayout()
         layout.setSpacing(8)
 
@@ -403,8 +540,9 @@ class CameraControlsWidget(QWidget):
         value_label.setFixedWidth(30)
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Connect slider to update value label and debounced setting
         slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
-        slider.sliderReleased.connect(lambda: self.update_setting(setting_name, slider.value()))
+        slider.valueChanged.connect(lambda val: self.settings_debouncer.update_setting(setting_name, val))
 
         layout.addWidget(label)
         layout.addWidget(slider)
@@ -511,7 +649,7 @@ class CameraControlsWidget(QWidget):
                 settings = response.json()
                 self.current_settings = settings
 
-                # Update UI
+                # Update UI (without triggering debounced updates)
                 if "xclk_freq" in settings:
                     self.xclk_spin.setValue(settings["xclk_freq"])
                 if "resolution" in settings:
@@ -529,53 +667,31 @@ class CameraControlsWidget(QWidget):
                 if "v_flip" in settings:
                     self.v_flip_btn.setChecked(settings["v_flip"])
 
-                self.status_label.setText("Settings loaded")
-                green = theme_manager.get("green")
-                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
+                self._update_status_display("Settings loaded", "#44FF44")
                 self.logger.info("Loaded camera settings")
         except Exception as e:
-            self.status_label.setText("Failed to load settings")
-            red = theme_manager.get("red")
-            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
+            self._update_status_display("Failed to load settings", "#FF4444")
             self.logger.error(f"Failed to load camera settings: {e}")
 
     @error_boundary
     def update_setting(self, setting_name, value):
-        """Update a camera setting via the proxy."""
-        try:
-            if isinstance(value, bool):
-                value = "true" if value else "false"
-            response = requests.post(
-                f"{self.proxy_base_url}/camera/setting/{setting_name}",
-                params={"value": value},
-                timeout=3
-            )
-            if response.status_code == 200:
-                self.status_label.setText(f"Updated {setting_name}")
-                green = theme_manager.get("green")
-                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
-                self.current_settings[setting_name] = value
-                self.logger.info(f"Updated {setting_name} = {value}")
-            else:
-                self.status_label.setText(f"Failed to update {setting_name}")
-                red = theme_manager.get("red")
-                self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
-        except Exception as e:
-            self.status_label.setText(f"Error: {str(e)[:30]}")
-            red = theme_manager.get("red")
-            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
-            self.logger.error(f"Failed to update {setting_name}: {e}")
+        """Update a camera setting via the proxy (legacy method - now uses debouncer)."""
+        # This method is kept for backward compatibility but now uses the debouncer
+        self.settings_debouncer.update_setting(setting_name, value)
 
     @error_boundary
     def reset_to_defaults(self):
-        """Reset all settings to default values."""
+        """Reset all settings to default values with debouncer clear."""
+        # Clear any pending changes first
+        self.settings_debouncer.clear_pending()
+        
         defaults = {
             "xclk_freq": 10, "resolution": 5, "quality": 12,
             "brightness": 0, "contrast": 0, "saturation": 0,
             "h_mirror": False, "v_flip": False
         }
 
-        # Update UI
+        # Update UI controls (this will trigger debounced updates, but we'll override)
         self.xclk_spin.setValue(defaults["xclk_freq"])
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
         self.quality_slider.setValue(defaults["quality"])
@@ -585,30 +701,40 @@ class CameraControlsWidget(QWidget):
         self.h_mirror_btn.setChecked(defaults["h_mirror"])
         self.v_flip_btn.setChecked(defaults["v_flip"])
 
-        # Send to camera
+        # Send defaults immediately (this is a user action, bypass debouncer)
         try:
+            self._update_status_display("Resetting to defaults...", "#FFAA00")
             response = requests.post(f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3)
             if response.status_code == 200:
-                self.status_label.setText("Reset to defaults")
-                green = theme_manager.get("green")
-                self.status_label.setStyleSheet(f"color: {green}; border: none; padding: 3px; text-align: center;")
+                self._update_status_display("Reset to defaults", "#44FF44")
                 self.current_settings = defaults
+                # Clear any pending changes that might have been queued by UI updates
+                self.settings_debouncer.clear_pending()
+                self.logger.info("Reset camera settings to defaults")
             else:
-                self.status_label.setText("Failed to reset")
-                red = theme_manager.get("red")
-                self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
+                self._update_status_display("Reset failed", "#FF4444")
+                self.logger.error(f"Reset failed: HTTP {response.status_code}")
         except Exception as e:
-            self.status_label.setText(f"Error: {str(e)[:30]}")
-            red = theme_manager.get("red")
-            self.status_label.setStyleSheet(f"color: {red}; border: none; padding: 3px; text-align: center;")
+            error_msg = f"Error: {str(e)[:20]}"
+            self._update_status_display(error_msg, "#FF4444")
             self.logger.error(f"Failed to reset to defaults: {e}")
 
+    def cleanup(self):
+        """Clean up debouncer on widget destruction"""
+        if hasattr(self, 'settings_debouncer'):
+            # Send any final pending changes
+            if self.settings_debouncer.has_pending_changes():
+                self.settings_debouncer.force_send_now()
+
     def __del__(self):
-        """Clean up theme manager callback on destruction"""
+        """Clean up theme manager callback and debouncer on destruction"""
         try:
             theme_manager.unregister_callback(self._on_theme_changed)
         except:
             pass  # Ignore errors during cleanup
+        
+        # Cleanup debouncer
+        self.cleanup()
 
 
 class CameraFeedScreen(BaseScreen):
@@ -883,8 +1009,8 @@ class CameraFeedScreen(BaseScreen):
     def update_display(self, processed_data):
         """Update display with processed frame data."""
         try:
-            frame_rgb = processed_data['frame']
-            wave_detected = processed_data['wave_detected']
+            frame_rgb = processed_data.frame
+            wave_detected = processed_data.wave_detected
 
             if frame_rgb is None:
                 self.video_label.setText("Camera not available\n(OpenCV not installed)")
@@ -958,7 +1084,12 @@ class CameraFeedScreen(BaseScreen):
             self.image_thread.stop()
 
     def cleanup(self):
+        """Cleanup camera screen resources"""
         self.stop_camera_thread()
+        
+        # Cleanup controls widget debouncer
+        if hasattr(self, 'controls_widget'):
+            self.controls_widget.cleanup()
 
     def __del__(self):
         """Clean up theme manager callback on destruction"""
