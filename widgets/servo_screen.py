@@ -104,7 +104,6 @@ class HomePositionSlider(QSlider):
         painter.setPen(QColor(home_color))
         painter.drawPolygon(diamond)
 
-
 class ServoConfigScreen(BaseScreen):
     """Real-time servo control and configuration interface"""
     
@@ -113,6 +112,16 @@ class ServoConfigScreen(BaseScreen):
     status_update_signal = pyqtSignal(str, bool, bool)
     
     def __init__(self, websocket=None):
+        super().__init__(websocket)
+        # NEMA-specific initialization
+        self.nema_test_sweeping = False
+        self.position_update_timer = QTimer()
+        self.position_update_timer.setSingleShot(True)
+        self.position_update_timer.timeout.connect(self.send_position_to_backend)
+        
+        # Add WebSocket message handling
+        if websocket:
+            websocket.textMessageReceived.connect(self.handle_message)
 
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
@@ -126,8 +135,17 @@ class ServoConfigScreen(BaseScreen):
         self.initial_detection_done = False
         
         # Call existing init
-        super().__init__(websocket)
-
+        
+    @error_boundary
+    def load_config(self) -> dict:
+        """Load servo configuration from file"""
+        try:
+            config = config_manager.get_config("resources/configs/servo_config.json")
+            return config if config else {}
+        except Exception as e:
+            self.logger.error(f"Failed to load servo config: {e}")
+            return {}
+        
     
     def __del__(self):
         """Clean up theme manager callback on destruction"""
@@ -138,6 +156,7 @@ class ServoConfigScreen(BaseScreen):
     
     def _setup_screen(self):
         """Initialize servo configuration screen"""
+        self.logger = get_logger("servo_screen")
         self.setFixedWidth(1180)
         self.servo_config = self.load_config()
         self.active_sweeps = {}
@@ -147,14 +166,35 @@ class ServoConfigScreen(BaseScreen):
         self.maestro_connected = {1: False, 2: False}
         self.current_maestro = 0  # 0=Maestro1, 1=Maestro2
         self.initialization_complete = False
-        
+
+        # NEMA configuration        
+        self.current_controller = 0  # 0=M1, 1=M2, 2=NEMA
+        self.nema_config = {
+            "lead_screw_pitch": 8.0,
+            "lead_screw_length": 20.0,
+            "homing_speed": 400,
+            "normal_speed": 800,
+            "acceleration": 800,
+            "min_position": 0.0,
+            "max_position": 20.0,
+            "current_position": 5.0
+        }
+
+        # Load NEMA config from file if it exists
+        servo_config = self.load_config()
+        if "nema" in servo_config:
+            saved_nema = servo_config["nema"]
+            for key, value in saved_nema.items():
+                if key in self.nema_config:
+                    self.nema_config[key] = value
+
         # Widget tracking for position updates
         self.servo_widgets = {}
         
         # Position update management
-        self.position_update_timer = QTimer()
-        self.position_update_timer.timeout.connect(self.update_all_positions)
-        self.position_update_timer.setInterval(500)
+        self.position_update_timer_auto = QTimer()
+        self.position_update_timer_auto.timeout.connect(self.update_all_positions)
+        self.position_update_timer_auto.setInterval(500)
         
         # Position reading state
         self.reading_positions = False
@@ -168,13 +208,626 @@ class ServoConfigScreen(BaseScreen):
         
         self.setup_layout()
         
-        # Connect to WebSocket for responses
-        if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
-        
         # Initialize after setup complete
         QTimer.singleShot(200, self.safe_initialization)
+
+# ========================================
+    # WEBSOCKET MESSAGE HANDLING
+    # ========================================
+    
+    def handle_message(self, message: str):
+        """Enhanced message handler to support NEMA WebSocket messages"""
+        try:
+            msg = json.loads(message)
+            msg_type = msg.get("type")
+            
+            # Handle existing message types first
+            if msg_type == "telemetry":
+                self.handle_telemetry(msg)
+            elif msg_type == "maestro_info":
+                self.handle_maestro_info(msg)
+            elif msg_type == "servo_position":
+                self.handle_servo_position(msg)
+            elif msg_type == "all_servo_positions":
+                self.handle_all_servo_positions(msg)
+                
+            # ========================================
+            # NEW NEMA MESSAGE HANDLERS
+            # ========================================
+            elif msg_type == "nema_position_update":
+                self.handle_nema_position_update(msg)
+            elif msg_type == "nema_sweep_status":
+                self.handle_nema_sweep_status(msg)
+            elif msg_type == "nema_homing_complete":
+                self.handle_nema_homing_complete(msg)
+            elif msg_type == "nema_status":
+                self.handle_nema_status_update(msg)
+            elif msg_type == "nema_error":
+                self.handle_nema_error(msg)
+            elif msg_type == "nema_enable_response":
+                self.handle_nema_enable_response(msg)
+                
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse WebSocket message: {e}")
+        except Exception as e:
+            self.logger.error(f"Error handling message: {e}")
+
+    def handle_nema_position_update(self, msg):
+        """Handle position updates from NEMA controller"""
+        try:
+            position_cm = msg.get("position_cm", 0.0)
+            
+            # Update internal state
+            self.nema_config["current_position"] = position_cm
+            
+            # Update UI if NEMA is currently selected
+            if self.current_controller == 2 and hasattr(self, 'position_slider'):
+                # Block signals to prevent feedback loop
+                self.position_slider.blockSignals(True)
+                self.position_slider.setValue(int(position_cm))
+                self.position_slider.blockSignals(False)
+                
+                # Update position display
+                self.position_display.setText(f"{position_cm:.1f} cm")
+                
+            self.logger.debug(f"NEMA position updated: {position_cm:.1f} cm")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA position update: {e}")
+
+    def handle_nema_sweep_status(self, msg):
+        """Handle sweep status changes from NEMA controller"""
+        try:
+            sweeping = msg.get("sweeping", False)
+            
+            # Update internal state
+            self.nema_test_sweeping = sweeping
+            
+            # Update UI if NEMA is currently selected
+            if self.current_controller == 2 and hasattr(self, 'test_sweep_btn'):
+                if sweeping:
+                    self.test_sweep_btn.setText("⏹️ STOP SWEEP")
+                    self.test_sweep_btn.setChecked(True)
+                    self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} ↔ {self.nema_config['max_position']:.1f} cm")
+                else:
+                    self.test_sweep_btn.setText("▶️ TEST SWEEP")
+                    self.test_sweep_btn.setChecked(False)
+                    self.update_status("NEMA sweep stopped")
+                    
+            self.logger.info(f"NEMA sweep status: {'active' if sweeping else 'stopped'}")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA sweep status: {e}")
+
+    def handle_telemetry(self, msg):
+        """Handle telemetry messages - placeholder for now"""
+        # You can implement telemetry handling here if needed
+        # For now, just log that we received it
+        self.logger.debug("Received telemetry message")
+        pass
+
+    # You may also need these if they don't exist:
+    def handle_servo_position(self, data):
+        """Handle servo position messages"""
+        channel_key = data.get("channel")
+        position = data.get("position")
         
+        if channel_key and position is not None:
+            self.position_update_signal.emit(channel_key, position)
+            
+            # Notify active sweeps
+            if channel_key in self.active_sweeps:
+                try:
+                    self.active_sweeps[channel_key].position_reached(position)
+                except Exception as e:
+                    self.logger.error(f"Error updating sweep position for {channel_key}: {e}")
+                    if channel_key in self.active_sweeps:
+                        self.active_sweeps[channel_key].stop()
+                        del self.active_sweeps[channel_key]
+
+
+    def handle_nema_homing_complete(self, msg):
+        """Handle homing completion notification"""
+        try:
+            success = msg.get("success", False)
+            
+            if success:
+                self.update_status("NEMA homing completed successfully", color="green")
+                # Reset position to 0 after successful homing
+                self.nema_config["current_position"] = 0.0
+                if self.current_controller == 2 and hasattr(self, 'position_slider'):
+                    self.position_slider.blockSignals(True)
+                    self.position_slider.setValue(0)
+                    self.position_slider.blockSignals(False)
+                    self.position_display.setText("0.0 cm")
+            else:
+                self.update_status("NEMA homing failed", error=True)
+                
+            self.logger.info(f"NEMA homing completed: {'success' if success else 'failed'}")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA homing complete: {e}")
+
+    def handle_nema_status_update(self, msg):
+        """Handle NEMA status updates with clearer logging"""
+        try:
+            status = msg.get("status", {})
+            state = status.get("state", "unknown")
+            homed = status.get("homed", False) 
+            hardware_enabled = status.get("enabled", False)  # Hardware enable pin state
+            position_cm = status.get("position_cm", 0.0)
+            
+            # Update internal state
+            self.nema_config["current_position"] = position_cm
+            
+            # Update enable button to match hardware state
+            if hasattr(self, 'enable_btn'):
+                self.enable_btn.blockSignals(True)
+                self.enable_btn.setChecked(hardware_enabled)
+                if hardware_enabled:
+                    self.enable_btn.setText("🔴 DISABLE")
+                else:
+                    self.enable_btn.setText("⚡ ENABLE")
+                self.enable_btn.blockSignals(False)
+            
+            # Create clearer status message
+            status_parts = []
+            status_parts.append(f"State: {state}")
+            
+            if homed:
+                status_parts.append("Homed")
+            else:
+                status_parts.append("Not Homed")
+                
+            if hardware_enabled:
+                status_parts.append("Motor ON")
+            else:
+                status_parts.append("Motor OFF")
+                
+            # Determine overall status color
+            if state == "error":
+                color = "red"
+            elif hardware_enabled and homed and state == "ready":
+                color = "green"
+            elif hardware_enabled:
+                color = "orange"
+            else:
+                color = "gray"
+                
+            status_text = f"NEMA: {', '.join(status_parts)}"
+            
+            # Update status display
+            if hasattr(self, 'nema_status_label'):
+                self.nema_status_label.setText(status_text)
+                self.nema_status_label.setStyleSheet(f"color: {color}; font-weight: bold; background: transparent;")
+            
+            # Update position if NEMA is active
+            if self.current_controller == 2 and hasattr(self, 'position_slider'):
+                self.position_slider.blockSignals(True)
+                self.position_slider.setValue(int(position_cm * 10))
+                self.position_slider.blockSignals(False)
+                self.position_display.setText(f"{position_cm:.1f} cm")
+                
+            # Improved logging - less frequent, more informative
+            self.logger.debug(f"NEMA status: {state}, hardware_enabled={hardware_enabled}, homed={homed}, pos={position_cm:.1f}cm")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA status update: {e}")
+
+
+    def handle_nema_enable_response(self, msg):
+        """Handle enable/disable command responses"""
+        try:
+            success = msg.get("success", False)
+            enabled = msg.get("enabled", False)
+            message = msg.get("message", "")
+            
+            if success:
+                action = "enabled" if enabled else "disabled"
+                self.update_status(f"NEMA stepper {action} successfully", color="green")
+                self.logger.info(f"NEMA stepper {action} successfully")
+                
+                # Update button state to match response
+                if hasattr(self, 'enable_btn'):
+                    self.enable_btn.blockSignals(True)
+                    self.enable_btn.setChecked(enabled)
+                    if enabled:
+                        self.enable_btn.setText("🔴 DISABLE")
+                    else:
+                        self.enable_btn.setText("⚡ ENABLE")
+                    self.enable_btn.blockSignals(False)
+            else:
+                self.update_status(f"Failed to change NEMA state: {message}", error=True)
+                self.logger.error(f"NEMA enable command failed: {message}")
+                
+                # Reset button to previous state on failure
+                if hasattr(self, 'enable_btn'):
+                    self.enable_btn.blockSignals(True)
+                    self.enable_btn.setChecked(not enabled)
+                    self.enable_btn.blockSignals(False)
+                
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA enable response: {e}")
+
+    def handle_nema_error(self, msg):
+        """Handle NEMA error messages"""
+        try:
+            error_message = msg.get("error", "Unknown NEMA error")
+            error_code = msg.get("error_code", None)
+            
+            # Display error to user
+            full_message = f"NEMA Error: {error_message}"
+            if error_code:
+                full_message += f" (Code: {error_code})"
+                
+            self.update_status(full_message, error=True)
+            self.logger.error(f"NEMA error received: {error_message} (code: {error_code})")
+            
+            # Stop any active sweep on error
+            if hasattr(self, 'nema_test_sweeping') and self.nema_test_sweeping:
+                self.nema_test_sweeping = False
+                if hasattr(self, 'test_sweep_btn'):
+                    self.test_sweep_btn.setText("▶️ TEST SWEEP")
+                    self.test_sweep_btn.setChecked(False)
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling NEMA error message: {e}")
+
+    # Handle existing messages (maestro_info, etc.) - keeping original implementation
+    def handle_maestro_info(self, data):
+        """Handle maestro info messages"""
+        maestro_num = data.get("maestro")
+        channels = data.get("channels", 0)
+        connected = data.get("connected", False)
+        
+        if maestro_num in [1, 2]:
+            old_count = self.maestro_channel_counts.get(maestro_num, 0)
+            self.maestro_channel_counts[maestro_num] = channels
+            self.maestro_connected[maestro_num] = connected
+            self.logger.info(f"Maestro {maestro_num}: {channels} channels, connected: {connected}")
+            
+            if connected:
+                self.update_status(f"Maestro {maestro_num}: {channels} channels detected")
+                # Only update grid if this is the currently selected Maestro
+                if (maestro_num == self.current_maestro + 1 and 
+                    channels != old_count and channels > 0):
+                    self.logger.info(f"Channel count changed for current maestro: {old_count} -> {channels}")
+                    self.update_grid()
+                    QTimer.singleShot(500, self.read_all_positions_now)
+                # Only update grid if this is the currently selected Maestro (existing logic)
+                elif maestro_num == self.current_maestro + 1:
+                    self.update_grid()
+                    QTimer.singleShot(500, self.read_all_positions_now)
+
+                self.update_maestro_selector_status()
+            else:
+                self.update_status(f"Maestro {maestro_num}: Not connected", error=True)
+
+    def handle_servo_position(self, data):
+        """Handle servo position messages"""
+        channel_key = data.get("channel")
+        position = data.get("position")
+        
+        if channel_key and position is not None:
+            self.position_update_signal.emit(channel_key, position)
+            
+            # Notify active sweeps
+            if channel_key in self.active_sweeps:
+                try:
+                    self.active_sweeps[channel_key].position_reached(position)
+                except Exception as e:
+                    self.logger.error(f"Error updating sweep position for {channel_key}: {e}")
+                    if channel_key in self.active_sweeps:
+                        self.active_sweeps[channel_key].stop()
+                        del self.active_sweeps[channel_key]
+
+    def handle_all_servo_positions(self, data):
+        """Handle all servo positions messages"""
+        maestro_num = data.get("maestro")
+        positions = data.get("positions", {})
+        
+        # Only process if this is for the currently selected Maestro
+        if maestro_num == self.current_maestro + 1:
+            self.logger.info(f"Received {len(positions)} positions for Maestro {maestro_num}")
+            
+            self.reading_positions = False
+            self.position_read_timeout.stop()
+            
+            # Update all positions using Qt signals
+            for channel, position in positions.items():
+                channel_key = f"m{maestro_num}_ch{channel}"
+                if position is not None:
+                    self.position_update_signal.emit(channel_key, position)
+            
+            if len(positions) > 0:
+                self.update_status(f"Read {len(positions)} positions from Maestro {maestro_num}")
+            else:
+                self.update_status(f"No positions received from Maestro {maestro_num}", warning=True)
+
+# ========================================
+    # NEMA CONTROL METHODS
+    # ========================================
+    
+    def send_position_to_backend(self):
+        """Send the current position to backend (called after debounce)"""
+        position_cm = self.nema_config["current_position"]
+        
+        # Validate position is within bounds
+        min_pos = self.nema_config["min_position"]
+        max_pos = self.nema_config["max_position"]
+        
+        if not (min_pos <= position_cm <= max_pos):
+            self.logger.warning(f"Position {position_cm:.1f} cm outside bounds [{min_pos:.1f}, {max_pos:.1f}]")
+            self.update_status(f"Position {position_cm:.1f} cm outside safe bounds", error=True)
+            return
+        
+        # Send WebSocket message to backend
+        success = self.send_websocket_message("nema_move_to_position", position_cm=position_cm)
+        if success:
+            self.logger.debug(f"Sent position to backend: {position_cm:.1f} cm")
+        else:
+            self.update_status("Failed to send position: WebSocket not connected", error=True)
+
+    def toggle_nema_test_sweep(self):
+        """Toggle NEMA test sweep between min and max"""
+        if self.nema_test_sweeping:
+            # Stop sweep
+            success = self.send_websocket_message("nema_stop_sweep")
+            if success:
+                self.logger.info("Sent stop sweep command")
+            else:
+                self.update_status("Failed to stop sweep: WebSocket not connected", error=True)
+                
+        else:
+            # Start sweep - validate parameters first
+            min_cm = self.nema_config["min_position"]
+            max_cm = self.nema_config["max_position"]
+            acceleration = self.nema_config["acceleration"]
+            normal_speed = self.nema_config["normal_speed"]
+            
+            if min_cm >= max_cm:
+                self.update_status("Invalid sweep range: min >= max", error=True)
+                return
+                
+            success = self.send_websocket_message("nema_start_sweep", 
+                                                min_cm=min_cm,
+                                                max_cm=max_cm,
+                                                acceleration=acceleration,
+                                                normal_speed=normal_speed)
+            if success:
+                self.logger.info(f"Sent start sweep command: {min_cm:.1f} to {max_cm:.1f} cm")
+            else:
+                self.update_status("Failed to start sweep: WebSocket not connected", error=True)
+
+    def save_nema_config(self):
+        """Enhanced save NEMA configuration with backend sync"""
+        # Create config without current_position to avoid saving every position change
+        config_to_save = {k: v for k, v in self.nema_config.items() if k != "current_position"}
+        self.servo_config["nema"] = config_to_save
+        
+        # Save to file
+        success = config_manager.save_config("resources/configs/servo_config.json", self.servo_config)
+        if success:
+            self.logger.debug("NEMA configuration saved to file")
+            
+            # Send config update to backend
+            ws_success = self.send_websocket_message("nema_config_update", config=config_to_save)
+            if ws_success:
+                self.logger.debug("NEMA configuration sent to backend")
+            else:
+                self.logger.warning("Failed to send config to backend: WebSocket not connected")
+        else:
+            self.logger.error("Failed to save NEMA configuration to file")
+            self.update_status("Failed to save NEMA configuration", error=True)
+
+    def home_nema_stepper(self):
+        """Send homing command to NEMA controller"""
+        success = self.send_websocket_message("nema_home")
+        if success:
+            self.update_status("NEMA homing started...")
+            self.logger.info("Sent NEMA homing command")
+        else:
+            self.update_status("Failed to start homing: WebSocket not connected", error=True)
+
+    def enable_nema_stepper(self, enabled: bool):
+        """Enable/disable NEMA stepper motor with improved logging"""
+        success = self.send_websocket_message("nema_enable", enabled=enabled)
+        if success:
+            action = "enabled" if enabled else "disabled"
+            self.update_status(f"NEMA stepper {action}")
+            self.logger.info(f"Sent NEMA enable command: {action}")
+        else:
+            self.update_status("Failed to change NEMA enable state: WebSocket not connected", error=True)
+            # Reset button state on failure
+            self.enable_btn.blockSignals(True)
+            self.enable_btn.setChecked(not enabled)
+            self.enable_btn.blockSignals(False)
+
+    def request_nema_status(self):
+        """Request current NEMA status from backend"""
+        success = self.send_websocket_message("nema_get_status")
+        if success:
+            self.logger.debug("Requested NEMA status from backend")
+        else:
+            self.logger.warning("Failed to request NEMA status: WebSocket not connected")
+
+    def validate_nema_position(self, position_cm: float) -> bool:
+        """Validate that position is within configured bounds"""
+        min_pos = self.nema_config["min_position"]
+        max_pos = self.nema_config["max_position"]
+        return min_pos <= position_cm <= max_pos
+
+    def clamp_nema_position(self, position_cm: float) -> float:
+        """Clamp position to configured bounds"""
+        min_pos = self.nema_config["min_position"]
+        max_pos = self.nema_config["max_position"]
+        return max(min_pos, min(max_pos, position_cm))
+
+    def update_nema_pitch(self, value):
+        """Update lead screw pitch"""
+        self.nema_config["lead_screw_pitch"] = float(value)
+        self.save_nema_config()
+
+    def update_nema_length(self, value):
+        """Update lead screw length"""
+        self.nema_config["lead_screw_length"] = float(value)
+        self.save_nema_config()
+
+    def update_nema_homing_speed(self, value):
+        """Update homing speed"""
+        self.nema_config["homing_speed"] = value
+        self.save_nema_config()
+
+    def update_nema_normal_speed(self, value):
+        """Update normal speed"""
+        self.nema_config["normal_speed"] = value
+        self.save_nema_config()
+
+    def update_nema_acceleration(self, value):
+        """Update acceleration slider"""
+        self.nema_config["acceleration"] = value
+        self.accel_value_label.setText(f"{value} steps/s²")
+        self.save_nema_config()
+
+    def init_nema_connection(self):
+        """Initialize NEMA controller connection and request status"""
+        if self.current_controller == 2:  # NEMA selected
+            # Request current status
+            self.request_nema_status()
+            
+            # Start periodic status updates
+            if not hasattr(self, 'nema_status_timer'):
+                self.nema_status_timer = QTimer()
+                self.nema_status_timer.timeout.connect(self.request_nema_status)
+            
+            self.nema_status_timer.start(5000)  # Request status every 5 seconds
+            self.logger.info("NEMA connection initialized")
+
+    def cleanup_nema_connection(self):
+        """Clean up NEMA controller connection"""
+        if hasattr(self, 'nema_status_timer'):
+            self.nema_status_timer.stop()
+        
+        # Stop any active sweep
+        if hasattr(self, 'nema_test_sweeping') and self.nema_test_sweeping:
+            self.send_websocket_message("nema_stop_sweep")
+            
+        self.logger.info("NEMA connection cleaned up")
+        """Enhanced position update with validation and improved feedback"""
+        position_cm = slider_value / 10.0
+        
+        # Validate position
+        if not self.validate_nema_position(position_cm):
+            # Clamp to valid range
+            position_cm = self.clamp_nema_position(position_cm)
+            # Update slider to show clamped value
+            self.position_slider.blockSignals(True)
+            self.position_slider.setValue(int(position_cm * 10))
+            self.position_slider.blockSignals(False)
+            
+            self.update_status(f"Position clamped to {position_cm:.1f} cm", color="orange")
+        
+        # Update internal state and display
+        self.nema_config["current_position"] = position_cm
+        self.position_display.setText(f"{position_cm:.1f} cm")
+        
+        # Restart the debounce timer
+        self.position_update_timer.stop()
+        self.position_update_timer.start(300)  # 300ms debounce
+
+    def update_nema_position(self, slider_value):
+        """Enhanced position update with validation and improved feedback"""
+        position_cm = float(slider_value)
+
+        # Validate position
+        if not self.validate_nema_position(position_cm):
+            # Clamp to valid range
+            position_cm = self.clamp_nema_position(position_cm)
+            # Update slider to show clamped value
+            self.position_slider.blockSignals(True)
+            self.position_slider.setValue(int(position_cm * 10))
+            self.position_slider.blockSignals(False)
+            
+            self.update_status(f"Position clamped to {position_cm:.1f} cm", color="orange")
+        
+        # Update internal state and display
+        self.nema_config["current_position"] = position_cm
+        self.position_display.setText(f"{position_cm:.1f} cm")
+        
+        # Restart the debounce timer
+        self.position_update_timer.stop()
+        self.position_update_timer.start(300)  # 300ms debounce
+
+    def update_nema_min_pos(self, value):
+        """Enhanced min position update with validation"""
+        old_min = self.nema_config["min_position"]
+        new_min = float(value)
+        
+        # Validate that min < max
+        if new_min >= self.nema_config["max_position"]:
+            self.update_status(f"Min position {new_min:.1f} must be less than max {self.nema_config['max_position']:.1f}", error=True)
+            # Reset to old value
+            if hasattr(self, 'min_pos_spin'):
+                self.min_pos_spin.setValue(int(old_min))
+            return
+        
+        self.nema_config["min_position"] = new_min
+        
+        # Update slider range and clamp current position if needed
+        if hasattr(self, 'position_slider'):
+            self.position_slider.setMinimum(int(new_min * 10))
+            
+        if hasattr(self, 'min_label'):
+            self.min_label.setText(f"{new_min:.1f}")
+        
+        # Clamp current position if needed
+        if self.nema_config["current_position"] < new_min:
+            self.nema_config["current_position"] = new_min
+            if hasattr(self, 'position_slider'):
+                self.position_slider.setValue(int(new_min * 10))
+            if hasattr(self, 'position_display'):
+                self.position_display.setText(f"{new_min:.1f} cm")
+            self.update_status(f"Current position adjusted to new minimum: {new_min:.1f} cm", color="orange")
+        
+        self.save_nema_config()
+
+    def update_nema_max_pos(self, value):
+        """Enhanced max position update with validation"""
+        old_max = self.nema_config["max_position"]
+        new_max = float(value)
+        
+        # Validate that max > min
+        if new_max <= self.nema_config["min_position"]:
+            self.update_status(f"Max position {new_max:.1f} must be greater than min {self.nema_config['min_position']:.1f}", error=True)
+            # Reset to old value
+            if hasattr(self, 'max_pos_spin'):
+                self.max_pos_spin.setValue(int(old_max))
+            return
+        
+        self.nema_config["max_position"] = new_max
+        
+        # Update slider range and clamp current position if needed
+        if hasattr(self, 'position_slider'):
+            self.position_slider.setMaximum(int(new_max * 10))
+            
+        if hasattr(self, 'max_label'):
+            self.max_label.setText(f"{new_max:.1f}")
+        
+        # Clamp current position if needed
+        if self.nema_config["current_position"] > new_max:
+            self.nema_config["current_position"] = new_max
+            if hasattr(self, 'position_slider'):
+                self.position_slider.setValue(int(new_max * 10))
+            if hasattr(self, 'position_display'):
+                self.position_display.setText(f"{new_max:.1f} cm")
+            self.update_status(f"Current position adjusted to new maximum: {new_max:.1f} cm", color="orange")
+        
+        self.save_nema_config()
+
+# ========================================
+    # LAYOUT AND UI SETUP
+    # ========================================
+    
     def setup_layout(self):
         """Setup the complete layout with themed control panel"""
         # Scrollable grid area
@@ -323,7 +976,7 @@ class ServoConfigScreen(BaseScreen):
         maestro_layout.setSpacing(10)
         
         # Maestro label
-        self.maestro_label = QLabel("MAESTRO")
+        self.maestro_label = QLabel("Controller")
         self.maestro_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.maestro_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_maestro_label_style()
@@ -337,16 +990,29 @@ class ServoConfigScreen(BaseScreen):
         self.maestro1_btn = self._create_maestro_button("1", True)
         self.maestro2_btn = self._create_maestro_button("2", False)
         
+        button_container.addWidget(self.maestro1_btn)
+        button_container.addWidget(self.maestro2_btn)
+        maestro_layout.addLayout(button_container)
+        
+        # Add NEMA button below M1/M2
+        self.nema_btn = QPushButton("NEMA")
+        self.nema_btn.setCheckable(True)
+        self.nema_btn.setChecked(False)
+        self.nema_btn.setFixedHeight(40)
+        self.nema_btn.setFixedWidth(185)
+        self.nema_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self._update_maestro_button_style(self.nema_btn)
+        maestro_layout.addWidget(self.nema_btn)
+        maestro_layout.setAlignment(self.nema_btn, Qt.AlignmentFlag.AlignCenter)
+
         # Set up button group
         self.maestro_group = QButtonGroup()
         self.maestro_group.setExclusive(True)
         self.maestro_group.addButton(self.maestro1_btn, 0)
         self.maestro_group.addButton(self.maestro2_btn, 1)
+        self.maestro_group.addButton(self.nema_btn, 2)
         self.maestro_group.idClicked.connect(self.on_maestro_changed)
         
-        button_container.addWidget(self.maestro1_btn)
-        button_container.addWidget(self.maestro2_btn)
-        maestro_layout.addLayout(button_container)
         return maestro_layout
 
     def _update_maestro_label_style(self):
@@ -482,8 +1148,376 @@ class ServoConfigScreen(BaseScreen):
             }}
         """)
 
+# ========================================
+    # NEMA INTERFACE CREATION
+    # ========================================
+    
+    def create_nema_interface(self):
+        """Enhanced NEMA stepper control interface in the grid area"""
+        # Clear the grid first
+        self.clear_grid()
+        
+        # Create main container
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(30)
+        
+        # Left side - Configuration
+        config_frame = QFrame()
+        config_frame.setFrameStyle(QFrame.Shape.Box)
+        config_frame.setStyleSheet(f"""
+            QFrame {{
+                border: 1px solid {theme_manager.get('primary_color')};
+                border-radius: 12px;
+                background-color: rgba(0, 0, 0, 0.1);
+            }}
+        """)
+        
+        config_layout = QVBoxLayout()
+        config_layout.setContentsMargins(20, 15, 20, 15)
+        config_layout.setSpacing(15)
+        
+        # Configuration header
+        config_header = QLabel("NEMA CONFIGURATION")
+        config_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        config_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        config_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
+        config_layout.addWidget(config_header)
+        
+        # Configuration form in grid
+        form_layout = QGridLayout()
+        form_layout.setSpacing(10)
+        
+        # Lead Screw Pitch
+        pitch_label = QLabel("Lead Screw Pitch (mm):")
+        pitch_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(pitch_label, 0, 0)
+        
+        self.pitch_spin = QSpinBox()
+        self.pitch_spin.setRange(1, 20)
+        self.pitch_spin.setValue(int(self.nema_config["lead_screw_pitch"]))
+        self.pitch_spin.valueChanged.connect(self.update_nema_pitch)
+        self._update_spinbox_style(self.pitch_spin)
+        form_layout.addWidget(self.pitch_spin, 0, 1)
+        
+        # Lead Screw Length
+        length_label = QLabel("Lead Screw Length (cm):")
+        length_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(length_label, 1, 0)
+        
+        self.length_spin = QSpinBox()
+        self.length_spin.setRange(10, 50)
+        self.length_spin.setValue(int(self.nema_config["lead_screw_length"]))
+        self.length_spin.valueChanged.connect(self.update_nema_length)
+        self._update_spinbox_style(self.length_spin)
+        form_layout.addWidget(self.length_spin, 1, 1)
+        
+        # Homing Speed
+        homing_label = QLabel("Homing Speed (steps/s):")
+        homing_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(homing_label, 2, 0)
+        
+        self.homing_speed_spin = QSpinBox()
+        self.homing_speed_spin.setRange(100, 1000)
+        self.homing_speed_spin.setSingleStep(50)
+        self.homing_speed_spin.setValue(self.nema_config["homing_speed"])
+        self.homing_speed_spin.valueChanged.connect(self.update_nema_homing_speed)
+        self._update_spinbox_style(self.homing_speed_spin)
+        form_layout.addWidget(self.homing_speed_spin, 2, 1)
+        
+        # Normal Speed
+        normal_label = QLabel("Normal Speed (steps/s):")
+        normal_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(normal_label, 3, 0)
+        
+        self.normal_speed_spin = QSpinBox()
+        self.normal_speed_spin.setRange(200, 2000)
+        self.normal_speed_spin.setSingleStep(100)
+        self.normal_speed_spin.setValue(self.nema_config["normal_speed"])
+        self.normal_speed_spin.valueChanged.connect(self.update_nema_normal_speed)
+        self._update_spinbox_style(self.normal_speed_spin)
+        form_layout.addWidget(self.normal_speed_spin, 3, 1)
+        
+        # Acceleration slider
+        accel_label = QLabel("Acceleration:")
+        accel_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(accel_label, 4, 0)
+        
+        self.accel_value_label = QLabel(f"{self.nema_config['acceleration']} steps/s²")
+        self.accel_value_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(self.accel_value_label, 4, 1)
+        
+        self.accel_slider = QSlider(Qt.Orientation.Horizontal)
+        self.accel_slider.setRange(200, 1600)
+        self.accel_slider.setValue(self.nema_config["acceleration"])
+        self.accel_slider.valueChanged.connect(self.update_nema_acceleration)
+        form_layout.addWidget(self.accel_slider, 5, 0, 1, 2)
+        
+        # Position limits
+        min_pos_label = QLabel("Min Position (cm):")
+        min_pos_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(min_pos_label, 6, 0)
+        
+        self.min_pos_spin = QSpinBox()
+        self.min_pos_spin.setRange(0, 49)
+        self.min_pos_spin.setValue(int(self.nema_config["min_position"]))
+        self.min_pos_spin.valueChanged.connect(self.update_nema_min_pos)
+        self._update_spinbox_style(self.min_pos_spin)
+        form_layout.addWidget(self.min_pos_spin, 6, 1)
+        
+        max_pos_label = QLabel("Max Position (cm):")
+        max_pos_label.setStyleSheet("color: white; background: transparent;")
+        form_layout.addWidget(max_pos_label, 7, 0)
+        
+        self.max_pos_spin = QSpinBox()
+        self.max_pos_spin.setRange(1, 50)
+        self.max_pos_spin.setValue(int(self.nema_config["max_position"]))
+        self.max_pos_spin.valueChanged.connect(self.update_nema_max_pos)
+        self._update_spinbox_style(self.max_pos_spin)
+        form_layout.addWidget(self.max_pos_spin, 7, 1)
+        
+        config_layout.addLayout(form_layout)
+        
+        # Control buttons
+        control_buttons_layout = QHBoxLayout()
+        
+        # Home button
+        self.home_btn = QPushButton("🏠 HOME")
+        self.home_btn.setFixedHeight(40)
+        self.home_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.home_btn.clicked.connect(self.home_nema_stepper)
+        self._update_operation_button_style(self.home_btn)
+        control_buttons_layout.addWidget(self.home_btn)
+        
+        # Enable/Disable toggle
+        self.enable_btn = QPushButton("⚡ ENABLE")
+        self.enable_btn.setFixedHeight(40)
+        self.enable_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.enable_btn.setCheckable(True)
+        self.enable_btn.toggled.connect(self.on_enable_toggle)
+        self._update_operation_button_style(self.enable_btn)
+        control_buttons_layout.addWidget(self.enable_btn)
+        
+        config_layout.addLayout(control_buttons_layout)
+        
+        # Status indicator
+        self.nema_status_label = QLabel("Status: Connecting...")
+        self.nema_status_label.setStyleSheet("color: orange; font-weight: bold; background: transparent;")
+        self.nema_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        config_layout.addWidget(self.nema_status_label)
+        
+        config_layout.addStretch()
+        config_frame.setLayout(config_layout)
+        
+        # Right side - Position Control
+        control_frame = QFrame()
+        control_frame.setFrameStyle(QFrame.Shape.Box)
+        control_frame.setStyleSheet(f"""
+            QFrame {{
+                border: 1px solid {theme_manager.get('primary_color')};
+                border-radius: 12px;
+                background-color: rgba(0, 0, 0, 0.1);
+            }}
+        """)
+        
+        control_layout = QVBoxLayout()
+        control_layout.setContentsMargins(20, 15, 20, 15)
+        control_layout.setSpacing(20)
+        
+        # Control header
+        control_header = QLabel("POSITION CONTROL")
+        control_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        control_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        control_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
+        control_layout.addWidget(control_header)
+        
+        # Current position display
+        self.position_display = QLabel(f"{self.nema_config['current_position']:.1f} cm")
+        self.position_display.setFont(QFont("Arial", 36, QFont.Weight.Bold))
+        self.position_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position_display.setStyleSheet(f"""
+            QLabel {{
+                color: {theme_manager.get('primary_color')};
+                border: 2px solid {theme_manager.get('primary_color')};
+                border-radius: 10px;
+                padding: 20px;
+                background-color: rgba(0, 0, 0, 0.3);
+            }}
+        """)
+        control_layout.addWidget(self.position_display)
+        
+        # Position slider
+        slider_layout = QVBoxLayout()
+        slider_layout.setSpacing(5)
+        
+        slider_label = QLabel("Target Position")
+        slider_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        slider_label.setStyleSheet("color: white; background: transparent;")
+        slider_layout.addWidget(slider_label)
+        
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setRange(int(self.nema_config["min_position"]), 
+                                    int(self.nema_config["max_position"]))
+        self.position_slider.setValue(int(self.nema_config["current_position"]))
+        self.position_slider.valueChanged.connect(self.update_nema_position)
+        self.position_slider.setFixedHeight(30)
+        slider_layout.addWidget(self.position_slider)
+        
+        # Slider range labels
+        range_layout = QHBoxLayout()
+        self.min_label = QLabel(f"{self.nema_config['min_position']:.1f}")
+        self.max_label = QLabel(f"{self.nema_config['max_position']:.1f}")
+        self.min_label.setStyleSheet("color: white; background: transparent;")
+        self.max_label.setStyleSheet("color: white; background: transparent;")
+        range_layout.addWidget(self.min_label)
+        range_layout.addStretch()
+        range_layout.addWidget(self.max_label)
+        slider_layout.addLayout(range_layout)
+        
+        control_layout.addLayout(slider_layout)
+
+        # Test sweep button
+        self.test_sweep_btn = QPushButton("▶️ TEST SWEEP")
+        self.test_sweep_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.test_sweep_btn.setCheckable(True)
+        self.test_sweep_btn.setFixedHeight(40)
+        self.test_sweep_btn.clicked.connect(self.toggle_nema_test_sweep)
+        self._update_operation_button_style(self.test_sweep_btn)
+        control_layout.addWidget(self.test_sweep_btn)
+
+        # Add some spacing
+        control_layout.addSpacing(10)
+        control_frame.setLayout(control_layout)
+        
+        # Add both frames to main layout
+        main_layout.addWidget(config_frame, stretch=1)
+        main_layout.addWidget(control_frame, stretch=1)
+        
+        # Create container widget and add to grid
+        container_widget = QWidget()
+        container_widget.setLayout(main_layout)
+        
+        # Add to the grid layout at position (0,0) spanning the full width
+        self.grid_layout.addWidget(container_widget, 0, 0, 1, 10)
+
+# ========================================
+    # CONTROLLER MANAGEMENT
+    # ========================================
+    
+    def on_maestro_changed(self, maestro_index: int):
+        """Enhanced maestro change handler with NEMA support"""
+        if maestro_index == self.current_maestro and maestro_index < 2:
+            return
+        
+        # Stop current operations
+        self.stop_all_sweeps()
+        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
+            self.position_update_timer.stop()
+        
+        # Clean up old controller
+        old_controller = self.current_controller
+        if old_controller == 2:  # Was NEMA
+            self.cleanup_nema_connection()
+        
+        # Update selection
+        self.current_controller = maestro_index
+
+        if maestro_index < 2:  # M1 or M2 selected
+            self.current_maestro = maestro_index
+            
+            # Clear old grid
+            self.clear_grid()
+            
+            maestro_num = maestro_index + 1
+            
+            # Check if we already have info for this Maestro
+            if self.maestro_connected.get(maestro_num, False):
+                channels = self.maestro_channel_counts.get(maestro_num, 0)
+                self.update_status(f"Switched to Maestro {maestro_num}: {channels} channels")
+                self.update_grid()
+                QTimer.singleShot(200, self.read_all_positions_now)
+            else:
+                self.update_status(f"Loading Maestro {maestro_num}...")
+                self.request_current_maestro_info()
+            
+            self.logger.info(f"Switched from controller {old_controller} to Maestro {maestro_num}")
+
+        else:  # NEMA selected (index 2)
+            self.update_status("NEMA stepper controller selected")
+            self.create_nema_interface()
+            self.init_nema_connection()  # Initialize NEMA connection
+            self.logger.info("Switched to NEMA controller")
+
+    def clear_grid(self):
+        """Clear the current grid and widget tracking"""
+        for i in reversed(range(self.grid_layout.count())):
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+        
+        self.servo_widgets.clear()
+
+    def on_enable_toggle(self, checked):
+        """Handle enable button toggle with proper UI feedback"""
+        # Update button appearance immediately
+        if checked:
+            self.enable_btn.setText("🔴 DISABLE")
+            self.enable_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #ff6b6b, stop:1 #ee5a5a);
+                    color: white;
+                    border: 2px solid #ff4757;
+                }
+            """)
+        else:
+            self.enable_btn.setText("⚡ ENABLE")
+            self.enable_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #70a1ff, stop:1 #5352ed);
+                    color: white;  
+                    border: 2px solid #3742fa;
+                }
+            """)
+        
+        # Send command to backend
+        self.enable_nema_stepper(checked)
+
+    def check_websocket_and_detect(self):
+        """Enhanced connection monitoring with NEMA support"""
+        if not self.websocket or not self.websocket.is_connected():
+            if self.current_controller == 2:  # NEMA selected
+                if hasattr(self, 'nema_status_label'):
+                    self.nema_status_label.setText("Status: WebSocket Disconnected")
+                    self.nema_status_label.setStyleSheet("color: red; font-weight: bold; background: transparent;")
+            return
+        
+        # Original maestro detection logic for M1/M2
+        if self.current_controller < 2:
+            if not self.initial_detection_done:
+                self.logger.info("WebSocket connected - triggering automatic maestro detection")
+                self.detect_all_maestros()
+                self.initial_detection_done = True
+                # Stop the timer once we've done initial detection
+                self.ws_connection_timer.stop()
+        else:
+            # NEMA controller - request status if needed
+            if not hasattr(self, 'last_nema_status_request'):
+                self.last_nema_status_request = 0
+            
+            import time
+            current_time = time.time()
+            if current_time - self.last_nema_status_request > 10:  # Every 10 seconds
+                self.request_nema_status()
+                self.last_nema_status_request = current_time
+
+    # ========================================
+    # THEME HANDLING
+    # ========================================
+    
     def _on_theme_changed(self):
-        """Handle theme change by updating all styled components"""
+        """Enhanced theme change handler with NEMA support"""
         try:
             # Update main panel styling
             if hasattr(self, 'main_frame'):
@@ -509,6 +1543,8 @@ class ServoConfigScreen(BaseScreen):
                 self._update_maestro_button_style(self.maestro1_btn)
             if hasattr(self, 'maestro2_btn'):
                 self._update_maestro_button_style(self.maestro2_btn)
+            if hasattr(self, 'nema_btn'):
+                self._update_maestro_button_style(self.nema_btn)
             
             # Update operations section
             if hasattr(self, 'ops_header'):
@@ -518,7 +1554,14 @@ class ServoConfigScreen(BaseScreen):
                     self._update_operation_button_style(btn)
             if hasattr(self, 'operations_frame'):
                 self._update_operations_frame_style(self.operations_frame)
-       
+            
+            # Update NEMA-specific elements
+            if hasattr(self, 'home_btn'):
+                self._update_operation_button_style(self.home_btn)
+            if hasattr(self, 'enable_btn'):
+                self._update_operation_button_style(self.enable_btn)
+            if hasattr(self, 'test_sweep_btn'):
+                self._update_operation_button_style(self.test_sweep_btn)
             
             # Update scroll area if it exists
             scroll_areas = self.findChildren(QScrollArea)
@@ -628,19 +1671,10 @@ class ServoConfigScreen(BaseScreen):
             }}
         """)
 
-    def check_websocket_and_detect(self):
-        """Check if WebSocket is connected and trigger detection if needed"""
-        if self.websocket and self.websocket.is_connected():
-            if not self.initial_detection_done:
-                self.logger.info("WebSocket connected - triggering automatic maestro detection")
-                self.detect_all_maestros()
-                self.initial_detection_done = True
-                # Stop the timer once we've done initial detection
-                self.ws_connection_timer.stop()
-        else:
-            # Reset detection flag if WebSocket disconnects
-            self.initial_detection_done = False
-
+# ========================================
+    # MAESTRO GRID AND CONTROL METHODS
+    # ========================================
+    
     def detect_all_maestros(self):
         """Detect both Maestro 1 and 2 automatically"""
         if not self.websocket or not self.websocket.is_connected():
@@ -708,8 +1742,6 @@ class ServoConfigScreen(BaseScreen):
         else:
             self.update_status("Failed to request Maestro info: WebSocket error", error=True)
 
-        
-    # Enhanced refresh method
     def refresh_current_maestro(self):
         """Enhanced refresh with better status feedback"""
         # Stop any active operations
@@ -734,84 +1766,11 @@ class ServoConfigScreen(BaseScreen):
         """Update the maestro selector to show which ones are detected"""
         pass
 
-        
     @error_boundary
     def handle_websocket_message(self, message: str):
-        """Handle incoming WebSocket messages"""
-        try:
-            data = json.loads(message)
-            msg_type = data.get("type")
-            
-            if msg_type == "maestro_info":
-                maestro_num = data.get("maestro")
-                channels = data.get("channels", 0)
-                connected = data.get("connected", False)
-                
-                if maestro_num in [1, 2]:
-                    old_count = self.maestro_channel_counts.get(maestro_num, 0)
-                    self.maestro_channel_counts[maestro_num] = channels
-                    self.maestro_connected[maestro_num] = connected
-                    self.logger.info(f"Maestro {maestro_num}: {channels} channels, connected: {connected}")
-                    
-                    if connected:
-                        self.update_status(f"Maestro {maestro_num}: {channels} channels detected")
-                        # Only update grid if this is the currently selected Maestro
-                        if (maestro_num == self.current_maestro + 1 and 
-                            channels != old_count and channels > 0):
-                            self.logger.info(f"Channel count changed for current maestro: {old_count} -> {channels}")
-                            self.update_grid()
-                            QTimer.singleShot(500, self.read_all_positions_now)
-                        # Only update grid if this is the currently selected Maestro (existing logic)
-                        elif maestro_num == self.current_maestro + 1:
-                            self.update_grid()
-                            QTimer.singleShot(500, self.read_all_positions_now)
+        """Handle incoming WebSocket messages - calls the enhanced handler"""
+        self.handle_message(message)
 
-                        self.update_maestro_selector_status()
-                    else:
-                        self.update_status(f"Maestro {maestro_num}: Not connected", error=True)
-            
-            elif msg_type == "servo_position":
-                channel_key = data.get("channel")
-                position = data.get("position")
-                
-                if channel_key and position is not None:
-                    self.position_update_signal.emit(channel_key, position)
-                    
-                    # Notify active sweeps
-                    if channel_key in self.active_sweeps:
-                        try:
-                            self.active_sweeps[channel_key].position_reached(position)
-                        except Exception as e:
-                            self.logger.error(f"Error updating sweep position for {channel_key}: {e}")
-                            if channel_key in self.active_sweeps:
-                                self.active_sweeps[channel_key].stop()
-                                del self.active_sweeps[channel_key]
-            
-            elif msg_type == "all_servo_positions":
-                maestro_num = data.get("maestro")
-                positions = data.get("positions", {})
-                
-                # Only process if this is for the currently selected Maestro
-                if maestro_num == self.current_maestro + 1:
-                    self.logger.info(f"Received {len(positions)} positions for Maestro {maestro_num}")
-                    
-                    self.reading_positions = False
-                    self.position_read_timeout.stop()
-                    
-                    # Update all positions using Qt signals
-                    for channel, position in positions.items():
-                        channel_key = f"m{maestro_num}_ch{channel}"
-                        if position is not None:
-                            self.position_update_signal.emit(channel_key, position)
-                    
-                    if len(positions) > 0:
-                        self.update_status(f"Read {len(positions)} positions from Maestro {maestro_num}")
-                    else:
-                        self.update_status(f"No positions received from Maestro {maestro_num}", warning=True)
-                        
-        except Exception as e:
-            self.logger.error(f"Error handling WebSocket message: {e}")
-    
     def update_servo_position_display(self, channel_key: str, position: int):
         """Thread-safe method to update servo position display"""
         if channel_key in self.servo_widgets:
@@ -855,50 +1814,16 @@ class ServoConfigScreen(BaseScreen):
         
         self.logger.info(f"Status: {message}")
     
-    def update_status(self, message: str, error: bool = False, warning: bool = False):
+    def update_status(self, message: str, error: bool = False, warning: bool = False, color: str = None):
         """Update status using Qt signal for thread safety"""
-        self.status_update_signal.emit(message, error, warning)
-    
-    def on_maestro_changed(self, maestro_index: int):
-        """Handle maestro selection change with proper cleanup"""
-        if maestro_index == self.current_maestro:
-            return
-        
-        # Stop current operations
-        self.stop_all_sweeps()
-        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
-            self.position_update_timer.stop()
-        
-        # Update selection
-        old_maestro = self.current_maestro
-        self.current_maestro = maestro_index
-        
-        # Clear old grid
-        self.clear_grid()
-        
-        maestro_num = maestro_index + 1
-        
-        # Check if we already have info for this Maestro
-        if self.maestro_connected.get(maestro_num, False):
-            channels = self.maestro_channel_counts.get(maestro_num, 0)
-            self.update_status(f"Switched to Maestro {maestro_num}: {channels} channels")
-            self.update_grid()
-            QTimer.singleShot(200, self.read_all_positions_now)
+        if color:
+            # Handle color-specific updates
+            self.status_label.setText(message)
+            self.status_label.setStyleSheet(f"color: {color}; padding: 3px;")
+            self.logger.info(f"Status: {message}")
         else:
-            self.update_status(f"Loading Maestro {maestro_num}...")
-            self.request_current_maestro_info()
-        
-        self.logger.info(f"Switched from Maestro {old_maestro + 1} to Maestro {maestro_num}")
-    
-    def clear_grid(self):
-        """Clear the current grid and widget tracking"""
-        for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        
-        self.servo_widgets.clear()
-    
+            self.status_update_signal.emit(message, error, warning)
+
     def update_grid(self):
         """Build servo control grid for currently selected Maestro only"""
         maestro_num = self.current_maestro + 1
@@ -911,8 +1836,8 @@ class ServoConfigScreen(BaseScreen):
         self.logger.info(f"Building grid for Maestro {maestro_num} with {channel_count} channels")
         
         # Stop any active updates while rebuilding
-        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
-            self.position_update_timer.stop()
+        if hasattr(self, 'position_update_timer_auto') and self.position_update_timer_auto.isActive():
+            self.position_update_timer_auto.stop()
         
         self.clear_grid()
         
@@ -1037,6 +1962,10 @@ class ServoConfigScreen(BaseScreen):
             self.servo_widgets[channel_key] = (slider, pos_label, play_btn, live_checkbox, name_edit)
         
         self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
+
+# ========================================
+    # POSITION UPDATES AND SERVO CONTROL
+    # ========================================
     
     def update_all_positions(self):
         """Update all servo positions for current Maestro"""
@@ -1140,14 +2069,11 @@ class ServoConfigScreen(BaseScreen):
                 slider = widgets[0]  # Get slider widget
                 current_pos = slider.value()  # Get current slider position
                 
-                # Save to config
+                # Update visual indicator
+                slider.set_home_position(current_pos)
                 if channel_key not in self.servo_config:
                     self.servo_config[channel_key] = {}
                 self.servo_config[channel_key]["home"] = current_pos
-                
-                # Update visual indicator
-                slider.set_home_position(current_pos)
-                
                 # Prepare for backend
                 channel_num = int(channel_key.split("_ch")[1])
                 home_positions[channel_num] = current_pos
@@ -1243,7 +2169,7 @@ class ServoConfigScreen(BaseScreen):
         # Create new sweep
         sweep = MinMaxSweep(self, channel_key, pos_label, button, actual_min, actual_max, actual_speed)
         self.active_sweeps[channel_key] = sweep
-        button.setText("⏸️")
+        button.setText("⸏")
         self.logger.info(f"Started sweep for {channel_key}")
     
     def toggle_all_live_checkboxes(self):
@@ -1271,12 +2197,14 @@ class ServoConfigScreen(BaseScreen):
         self.stop_all_sweeps()
         if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
             self.position_update_timer.stop()
-    
-    @error_boundary
-    def load_config(self) -> dict:
-        """Load servo configuration from file"""
-        return config_manager.get_config("resources/configs/servo_config.json")
-    
+        if hasattr(self, 'position_update_timer_auto') and self.position_update_timer_auto.isActive():
+            self.position_update_timer_auto.stop()
+
+# ========================================
+    # CONFIGURATION MANAGEMENT
+    # ========================================
+        
+
     @error_boundary
     def save_config(self):
         """Save servo configuration to file"""
@@ -1313,9 +2241,29 @@ class ServoConfigScreen(BaseScreen):
             self.logger.debug(f"Sent servo_acceleration: {key} = {value}")
         
         self.save_config()
-    
+
+    # ========================================
+    # CLEANUP METHODS
+    # ========================================
+        
     def cleanup(self):
-        """Enhanced cleanup to stop timers"""
+        """Enhanced cleanup with NEMA support"""
+        # Stop any NEMA operations
+        if hasattr(self, 'nema_test_sweeping') and self.nema_test_sweeping:
+            self.send_websocket_message("nema_stop_sweep")
+        
+        # Stop timers
+        if hasattr(self, 'position_update_timer'):
+            self.position_update_timer.stop()
+        
+        if hasattr(self, 'nema_status_timer'):
+            self.nema_status_timer.stop()
+        
+        # Clean up NEMA connection
+        if self.current_controller == 2:
+            self.cleanup_nema_connection()
+        
+        # Stop all operations
         self.stop_all_operations()
         
         # Stop the WebSocket monitoring timer
@@ -1449,3 +2397,4 @@ class MinMaxSweep:
         self.btn.setChecked(False)
         
         self.logger.info(f"Min/Max sweep stopped: {self.channel_key} returned to center ({center_pos})")
+
