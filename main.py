@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WALL-E Control System - Main Entry Point
+Droid Deck - Main Entry Point
 """
 
 import sys
@@ -10,11 +10,11 @@ from core.application import WalleApplication
 
 
 def main():
-    """Main entry point for WALL-E Control System"""
+    """Main entry point for Droid Deck"""
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     
-    # Create WALL-E application
+    # Create Droid Deck application
     walle_app = WalleApplication()
     walle_app.show()
     

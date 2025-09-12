@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QTableWidget, QTableWidgetItem, QFrame, QDialog,
     QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup, QTimer
 from PyQt6.QtGui import QFont, QPainter, QPalette
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
@@ -850,10 +850,22 @@ class SceneScreen(BaseScreen):
         
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_message)
-        
-        # Load from local cache first, then get audio files from backend
-        self.load_local_config()
-        self.request_audio_files()
+            # Wait for connection before requesting audio files
+            if self.websocket.is_connected():
+                self.request_audio_files()
+            else:
+                # Set up a timer to retry when connection is established
+                self.connection_check_timer = QTimer()
+                self.connection_check_timer.timeout.connect(self.check_connection_and_request_audio)
+                self.connection_check_timer.start(1000)  # Check every second
+        else:
+            self.use_fallback_audio_files()
+
+    def check_connection_and_request_audio(self):
+        """Check WebSocket connection and request audio files when ready"""
+        if self.websocket and self.websocket.is_connected():
+            self.connection_check_timer.stop()
+            self.request_audio_files()
 
     def update_theme(self):
         """Update all UI elements when theme changes"""
@@ -1077,18 +1089,28 @@ class SceneScreen(BaseScreen):
     @error_boundary
     def request_audio_files(self):
         primary = theme_manager.get("primary_color")
+        
+        # Check if WebSocket is connected
+        if not self.websocket or not self.websocket.is_connected():
+            self.logger.warning("WebSocket not connected - using fallback audio list")
+            self.use_fallback_audio_files()
+            return
+        
         self.update_status("Requesting audio files...", primary)
         success = self.send_websocket_message("get_audio_files")
         if not success:
             self.logger.warning("Failed to request audio files - using fallback list")
-            self.update_status("Using fallback audio list", "orange")
-            self.audio_files = [
-                "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
-                "SPK1950 - Spark Spotify 30sec Radio Dad Rock -14LKFS Radio Mix 05-08-25.mp3",
-                "Audio-clip-_CILW-2022_-Goodbye-I_m-off-now.mp3",
-                "Audio-clip-_CILW-2022_-Greetings.mp3",
-                "Audio-clip-_CILW-2022_-Thank-you.mp3"
-            ]
+            self.use_fallback_audio_files()
+
+    def use_fallback_audio_files(self):
+        """Set fallback audio files and update all UI elements"""
+        self.update_status("Using fallback audio list", "orange")
+        self.audio_files = [
+            "Audio Files Not Found.MP3"
+        ]
+        
+        # Update existing scene rows with fallback audio files
+        self.update_audio_files()
 
     @error_boundary
     def refresh_from_backend(self):

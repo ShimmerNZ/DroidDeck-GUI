@@ -1,9 +1,10 @@
 """
-WALL-E Control System - Main Application Class (Updated with Theme Support)
+DroidDeck Control System - Main Application Class with Front Splash & Shutdown
 """
 
 import os
-from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QHBoxLayout, QFrame, QWidget, QPushButton
+import time
+from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QHBoxLayout, QFrame, QWidget, QPushButton, QApplication
 from PyQt6.QtGui import QPixmap, QPalette, QBrush, QIcon, QFont
 from PyQt6.QtCore import Qt, QTimer, QSize
 
@@ -20,28 +21,120 @@ from widgets.servo_screen import ServoConfigScreen
 from widgets.controller_screen import ControllerConfigScreen
 from widgets.settings_screen import SettingsScreen
 from widgets.scene_screen import SceneScreen
+from widgets.splash_screen import DroidDeckSplashScreen, show_shutdown_splash
 
 
 class WalleApplication(QMainWindow):
-    """Main WALL-E application window managing all screens and navigation with theme support"""
+    """Main DroidDeck application window with enhanced splash screens"""
     
     def __init__(self):
         super().__init__()
-        self.logger = get_logger("main")
         
-        # Initialize logging system
-        self._setup_logging()
+        # Show splash screen first - it will come to front
+        self.splash = DroidDeckSplashScreen()
+        self.splash.show()
+        self.splash.raise_()
+        self.splash.activateWindow()
+        QApplication.processEvents()
+        
+        # Define initialization steps with messages and methods
+        self.init_steps = [
+            ("Initializing DroidDeck core...", self._setup_logging),
+            ("Loading configuration files...", self._setup_theme),
+            ("Establishing connections...", self._setup_websocket_step),
+            ("Loading interface modules...", self._setup_screens),
+            ("Configuring navigation...", self._setup_navigation_step),
+            ("Finalizing DroidDeck...", self._finalize_setup)
+        ]
+        
+        # Run initialization with progress tracking
+        self._run_initialization()
+    
+    def _run_initialization(self):
+        """Run initialization steps with realistic timing"""
+        try:
+            for i, (message, method) in enumerate(self.init_steps):
+                # Update splash screen with current step
+                self.splash.update_progress(i, message)
+                
+                # Vary delay based on step complexity
+                if i in [2, 3]:  # Connection and screens steps
+                    time.sleep(1.2)
+                elif i in [1, 4]:  # Config and navigation steps
+                    time.sleep(0.8)
+                else:
+                    time.sleep(0.6)
+                
+                # Execute the initialization step
+                method()
+                
+                # Process events to update splash
+                QApplication.processEvents()
+                
+                # Extra delay after heavy steps
+                if i in [2, 3]:  # After connections and screens
+                    time.sleep(0.4)
+            
+            # Mark initialization complete
+            self.splash.finish_loading()
+            
+            # Show main window after splash closes
+            QTimer.singleShot(2200, self._show_main_window)
+            
+        except Exception as e:
+            # Show error on splash
+            error_msg = f"Initialization failed: {str(e)}"
+            self.splash.set_message(error_msg)
+            if hasattr(self, 'logger'):
+                self.logger.error(f"DroidDeck initialization error: {e}")
+            
+            # Handle error after delay
+            QTimer.singleShot(3000, lambda: self._handle_init_error(e))
+    
+    def _show_main_window(self):
+        """Show main window and complete initialization"""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, 'logger'):
+            self.logger.info(f"DroidDeck Control System initialized - Pi IP: {self.pi_ip}, Theme: {theme_manager.get_display_name()}")
+    
+    def _handle_init_error(self, error):
+        """Handle initialization errors"""
+        # Could show error dialog or attempt recovery
+        # For now, just close the application
+        QApplication.quit()
+    
+    def _setup_logging(self):
+        """Initialize the logging system"""
+        self.logger = get_logger("main")
+        time.sleep(0.3)
+        
+        logging_config = config_manager.get_logging_config()
+        logger_manager.configure(
+            debug_level=logging_config["debug_level"],
+            module_debug=logging_config["module_debug"]
+        )
+        time.sleep(0.2)
+    
+    def _setup_theme(self):
+        """Initialize theme manager and window setup"""
+        time.sleep(0.4)
         
         # Initialize theme manager
         theme_manager.initialize()
         theme_manager.register_callback(self._apply_theme)
         
-        # Setup main window
-        self.setWindowTitle("WALL-E Control System")
+        # Setup main window with DroidDeck branding
+        self.setWindowTitle("DroidDeck - Professional Droid Control System")
         self.setFixedSize(1280, 800)
         self._setup_background()
+        time.sleep(0.3)
+    
+    def _setup_websocket_step(self):
+        """Setup WebSocket connection"""
+        time.sleep(0.5)
         
-        # Initialize WebSocket connection
         self.websocket = self._setup_websocket()
         
         # Get Pi IP from config for network monitoring
@@ -51,67 +144,32 @@ class WalleApplication(QMainWindow):
         import re
         ip_match = re.search(r'http://([^:]+)', proxy_url)
         self.pi_ip = ip_match.group(1) if ip_match else "10.1.1.230"
+        time.sleep(0.3)
+    
+    def _setup_screens(self):
+        """Initialize all application screens"""
+        time.sleep(0.4)
         
         # Initialize UI components with Pi IP
         self.header = DynamicHeader("Home", pi_ip=self.pi_ip)
         self.header.setMaximumWidth(1000)
         self.stack = QStackedWidget()
-        self.nav_buttons = {}
         
-        # Initialize screens
-        self._setup_screens()
+        time.sleep(0.3)
         
-        # Setup memory management
-        self._setup_memory_management()
-        
-        # Setup UI layout
-        self._setup_navigation()
-        self._setup_layout()
-        
-        # Apply initial theme
-        self._apply_theme()
-        
-        # Connect telemetry updates to header (voltage only, WiFi handled by network monitor)
-        self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
-        
-        self.logger.info(f"WALL-E Control System initialized with Pi IP: {self.pi_ip}, Theme: {theme_manager.get_display_name()}")
-    
-    def _setup_logging(self):
-        """Initialize the logging system with configuration"""
-        logging_config = config_manager.get_logging_config()
-        logger_manager.configure(
-            debug_level=logging_config["debug_level"],
-            module_debug=logging_config["module_debug"]
-        )
-    
-    def _setup_background(self):
-        """Set application background using theme manager"""
-        background_path = theme_manager.get_image_path("background")
-        if os.path.exists(background_path):
-            background = QPixmap(background_path)
-            palette = QPalette()
-            palette.setBrush(QPalette.ColorRole.Window, QBrush(background))
-            self.setPalette(palette)
-            self.logger.debug(f"Applied background: {background_path}")
-        else:
-            self.logger.warning(f"Background image not found: {background_path}")
-    
-    def _setup_websocket(self) -> WebSocketManager:
-        """Setup WebSocket connection"""
-        ws_url = config_manager.get_websocket_url()
-        if not ws_url.startswith("ws://"):
-            ws_url = f"ws://{ws_url}"
-        return WebSocketManager(ws_url)
-    
-    def _setup_screens(self):
-        """Initialize all application screens"""
         # Create screens with shared WebSocket
         self.home_screen = HomeScreen(self.websocket)
+        time.sleep(0.1)
         self.camera_screen = CameraFeedScreen(self.websocket)
+        time.sleep(0.1)
         self.health_screen = HealthScreen(self.websocket)
+        time.sleep(0.1)
         self.servo_screen = ServoConfigScreen(self.websocket)
+        time.sleep(0.1)
         self.controller_screen = ControllerConfigScreen(self.websocket)
+        time.sleep(0.1)
         self.settings_screen = SettingsScreen()
+        time.sleep(0.1)
         self.scene_screen = SceneScreen(self.websocket)
         
         # Add screens to stack
@@ -126,6 +184,55 @@ class WalleApplication(QMainWindow):
         # Connect scene screen signals to home screen for updates
         if hasattr(self.scene_screen, 'scenes_updated') and hasattr(self.home_screen, 'connect_scene_screen_signals'):
             self.home_screen.connect_scene_screen_signals(self.scene_screen)
+        
+        time.sleep(0.2)
+    
+    def _setup_navigation_step(self):
+        """Setup navigation and memory management"""
+        time.sleep(0.3)
+        
+        self.nav_buttons = {}
+        
+        # Setup memory management
+        self._setup_memory_management()
+        
+        # Setup UI layout
+        self._setup_navigation()
+        time.sleep(0.2)
+    
+    def _finalize_setup(self):
+        """Finalize setup and apply theme"""
+        time.sleep(0.3)
+        
+        self._setup_layout()
+        
+        # Apply initial theme
+        self._apply_theme()
+        
+        # Connect telemetry updates to header
+        self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
+        time.sleep(0.2)
+    
+    def _setup_background(self):
+        """Set application background using theme manager"""
+        background_path = theme_manager.get_image_path("background")
+        if os.path.exists(background_path):
+            background = QPixmap(background_path)
+            palette = QPalette()
+            palette.setBrush(QPalette.ColorRole.Window, QBrush(background))
+            self.setPalette(palette)
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"Applied background: {background_path}")
+        else:
+            if hasattr(self, 'logger'):
+                self.logger.warning(f"Background image not found: {background_path}")
+    
+    def _setup_websocket(self) -> WebSocketManager:
+        """Setup WebSocket connection"""
+        ws_url = config_manager.get_websocket_url()
+        if not ws_url.startswith("ws://"):
+            ws_url = f"ws://{ws_url}"
+        return WebSocketManager(ws_url)
     
     def _setup_memory_management(self):
         """Setup periodic memory cleanup"""
@@ -214,7 +321,8 @@ class WalleApplication(QMainWindow):
                 button.setIcon(QIcon(normal_icon_path))
                 button.setIconSize(QSize(64, 64))
             else:
-                self.logger.warning(f"Icon not found: {normal_icon_path}")
+                if hasattr(self, 'logger'):
+                    self.logger.warning(f"Icon not found: {normal_icon_path}")
         
         # Update failsafe button icon
         failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
@@ -222,12 +330,14 @@ class WalleApplication(QMainWindow):
             self.failsafe_button.setIcon(QIcon(failsafe_icon_path))
             self.failsafe_button.setIconSize(QSize(300, 70))
         else:
-            self.logger.warning(f"Failsafe icon not found: {failsafe_icon_path}")
+            if hasattr(self, 'logger'):
+                self.logger.warning(f"Failsafe icon not found: {failsafe_icon_path}")
         
-        # Update window title with theme name
-        self.setWindowTitle(f"WALL-E Control System - {theme_manager.get_display_name()} Theme")
+        # Update window title with DroidDeck branding and theme
+        self.setWindowTitle(f"Droid Deck - {theme_manager.get_display_name()} Theme")
         
-        self.logger.info(f"Applied {theme_manager.get_display_name()} theme")
+        if hasattr(self, 'logger'):
+            self.logger.info(f"Applied {theme_manager.get_display_name()} theme to DroidDeck")
     
     @error_boundary
     def switch_screen(self, screen, name: str):
@@ -256,7 +366,8 @@ class WalleApplication(QMainWindow):
                 if os.path.exists(normal_icon_path):
                     button.setIcon(QIcon(normal_icon_path))
         
-        self.logger.debug(f"Switched to {name} screen")
+        if hasattr(self, 'logger'):
+            self.logger.debug(f"Switched to {name} screen")
     
     @error_boundary
     def _toggle_failsafe(self, checked):
@@ -273,7 +384,8 @@ class WalleApplication(QMainWindow):
         
         # Send command to backend
         self.websocket.send_command("failsafe", state=checked)
-        self.logger.info(f"Failsafe toggled: {checked}")
+        if hasattr(self, 'logger'):
+            self.logger.info(f"Failsafe toggled: {checked}")
     
     def _update_header_from_telemetry(self, message: str):
         """Update header voltage from telemetry data"""
@@ -286,20 +398,61 @@ class WalleApplication(QMainWindow):
                     self.header.update_voltage(voltage)
                 
         except Exception as e:
-            self.logger.error(f"Header update error: {e}")
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Header update error: {e}")
     
     def closeEvent(self, event):
-        """Handle application shutdown with proper cleanup"""
-        self.logger.info("Application closing - cleaning up resources")
+        """Handle application shutdown with shutdown splash"""
+        # Show shutdown splash
+        self.shutdown_splash = show_shutdown_splash()
+        QApplication.processEvents()
         
-        # Unregister from theme manager
-        theme_manager.unregister_callback(self._apply_theme)
+        if hasattr(self, 'logger'):
+            self.logger.info("DroidDeck closing - cleaning up resources")
         
+        shutdown_steps = [
+            ("Saving configurations...", self._save_configs_on_exit),
+            ("Closing connections...", self._close_connections),
+            ("Stopping processes...", self._stop_background_processes),
+            ("Cleaning resources...", self._cleanup_resources),
+            ("Shutdown complete", lambda: None)
+        ]
+        
+        # Run shutdown steps with progress
+        for i, (message, method) in enumerate(shutdown_steps):
+            self.shutdown_splash.update_shutdown_progress(i)
+            time.sleep(0.4)  # Show progress
+            try:
+                method()
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(f"Shutdown error in {message}: {e}")
+            QApplication.processEvents()
+        
+        # Final step
+        self.shutdown_splash.update_shutdown_progress(len(shutdown_steps))
+        time.sleep(0.8)
+        
+        self.shutdown_splash.close()
+        event.accept()
+    
+    def _save_configs_on_exit(self):
+        """Save any pending configurations"""
+        # Add any config saving logic here if needed
+        pass
+    
+    def _close_connections(self):
+        """Close WebSocket and network connections"""
+        if hasattr(self, 'websocket'):
+            self.websocket.close()
+    
+    def _stop_background_processes(self):
+        """Stop background processes"""
         # Stop network monitoring in header
         if hasattr(self.header, 'cleanup'):
             self.header.cleanup()
         
-        # Stop camera thread if active
+        # Stop camera thread
         if hasattr(self.camera_screen, 'image_thread'):
             self.camera_screen.stop_camera_thread()
         
@@ -314,10 +467,11 @@ class WalleApplication(QMainWindow):
         # Cleanup settings screen
         if hasattr(self.settings_screen, 'cleanup'):
             self.settings_screen.cleanup()
-        
-        # Close WebSocket connection
-        if hasattr(self, 'websocket'):
-            self.websocket.close()
+    
+    def _cleanup_resources(self):
+        """Final resource cleanup"""
+        # Unregister theme manager
+        theme_manager.unregister_callback(self._apply_theme)
         
         # Stop timers
         if hasattr(self, 'memory_timer'):
@@ -325,4 +479,3 @@ class WalleApplication(QMainWindow):
         
         # Final cleanup
         MemoryManager.cleanup_widgets(self)
-        event.accept()

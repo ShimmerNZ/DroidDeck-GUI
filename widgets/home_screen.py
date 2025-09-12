@@ -33,6 +33,15 @@ class HomeScreen(BaseScreen):
         
         # Simple navigation tracking
         self.current_scene_index = 0
+
+        # Add these to your existing __init__ method
+        self.auto_advance_enabled = True
+        self.is_playing_scene = False
+        self.last_triggered_scene = None
+
+        # Connect to WebSocket messages for scene completion
+        if hasattr(self, 'websocket') and self.websocket:
+            self.websocket.textMessageReceived.connect(self._handle_websocket_message)
         
         # Enable focus and key events
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -99,20 +108,47 @@ class HomeScreen(BaseScreen):
         if not hasattr(self, "categories") or not self.categories:
             return
             
+        # Don't trigger if already playing (prevent rapid-fire)
+        if hasattr(self, 'is_playing_scene') and self.is_playing_scene:
+            self.logger.debug("Scene already playing, ignoring trigger")
+            return
+            
         cat = self.categories[self.selected_category_idx]
         scenes = self.category_to_scenes.get(cat, [])
         
         current_row = self.queue_list.currentRow()
         if 0 <= current_row < len(scenes):
-            # Emit signal or call backend to trigger scene
-            self.scene_triggered.emit(cat, current_row)
-            
-            # Update progress
             scene = scenes[current_row]
             scene_name = scene.get("label", "Unknown")
-            self.progress_label.setText(f"Progress: Playing '{scene_name}'")
             
-            self.logger.info(f"Triggered scene: {scene_name} from category: {cat}")
+            # Don't re-trigger same scene immediately
+            if (hasattr(self, 'last_triggered_scene') and 
+                scene_name == self.last_triggered_scene and 
+                hasattr(self, 'is_playing_scene') and 
+                self.is_playing_scene):
+                self.logger.debug(f"Scene {scene_name} is currently playing, ignoring trigger")
+                return
+            
+            # Send WebSocket command to backend
+            success = self.send_websocket_message("scene", emotion=scene_name)
+            
+            if success:
+                # Emit signal and update UI
+                self.scene_triggered.emit(cat, current_row)
+                self.progress_label.setText(f"Progress: Playing '{scene_name}'")
+                
+                # Update state tracking
+                if hasattr(self, 'is_playing_scene'):
+                    self.is_playing_scene = True
+                    # Reset scene state after estimated duration as fallback
+                    scene_duration = scene.get("duration", 3.0)  # Get duration or default to 3 seconds
+                    fallback_timeout = int((scene_duration + 2) * 1000)  # Add 2 second buffer, convert to ms
+                    QTimer.singleShot(fallback_timeout, self._reset_scene_state)
+                    self.last_triggered_scene = scene_name
+                
+                self.logger.info(f"Triggered scene: {scene_name} from category: {cat}")
+            else:
+                self.logger.error(f"Failed to trigger scene: {scene_name}")
 
     def showEvent(self, event):
         """Set focus when screen is shown"""
@@ -122,6 +158,12 @@ class HomeScreen(BaseScreen):
         if self.queue_list.count() > 0:
             self.queue_list.setCurrentRow(0)
             self.current_scene_index = 0
+
+    def _reset_scene_state(self):
+        """Reset scene playing state as fallback"""
+        if self.is_playing_scene:
+            self.is_playing_scene = False
+            self.logger.debug("Scene state reset by fallback timer")
 
     def _setup_screen(self):
         root = QHBoxLayout()
@@ -308,6 +350,9 @@ class HomeScreen(BaseScreen):
             btn.setChecked(i == idx)
             btn.setStyleSheet(self._get_category_button_style(selected=(i == idx)))
         self.selected_category_idx = idx
+        self._update_scene_queue_panel()
+        self.selected_category_idx = idx
+        self.last_triggered_scene = None  # Clear to allow re-triggering scenes
         self._update_scene_queue_panel()
         
         # Reset scene selection when category changes
@@ -522,16 +567,52 @@ class HomeScreen(BaseScreen):
     def _on_idle_toggled(self):
         self.idle_button.setStyleSheet(self._get_idle_button_style(selected=self.idle_button.isChecked()))
         if self.idle_button.isChecked():
+            # Send idle mode activation to backend
+            success = self.send_websocket_message("mode", name="idle", state=True)
+            if success:
+                self.logger.info("Idle mode activated - sent to backend")
+            else:
+                self.logger.error("Failed to send idle activation to backend")
+                
             self.idle_timer = QTimer(self)
+            self.auto_advance_enabled = False  # Disable auto-advance during idle
             self.idle_timer.timeout.connect(self._play_idle_scene)
             self.idle_timer.start(20000)
         else:
+            # Send idle mode deactivation to backend  
+            self.auto_advance_enabled = True   # Re-enable auto-advance
+            success = self.send_websocket_message("mode", name="idle", state=False)
+            if success:
+                self.logger.info("Idle mode deactivated - sent to backend")
+            else:
+                self.logger.error("Failed to send idle deactivation to backend")
+                
             if hasattr(self, 'idle_timer'):
                 self.idle_timer.stop()
 
     def _play_idle_scene(self):
-        # TODO: integrate with backend to trigger idle scenes
-        pass
+        """Play an idle scene with backend integration"""
+        try:
+            # Look for scenes in "Idle" category
+            idle_scenes = self.category_to_scenes.get("Idle", [])
+            
+            if idle_scenes:
+                # Pick random idle scene
+                import random
+                idle_scene = random.choice(idle_scenes)
+                scene_name = idle_scene.get("label", "Unknown Idle Scene")
+                
+                # Send to backend
+                success = self.send_websocket_message("scene", emotion=scene_name)
+                if success:
+                    self.logger.info(f"Triggered idle scene: {scene_name}")
+                else:
+                    self.logger.error(f"Failed to trigger idle scene: {scene_name}")
+            else:
+                self.logger.warning("No idle scenes available for idle mode")
+                
+        except Exception as e:
+            self.logger.error(f"Error playing idle scene: {e}")
 
     # ----------------------------------------------------------- Theme Updates
     def _on_theme_changed(self):
@@ -637,3 +718,67 @@ class HomeScreen(BaseScreen):
             theme_manager.unregister_callback(self._on_theme_changed)
         except:
             pass  # Ignore errors during cleanup
+
+    def _handle_websocket_message(self, message: str):
+        """Handle WebSocket messages for scene completion"""
+        try:
+            import json
+            msg = json.loads(message)
+            msg_type = msg.get("type")
+            
+            if msg_type == "scene_completed":
+                scene_name = msg.get("scene_name", "")
+                success = msg.get("success", False)
+                
+                if success and self.auto_advance_enabled:
+                    self.is_playing_scene = False
+                    self._advance_to_next_scene()
+                    
+            elif msg_type == "scene_started":
+                self.is_playing_scene = True
+                scene_name = msg.get("scene_name", "")
+                self.last_triggered_scene = scene_name
+                
+            elif msg_type == "scene_error":
+                self.is_playing_scene = False
+                
+        except Exception as e:
+            self.logger.error(f"Error handling WebSocket message: {e}")
+
+    def _advance_to_next_scene(self):
+        """Advance to next scene based on current mode (Sequential/Random)"""
+        try:
+            if not hasattr(self, "categories") or not self.categories:
+                return
+                
+            cat = self.categories[self.selected_category_idx]
+            scenes = self.category_to_scenes.get(cat, [])
+            
+            if len(scenes) <= 1:
+                return  # Don't auto-advance if only one scene
+                
+            current_row = self.queue_list.currentRow()
+            if current_row < 0:
+                current_row = 0
+                
+            # Sequential vs Random logic
+            if self.selected_mode_idx == 0:  # Sequential mode
+                next_index = (current_row + 1) % len(scenes)
+            else:  # Random mode (idx == 1)
+                import random
+                available_indices = list(range(len(scenes)))
+                if len(scenes) > 1 and current_row in available_indices:
+                    available_indices.remove(current_row)  # Avoid immediate repeat
+                next_index = random.choice(available_indices)
+            
+            # Update UI selection ONLY - don't auto-trigger
+            self.queue_list.setCurrentRow(next_index)
+            self.current_scene_index = next_index
+            
+            # REMOVE THIS LINE - it was auto-triggering the scene:
+            # QTimer.singleShot(500, self._trigger_selected_scene)
+            
+            self.logger.info(f"Auto-advancing from scene {current_row} to {next_index} (selected, not triggered)")
+            
+        except Exception as e:
+            self.logger.error(f"Error advancing to next scene: {e}")

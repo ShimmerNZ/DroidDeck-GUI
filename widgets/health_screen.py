@@ -564,11 +564,9 @@ class HealthScreen(BaseScreen):
                 return
             
             self.logger.debug("Processing telemetry data")
-            
-            # Emit signals for thread-safe updates
-            battery_voltage = (data.get("battery_voltage") or 
-                             data.get("voltage") or 
-                             data.get("battery") or 12.6)
+                
+          # Emit signals for thread-safe updates
+            battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
             
             if battery_voltage > 0:
                 self.voltage_update_signal.emit(battery_voltage)
@@ -576,11 +574,10 @@ class HealthScreen(BaseScreen):
             # Emit status updates
             self.status_update_signal.emit(data)
             
-            # Update graph data
-            current_a0 = (data.get("current_left_track"))
-            current_a1 = (data.get("current_right_track"))
-            current_a2 = (data.get("current_electronics"))
-                          
+            current_a0 = data.get("current_left_track",0.0)
+            current_a1 = data.get("current_right_track",0.0)
+            current_a2 = data.get("current_electronics",0.0)
+             
             relative_time = current_time - self.start_time
             
             self.battery_voltage_data.append(float(battery_voltage))
@@ -593,7 +590,7 @@ class HealthScreen(BaseScreen):
             self._update_graphs()
             
             self.last_telemetry_update = current_time
-            
+
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON decode failed: {e}")
         except Exception as e:

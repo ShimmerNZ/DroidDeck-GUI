@@ -7,7 +7,7 @@
       "Idle"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 1,
     "duration": 2.5,
@@ -20,7 +20,7 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 2,
     "duration": 3.2,
@@ -46,7 +46,7 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 4,
     "duration": 2.1,
@@ -59,7 +59,7 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 5,
     "duration": 4.0,
@@ -72,7 +72,7 @@
       "Sad"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 10,
     "duration": 3.5,
@@ -98,7 +98,7 @@
       "Sad"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 12,
     "duration": 2.2,
@@ -124,7 +124,7 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 21,
     "duration": 3.0,
@@ -150,7 +150,7 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 23,
     "duration": 1.8,
@@ -162,8 +162,8 @@
     "categories": [
       "Angry"
     ],
-    "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_enabled": false,
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 30,
     "duration": 2.3,
@@ -189,7 +189,7 @@
       "Angry"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 32,
     "duration": 2.8,
@@ -202,7 +202,7 @@
       "Surprise"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 40,
     "duration": 1.2,
@@ -228,7 +228,7 @@
       "Surprise"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 42,
     "duration": 2.1,
@@ -241,7 +241,7 @@
       "Love"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 50,
     "duration": 3.5,
@@ -267,7 +267,7 @@
       "Love"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 52,
     "duration": 4.2,
@@ -280,7 +280,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": false,
     "script_name": null,
     "duration": 0.5,
@@ -293,7 +293,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": false,
     "script_name": null,
     "duration": 1.2,
@@ -306,7 +306,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": false,
     "script_name": null,
     "duration": 0.8,
@@ -319,7 +319,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": false,
     "script_name": null,
     "duration": 2.0,
@@ -359,7 +359,7 @@
       "Idle"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 82,
     "duration": 3.0,
@@ -385,7 +385,7 @@
       "Sleepy"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 90,
     "duration": 2.5,
@@ -411,7 +411,7 @@
       "Sleepy"
     ],
     "audio_enabled": true,
-    "audio_file": "Call1-8d855208-7523-4181-ba90-0844bd0386e3 (1).MP3",
+    "audio_file": "",
     "script_enabled": true,
     "script_name": 92,
     "duration": 4.5,

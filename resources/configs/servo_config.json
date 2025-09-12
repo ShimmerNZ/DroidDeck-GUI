@@ -2,10 +2,10 @@
   "nema": {
     "lead_screw_pitch": 8.0,
     "lead_screw_length": 20.0,
-    "homing_speed": 1000,
-    "normal_speed": 1200,
-    "acceleration": 1600,
-    "min_position": 0.0,
-    "max_position": 20.0
+    "homing_speed": 800,
+    "normal_speed": 4800,
+    "acceleration": 1854,
+    "min_position": 5.0,
+    "max_position": 15.0
   }
 }

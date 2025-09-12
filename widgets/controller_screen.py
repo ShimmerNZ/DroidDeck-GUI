@@ -1,7 +1,6 @@
 """
-WALL-E Control System - Clean Controller Configuration Screen
-All issues fixed: Config loading, joystick naming, scene names, padding, theming, header alignment
-Theme integration fully implemented for dynamic color switching
+WALL-E Control System - Complete Controller Configuration Screen
+Fixed maestro detection and servo channel loading issue
 """
 
 import json
@@ -67,6 +66,118 @@ class DirectServoHandler(BehaviorHandler):
             if self.logger:
                 self.logger.error(f"Error in direct servo handler: {e}")
             return False
+
+# Add this new behavior handler class to controller_screen.py after the existing handlers
+
+class NemaStepperHandler(BehaviorHandler):
+    """Handle NEMA stepper control - move between min/max positions or direct control"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.current_position = 0.0  # Track current position for toggle
+        self.is_at_min = True  # Track which end we're at for toggle
+        
+    def process(self, control_name: str, raw_value: float, config: Dict[str, Any]) -> bool:
+        try:
+            behavior_type = config.get('nema_behavior', 'toggle_positions')
+            trigger_timing = config.get('trigger_timing', 'on_press')
+            threshold = 0.5
+            
+            if behavior_type == "toggle_positions":
+                return self._handle_toggle_positions(control_name, raw_value, config, trigger_timing, threshold)
+            elif behavior_type == "sweep_continuous":
+                return self._handle_sweep_continuous(control_name, raw_value, config, trigger_timing, threshold)
+            elif behavior_type == "direct_control":
+                return self._handle_direct_control(control_name, raw_value, config)
+            
+            return False
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in NEMA stepper handler: {e}")
+            return False
+    
+    def _handle_toggle_positions(self, control_name: str, raw_value: float, config: Dict[str, Any], 
+                                trigger_timing: str, threshold: float) -> bool:
+        """Toggle between min and max positions on button press"""
+        if trigger_timing == 'on_press' and raw_value > threshold:
+            # Get NEMA config from controller config
+            min_pos = config.get('min_position', 0.0)
+            max_pos = config.get('max_position', 20.0)
+            speed = config.get('normal_speed', 800)
+            acceleration = config.get('acceleration', 800)
+            
+            # Determine target position
+            target_position = max_pos if self.is_at_min else min_pos
+            self.is_at_min = not self.is_at_min  # Toggle for next press
+            
+            # Send move command
+            self.send_websocket_message("nema_move_to", 
+                                      position_cm=target_position,
+                                      speed=speed,
+                                      acceleration=acceleration)
+            
+            if self.logger:
+                self.logger.debug(f"NEMA toggle: Moving to {target_position:.1f} cm")
+            
+            return True
+        
+        return False
+    
+    def _handle_sweep_continuous(self, control_name: str, raw_value: float, config: Dict[str, Any], 
+                                trigger_timing: str, threshold: float) -> bool:
+        """Start/stop continuous sweeping between min and max"""
+        if trigger_timing == 'on_press' and raw_value > threshold:
+            min_pos = config.get('min_position', 0.0)
+            max_pos = config.get('max_position', 20.0)
+            speed = config.get('normal_speed', 800)
+            acceleration = config.get('acceleration', 800)
+            
+            # Start sweep
+            self.send_websocket_message("nema_sweep",
+                                      min_position_cm=min_pos,
+                                      max_position_cm=max_pos,
+                                      speed=speed,
+                                      acceleration=acceleration)
+            
+            if self.logger:
+                self.logger.debug(f"NEMA sweep: {min_pos:.1f} to {max_pos:.1f} cm")
+            
+            return True
+        
+        return False
+    
+    def _handle_direct_control(self, control_name: str, raw_value: float, config: Dict[str, Any]) -> bool:
+        """Direct position control using analog input"""
+        min_pos = config.get('min_position', 0.0)
+        max_pos = config.get('max_position', 20.0)
+        speed = config.get('normal_speed', 800)
+        acceleration = config.get('acceleration', 800)
+        invert = config.get('invert', False)
+        
+        # Convert raw value (-1 to 1) to position
+        value = -raw_value if invert else raw_value
+        # Map from -1,1 to min,max position
+        position_range = max_pos - min_pos
+        target_position = min_pos + ((value + 1) / 2.0) * position_range
+        
+        # Clamp to valid range
+        target_position = max(min_pos, min(max_pos, target_position))
+        
+        # Only send if position changed significantly (reduce spam)
+        if abs(target_position - self.current_position) > 0.1:
+            self.current_position = target_position
+            
+            self.send_websocket_message("nema_move_to",
+                                      position_cm=target_position,
+                                      speed=speed,
+                                      acceleration=acceleration)
+            
+            if self.logger:
+                self.logger.debug(f"NEMA direct: {target_position:.1f} cm (raw: {raw_value})")
+        
+        return True
+
 
 
 class JoystickPairHandler(BehaviorHandler):
@@ -226,7 +337,8 @@ class BehaviorHandlerRegistry:
             "joystick_pair": JoystickPairHandler(websocket_sender, logger),
             "differential_tracks": DifferentialTracksHandler(websocket_sender, logger),
             "scene_trigger": SceneTriggerHandler(websocket_sender, logger),
-            "toggle_scenes": ToggleScenesHandler(websocket_sender, logger)
+            "toggle_scenes": ToggleScenesHandler(websocket_sender, logger),
+            "nema_stepper": NemaStepperHandler(websocket_sender, logger)
         }
         self.active_mappings = {}
         self.logger = logger
@@ -273,14 +385,12 @@ class BehaviorHandlerRegistry:
                 return f"Cannot mix different behaviors on the same joystick."
         
         return None
-
-
 # ========================================
 # MAIN CONTROLLER CONFIGURATION CLASS
 # ========================================
 
 class ControllerConfigScreen(BaseScreen):
-    """Controller configuration with all fixes applied"""
+    """Controller configuration with all fixes applied including maestro detection"""
 
     calibration_update = pyqtSignal(str, float)
 
@@ -290,10 +400,16 @@ class ControllerConfigScreen(BaseScreen):
         self.selected_row_index = None
         self.parameters_panel = None
         self.config_frame = None
+        
+        # Add maestro tracking (like servo screen)
+        self.maestro_channel_counts = {1: 0, 2: 0}
+        self.maestro_connected = {1: False, 2: False}
+        self._config_loaded = False
+        
         super().__init__(websocket)
 
     def _setup_screen(self):
-        """Initialize controller configuration screen"""
+        """Initialize controller configuration screen with maestro detection"""
         self.setFixedWidth(1200)
         
         self.behavior_registry = BehaviorHandlerRegistry(
@@ -303,12 +419,80 @@ class ControllerConfigScreen(BaseScreen):
         
         self._load_predefined_options()
         self._init_ui()
-        self._load_existing_configuration()
+        
+        # Request maestro detection before loading config
+        QTimer.singleShot(1000, self._detect_maestros)
         
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_controller_input)
+            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
         
         theme_manager.register_callback(self.update_theme)
+
+    def _detect_maestros(self):
+        """Request maestro detection to get available channels"""
+        if self.websocket and self.websocket.is_connected():
+            self.send_websocket_message("get_maestro_info", maestro=1)
+            self.send_websocket_message("get_maestro_info", maestro=2)
+            self.logger.info("Requesting maestro detection for controller config")
+        else:
+            self.logger.warning("WebSocket not connected - using fallback channel list")
+            # Use fallback then load existing config
+            QTimer.singleShot(2000, self._load_existing_configuration)
+
+    def handle_websocket_message(self, message):
+        """Handle WebSocket messages including maestro detection"""
+        try:
+            msg = json.loads(message)
+            msg_type = msg.get("type")
+            
+            if msg_type == "maestro_info":
+                self._handle_maestro_info(msg)
+            elif msg_type == "controller_input":
+                # This is already handled by handle_controller_input
+                pass
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling WebSocket message: {e}")
+
+    def _handle_maestro_info(self, data):
+        """Handle maestro detection results"""
+        maestro_num = data.get("maestro")
+        channels = data.get("channels", 0)
+        connected = data.get("connected", False)
+        
+        if maestro_num in [1, 2]:
+            self.maestro_channel_counts[maestro_num] = channels
+            self.maestro_connected[maestro_num] = connected
+            
+            if self.logger:
+                self.logger.info(f"Controller config - Maestro {maestro_num}: {channels} channels, connected: {connected}")
+            
+            # Update servo channels list
+            self._update_servo_channels()
+            
+            # Load existing configuration after we have maestro info
+            if not self._config_loaded:
+                self._config_loaded = True
+                QTimer.singleShot(500, self._load_existing_configuration)
+
+    def _update_servo_channels(self):
+        """Update servo channels based on detected maestros"""
+        self.servo_channels = []
+        
+        for maestro_num in [1, 2]:
+            if self.maestro_connected.get(maestro_num, False):
+                channel_count = self.maestro_channel_counts.get(maestro_num, 0)
+                for ch in range(channel_count):
+                    self.servo_channels.append(f"m{maestro_num}_ch{ch}")
+        
+        if not self.servo_channels:
+            # Fallback if no maestros detected
+            self.servo_channels = [f"m{m}_ch{c}" for m in [1, 2] for c in range(24)]
+        
+        if self.logger:
+            self.logger.info(f"Updated servo channels: {len(self.servo_channels)} channels available")
 
     def _load_predefined_options(self):
         """Load predefined dropdown options from configs"""
@@ -323,14 +507,11 @@ class ControllerConfigScreen(BaseScreen):
         
         self.behaviors = [
             "direct_servo", "joystick_pair", "differential_tracks", 
-            "scene_trigger", "toggle_scenes"
+            "scene_trigger", "toggle_scenes", "nema_stepper"
         ]
         
-        try:
-            servo_config = config_manager.get_config("resources/configs/servo_config.json") 
-            self.servo_channels = list(servo_config.keys())
-        except Exception:
-            self.servo_channels = [f"m{m}_ch{c}" for m in [1, 2] for c in range(24)]
+        # Don't load servo channels here - wait for maestro detection
+        self.servo_channels = []  # Will be populated by maestro detection
         
         # Load scene names properly
         self.scene_names = []
@@ -449,6 +630,11 @@ class ControllerConfigScreen(BaseScreen):
             scene1 = config.get('scene_1', '?')
             scene2 = config.get('scene_2', '?')
             return f"→ {scene1} ⟷ {scene2}"
+        elif behavior == "nema_stepper":
+            mode = config.get('nema_behavior', 'Not configured')
+            min_pos = config.get('min_position', '?')
+            max_pos = config.get('max_position', '?')
+            return f"→ NEMA {mode}: {min_pos}-{max_pos}cm"
         else:
             return "Configure targets →"
 
@@ -563,6 +749,113 @@ class ControllerConfigScreen(BaseScreen):
         
         layout.addStretch()
         return self.parameters_panel
+    
+    def _create_nema_stepper_params(self, row_data: Dict):
+        """Create parameters for NEMA stepper behavior"""
+        self._add_param_header("NEMA Stepper Configuration")
+        
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            axis_info = QLabel(f"Controls NEMA stepper using {control_name}")
+            self.update_axis_info_style(axis_info)
+            self.params_layout.addWidget(axis_info)
+        
+        # Behavior type selection
+        behavior_combo = QComboBox()
+        behavior_options = ["toggle_positions", "sweep_continuous", "direct_control"]
+        behavior_combo.addItems(["Select Mode..."] + behavior_options)
+        if 'nema_behavior' in row_data['config']:
+            behavior_combo.setCurrentText(row_data['config']['nema_behavior'])
+        behavior_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'nema_behavior', text)
+        )
+        self._add_param_row("Behavior Mode:", behavior_combo)
+        
+        # Load NEMA config from servo config
+        nema_config = self._get_nema_config()
+        
+        # Position limits
+        min_pos_spin = QSpinBox()
+        min_pos_spin.setRange(0, 100)
+        min_pos_spin.setSuffix(" cm")
+        min_pos_spin.setValue(int(row_data['config'].get('min_position', nema_config.get('min_position', 0))))
+        min_pos_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'min_position', float(value))
+        )
+        self._add_param_row("Min Position:", min_pos_spin)
+        
+        max_pos_spin = QSpinBox()
+        max_pos_spin.setRange(1, 100)
+        max_pos_spin.setSuffix(" cm")
+        max_pos_spin.setValue(int(row_data['config'].get('max_position', nema_config.get('max_position', 20))))
+        max_pos_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'max_position', float(value))
+        )
+        self._add_param_row("Max Position:", max_pos_spin)
+        
+        # Speed setting
+        speed_spin = QSpinBox()
+        speed_spin.setRange(100, 2000)
+        speed_spin.setSuffix(" steps/s")
+        speed_spin.setValue(int(row_data['config'].get('normal_speed', nema_config.get('normal_speed', 800))))
+        speed_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'normal_speed', value)
+        )
+        self._add_param_row("Movement Speed:", speed_spin)
+        
+        # Acceleration setting
+        accel_spin = QSpinBox()
+        accel_spin.setRange(100, 2000)
+        accel_spin.setSuffix(" steps/s²")
+        accel_spin.setValue(int(row_data['config'].get('acceleration', nema_config.get('acceleration', 800))))
+        accel_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'acceleration', value)
+        )
+        self._add_param_row("Acceleration:", accel_spin)
+        
+        # Trigger timing (for toggle/sweep modes)
+        current_behavior = row_data['config'].get('nema_behavior', 'toggle_positions')
+        if current_behavior in ['toggle_positions', 'sweep_continuous']:
+            timing_combo = QComboBox()
+            timing_combo.addItems(["on_press", "on_release"])
+            timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
+            timing_combo.currentTextChanged.connect(
+                lambda text: self._update_row_config(row_data, 'trigger_timing', text)
+            )
+            self._add_param_row("Trigger Timing:", timing_combo)
+        
+        # Invert direction (for direct control)
+        if current_behavior == 'direct_control':
+            invert_checkbox = QCheckBox("Invert Direction")
+            invert_checkbox.setChecked(row_data['config'].get('invert', False))
+            invert_checkbox.toggled.connect(
+                lambda checked: self._update_row_config(row_data, 'invert', checked)
+            )
+            self._add_param_row("", invert_checkbox)
+        
+        # Update target display
+        mode = row_data['config'].get('nema_behavior', 'Not configured')
+        min_pos = row_data['config'].get('min_position', '?')
+        max_pos = row_data['config'].get('max_position', '?')
+        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
+
+    def _get_nema_config(self):
+        """Get NEMA configuration from servo config"""
+        try:
+            servo_config = config_manager.get_config("resources/configs/servo_config.json")
+            return servo_config.get("nema", {
+                "min_position": 0.0,
+                "max_position": 20.0,
+                "normal_speed": 800,
+                "acceleration": 800
+            })
+        except Exception:
+            return {
+                "min_position": 0.0,
+                "max_position": 20.0,
+                "normal_speed": 800,
+                "acceleration": 800
+            }
 
     def _show_no_selection_message(self):
         """Show message when no row is selected"""
@@ -629,6 +922,7 @@ class ControllerConfigScreen(BaseScreen):
         
         self.mapping_rows.append(row_data)
 
+    
     def _check_for_conflicts(self):
         """Check for joystick axis conflicts and update UI"""
         conflicts_found = []
@@ -711,6 +1005,8 @@ class ControllerConfigScreen(BaseScreen):
             self._create_scene_trigger_params(row_data)
         elif behavior == "toggle_scenes":
             self._create_toggle_scenes_params(row_data)
+        elif behavior == "nema_stepper":
+            self._create_nema_stepper_params(row_data)
 
     def _create_direct_servo_params(self, row_data: Dict):
         """Create parameters for direct servo behavior"""
@@ -925,6 +1221,11 @@ class ControllerConfigScreen(BaseScreen):
             scene1 = row_data['config'].get('scene_1', '?')
             scene2 = row_data['config'].get('scene_2', '?')
             row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
+        elif behavior == "nema_stepper":
+            mode = row_data['config'].get('nema_behavior', 'Not configured')
+            min_pos = row_data['config'].get('min_position', '?')
+            max_pos = row_data['config'].get('max_position', '?')
+            row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
 
     def _clear_parameters_layout(self):
         """Clear all widgets from parameters layout"""

@@ -70,9 +70,7 @@
     "trigger_timing": "on_press"
   },
   "dpad_down": {
-    "behavior": "scene_trigger",
-    "input_type": "dpad",
-    "scene": "Sleepy",
-    "trigger_timing": "on_press"
+    "behavior": "nema_stepper",
+    "nema_behavior": "toggle_positions"
   }
 }

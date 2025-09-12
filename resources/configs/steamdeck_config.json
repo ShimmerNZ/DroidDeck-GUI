@@ -6,7 +6,7 @@
     "debug_level": "INFO",
     "module_debug": {
       "camera": "ERROR",
-      "servo": "DEBUG",
+      "servo": "ERROR",
       "network": "ERROR",
       "websocket": "WARNING",
       "telemetry": "INFO",

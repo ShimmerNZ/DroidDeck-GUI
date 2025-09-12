@@ -9,13 +9,14 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPus
                             QScrollArea, QWidget, QFrame, QLineEdit, QSpinBox, QSlider,
                             QCheckBox, QButtonGroup)
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPolygon, QColor
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QPoint 
 
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.logger import get_logger
+from typing import Dict, Any
 
 
 class HomePositionSlider(QSlider):
@@ -264,7 +265,7 @@ class ServoConfigScreen(BaseScreen):
             if self.current_controller == 2 and hasattr(self, 'position_slider'):
                 # Block signals to prevent feedback loop
                 self.position_slider.blockSignals(True)
-                self.position_slider.setValue(int(position_cm))
+                self.position_slider.setValue(int(position_cm *10))
                 self.position_slider.blockSignals(False)
                 
                 # Update position display
@@ -714,30 +715,11 @@ class ServoConfigScreen(BaseScreen):
             
         self.logger.info("NEMA connection cleaned up")
         """Enhanced position update with validation and improved feedback"""
-        position_cm = slider_value / 10.0
-        
-        # Validate position
-        if not self.validate_nema_position(position_cm):
-            # Clamp to valid range
-            position_cm = self.clamp_nema_position(position_cm)
-            # Update slider to show clamped value
-            self.position_slider.blockSignals(True)
-            self.position_slider.setValue(int(position_cm * 10))
-            self.position_slider.blockSignals(False)
-            
-            self.update_status(f"Position clamped to {position_cm:.1f} cm", color="orange")
-        
-        # Update internal state and display
-        self.nema_config["current_position"] = position_cm
-        self.position_display.setText(f"{position_cm:.1f} cm")
-        
-        # Restart the debounce timer
-        self.position_update_timer.stop()
-        self.position_update_timer.start(300)  # 300ms debounce
+
 
     def update_nema_position(self, slider_value):
         """Enhanced position update with validation and improved feedback"""
-        position_cm = float(slider_value)
+        position_cm = float(slider_value) /10.0
 
         # Validate position
         if not self.validate_nema_position(position_cm):
@@ -875,7 +857,7 @@ class ServoConfigScreen(BaseScreen):
         primary = theme_manager.get("primary_color")
         self.grid_widget.setStyleSheet(f"""
             QWidget {{ 
-                border: 1px solid {primary}; 
+                border: none; 
                 border-radius: 12px; 
                 background: transparent;
             }}
@@ -1159,8 +1141,8 @@ class ServoConfigScreen(BaseScreen):
         
         # Create main container
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(30)
+        main_layout.setContentsMargins(10, 5, 10, 5)
+        main_layout.setSpacing(20)
         
         # Left side - Configuration
         config_frame = QFrame()
@@ -1218,8 +1200,8 @@ class ServoConfigScreen(BaseScreen):
         form_layout.addWidget(homing_label, 2, 0)
         
         self.homing_speed_spin = QSpinBox()
-        self.homing_speed_spin.setRange(100, 1000)
-        self.homing_speed_spin.setSingleStep(50)
+        self.homing_speed_spin.setRange(400, 5000)
+        self.homing_speed_spin.setSingleStep(100)
         self.homing_speed_spin.setValue(self.nema_config["homing_speed"])
         self.homing_speed_spin.valueChanged.connect(self.update_nema_homing_speed)
         self._update_spinbox_style(self.homing_speed_spin)
@@ -1231,7 +1213,7 @@ class ServoConfigScreen(BaseScreen):
         form_layout.addWidget(normal_label, 3, 0)
         
         self.normal_speed_spin = QSpinBox()
-        self.normal_speed_spin.setRange(200, 2000)
+        self.normal_speed_spin.setRange(400, 5000)
         self.normal_speed_spin.setSingleStep(100)
         self.normal_speed_spin.setValue(self.nema_config["normal_speed"])
         self.normal_speed_spin.valueChanged.connect(self.update_nema_normal_speed)
@@ -1248,7 +1230,7 @@ class ServoConfigScreen(BaseScreen):
         form_layout.addWidget(self.accel_value_label, 4, 1)
         
         self.accel_slider = QSlider(Qt.Orientation.Horizontal)
-        self.accel_slider.setRange(200, 1600)
+        self.accel_slider.setRange(200, 12000)
         self.accel_slider.setValue(self.nema_config["acceleration"])
         self.accel_slider.valueChanged.connect(self.update_nema_acceleration)
         form_layout.addWidget(self.accel_slider, 5, 0, 1, 2)
@@ -1356,9 +1338,9 @@ class ServoConfigScreen(BaseScreen):
         slider_layout.addWidget(slider_label)
         
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
-        self.position_slider.setRange(int(self.nema_config["min_position"]), 
-                                    int(self.nema_config["max_position"]))
-        self.position_slider.setValue(int(self.nema_config["current_position"]))
+        self.position_slider.setRange(int(self.nema_config["min_position"]*10), 
+                                    int(self.nema_config["max_position"]*10))
+        self.position_slider.setValue(int(self.nema_config["current_position"]*10))
         self.position_slider.valueChanged.connect(self.update_nema_position)
         self.position_slider.setFixedHeight(30)
         slider_layout.addWidget(self.position_slider)
@@ -2225,22 +2207,27 @@ class ServoConfigScreen(BaseScreen):
         if hasattr(self, 'grid_layout'):
             self.update_grid()
         self.logger.info("Servo config reloaded")
-    
-    def update_config(self, key: str, field: str, value):
-        """Update configuration for a specific servo channel"""
-        if key not in self.servo_config:
-            self.servo_config[key] = {}
-        self.servo_config[key][field] = value
-        
-        # Send specific websocket messages for speed and acceleration
-        if field == "speed":
-            self.send_websocket_message("servo_speed", channel=key, speed=value)
-            self.logger.debug(f"Sent servo_speed: {key} = {value}")
-        elif field == "accel":
-            self.send_websocket_message("servo_acceleration", channel=key, acceleration=value)
-            self.logger.debug(f"Sent servo_acceleration: {key} = {value}")
-        
-        self.save_config()
+
+    def update_config(self, config_dict: Dict[str, Any]) -> bool:
+        try:
+            # Don't allow updates while moving
+            if self.state == MotorState.MOVING:
+                logger.warning("Cannot update config while motor is moving")
+                return False
+            
+            old_config = dict(self.config.__dict__)  # Save old config
+            self.config.update_from_dict(config_dict)
+            
+            # Log what actually changed
+            for key, value in config_dict.items():
+                if hasattr(self.config, key):
+                    logger.info(f"NEMA config updated: {key} = {value}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update NEMA config: {e}")
+            return False
 
     # ========================================
     # CLEANUP METHODS
