@@ -1,5 +1,5 @@
 """
-DroidDeck Control System - Main Application Class with Front Splash & Shutdown
+Droid Deck Control System - Main Application Class with Front Splash & Shutdown
 """
 
 import os
@@ -24,12 +24,13 @@ from widgets.scene_screen import SceneScreen
 from widgets.splash_screen import DroidDeckSplashScreen, show_shutdown_splash
 
 
-class WalleApplication(QMainWindow):
+class DroidDeckApplication(QMainWindow):
     """Main DroidDeck application window with enhanced splash screens"""
     
     def __init__(self):
         super().__init__()
-        
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+    
         # Show splash screen first - it will come to front
         self.splash = DroidDeckSplashScreen()
         self.splash.show()
@@ -89,7 +90,8 @@ class WalleApplication(QMainWindow):
                 self.logger.error(f"DroidDeck initialization error: {e}")
             
             # Handle error after delay
-            QTimer.singleShot(3000, lambda: self._handle_init_error(e))
+            captured_error = e
+            QTimer.singleShot(3000, lambda: self._handle_init_error(captured_error))
     
     def _show_main_window(self):
         """Show main window and complete initialization"""
@@ -116,7 +118,27 @@ class WalleApplication(QMainWindow):
             module_debug=logging_config["module_debug"]
         )
         time.sleep(0.2)
-    
+    def _center_main_window(self):
+        """Center the main application window on screen"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            screen = QApplication.primaryScreen().availableGeometry()
+            
+            # Calculate center position
+            x = (screen.width() - self.width()) // 2
+            y = (screen.height() - self.height()) // 2
+            
+            self.move(x, y)
+            
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"Centered main window at ({x}, {y}) on screen {screen.width()}x{screen.height()}")
+                
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.warning(f"Could not center main window: {e}")
+            # Fallback positioning
+            self.move(100, 100)
+            
     def _setup_theme(self):
         """Initialize theme manager and window setup"""
         time.sleep(0.4)
@@ -199,6 +221,35 @@ class WalleApplication(QMainWindow):
         # Setup UI layout
         self._setup_navigation()
         time.sleep(0.2)
+
+        self.menuBar().hide()
+        self._setup_hidden_exit()
+
+
+    def _setup_hidden_exit(self):
+        """Setup hidden exit functionality"""
+        # Option 1: Keyboard shortcut (Ctrl+Q or Cmd+Q)
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        exit_shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
+        exit_shortcut.activated.connect(self.close_application)
+        
+
+    def close_application(self):
+        """Safely close the application"""
+        self.logger.info("Application exit requested")
+        
+        # Cleanup health screen resources
+        if hasattr(self, 'health_screen'):
+            self.health_screen.cleanup()
+        
+        # Close websocket connections
+        if hasattr(self, 'websocket'):
+            self.websocket.close()
+        
+        # Exit application
+        from PyQt6.QtWidgets import QApplication
+        QApplication.quit()
+
     
     def _finalize_setup(self):
         """Finalize setup and apply theme"""
@@ -208,6 +259,7 @@ class WalleApplication(QMainWindow):
         
         # Apply initial theme
         self._apply_theme()
+        self._center_main_window()
         
         # Connect telemetry updates to header
         self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)

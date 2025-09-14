@@ -1,13 +1,13 @@
 """
-WALL-E Control System - Network Monitoring Thread (Cleaned)
+WALL-E Control System - Network Monitoring Thread (Fixed with Upload Testing)
 """
 
 import platform
 import re
 import subprocess
 import time
+import statistics
 from typing import Optional, Tuple
-from dataclasses import dataclass
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -15,262 +15,189 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger
 
 
-@dataclass
-class NetworkConfig:
-    """Network monitoring configuration"""
-    UPDATE_INTERVAL: float = 5.0
-    PING_SAMPLES: int = 3
-    PING_TIMEOUT: int = 10
-    HTTP_TIMEOUT: int = 30
-    BANDWIDTH_TEST_SIZE_MB: int = 5
-    CHUNK_SIZE: int = 8192
-    
-    # Signal strength thresholds
-    SIGNAL_EXCELLENT: int = 80
-    SIGNAL_GOOD: int = 60
-    SIGNAL_FAIR: int = 40
-    SIGNAL_POOR: int = 20
-    
-    # Ping quality thresholds (ms)
-    PING_EXCELLENT: int = 20
-    PING_GOOD: int = 50
-    PING_FAIR: int = 100
-    PING_POOR: int = 200
-
-
-class NetworkQuality:
-    """Network quality assessment utilities"""
-    
-    @staticmethod
-    def get_signal_bars(signal_percent: int) -> str:
-        """Convert signal percentage to visual bars"""
-        if signal_percent >= NetworkConfig.SIGNAL_EXCELLENT:
-            return "▂▄▆█"  # 4 bars
-        elif signal_percent >= NetworkConfig.SIGNAL_GOOD:
-            return "▂▄▆▁"  # 3 bars
-        elif signal_percent >= NetworkConfig.SIGNAL_FAIR:
-            return "▂▄▁▁"  # 2 bars
-        elif signal_percent >= NetworkConfig.SIGNAL_POOR:
-            return "▂▁▁▁"  # 1 bar
-        else:
-            return "▁▁▁▁"  # 0 bars
-    
-    @staticmethod
-    def get_ping_quality_score(ping_ms: Optional[float]) -> int:
-        """Convert ping time to quality score (0-100)"""
-        if ping_ms is None:
-            return 0
-        
-        if ping_ms <= NetworkConfig.PING_EXCELLENT:
-            return 100
-        elif ping_ms <= NetworkConfig.PING_GOOD:
-            return 80
-        elif ping_ms <= NetworkConfig.PING_FAIR:
-            return 60
-        elif ping_ms <= NetworkConfig.PING_POOR:
-            return 40
-        else:
-            return 20
-
-
-class PlatformNetworkDetector:
-    """Platform-specific network detection utilities"""
-    
-    def __init__(self):
-        self.platform = platform.system().lower()
-        self.logger = get_logger("network")
-    
-    def get_wifi_signal_strength(self) -> Optional[int]:
-        """Get WiFi signal strength percentage for current platform"""
-        try:
-            if self.platform == "linux":
-                return self._get_linux_wifi_signal()
-            elif self.platform == "darwin":
-                return self._get_macos_wifi_signal()
-            elif self.platform == "windows":
-                return self._get_windows_wifi_signal()
-            else:
-                self.logger.warning(f"Unsupported platform: {self.platform}")
-                return None
-        except Exception as e:
-            self.logger.debug(f"WiFi detection failed: {e}")
-            return None
-    
-    def _get_linux_wifi_signal(self) -> Optional[int]:
-        """Get WiFi signal on Linux using multiple methods"""
-        # Method 1: Try iwconfig
-        try:
-            result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                # Look for signal quality
-                quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
-                if quality_match:
-                    current, maximum = map(int, quality_match.groups())
-                    return int((current / maximum) * 100)
-                
-                # Look for signal level in dBm
-                signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
-                if signal_match:
-                    dbm = int(signal_match.group(1))
-                    # Convert dBm to percentage (rough approximation)
-                    return max(0, min(100, (dbm + 100) * 2))
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        
-        # Method 2: Try nmcli
-        try:
-            result = subprocess.run(['nmcli', '-t', '-f', 'SIGNAL', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                signals = [int(line) for line in result.stdout.strip().split('\n') if line.isdigit()]
-                if signals:
-                    return max(signals)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        
-        # Method 3: Try /proc/net/wireless
-        try:
-            with open('/proc/net/wireless', 'r') as f:
-                lines = f.readlines()
-                if len(lines) > 2:  # Skip header lines
-                    for line in lines[2:]:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            quality = float(parts[2])
-                            return int(quality)
-        except (FileNotFoundError, ValueError, IndexError):
-            pass
-        
-        return None
-    
-    def _get_macos_wifi_signal(self) -> Optional[int]:
-        """Get WiFi signal on macOS"""
-        try:
-            result = subprocess.run(['/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport', '-I'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                # Look for RSSI value
-                rssi_match = re.search(r'agrCtlRSSI: (-?\d+)', result.stdout)
-                if rssi_match:
-                    rssi = int(rssi_match.group(1))
-                    # Convert RSSI to percentage
-                    return max(0, min(100, (rssi + 100) * 2))
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        
-        return None
-    
-    def _get_windows_wifi_signal(self) -> Optional[int]:
-        """Get WiFi signal on Windows"""
-        try:
-            result = subprocess.run(['netsh', 'wlan', 'show', 'profiles'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                # This is a basic implementation - Windows WiFi detection is complex
-                # and would require WMI or other Windows-specific APIs for accuracy
-                self.logger.debug("Windows WiFi detection - basic implementation")
-                return 75  # Return a reasonable default for now
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        
-        return None
-
-
 class NetworkMonitorThread(QThread):
-    """Background network monitoring with proper resource management"""
+    """Background thread for monitoring WiFi signal strength and connectivity"""
     
     # Signals for thread-safe communication
-    status_updated = pyqtSignal(str, int, float)  # status_text, signal_percent, ping_ms
+    wifi_updated = pyqtSignal(int, str, float)  # signal_percent, status_text, ping_ms
     bandwidth_tested = pyqtSignal(float, float, str)  # download_mbps, upload_mbps, status_text
 
-    wifi_updated = pyqtSignal(int, str, float)  # signal_percent, status_text, ping_ms
-    ping_updated = pyqtSignal(float)  # ping_ms
-    
-    def __init__(self, pi_ip: str, config: Optional[NetworkConfig] = None, 
-                 update_interval: Optional[float] = None, **kwargs):
+    def __init__(self, pi_ip: str = "10.1.1.230", update_interval: float = 5.0):
         super().__init__()
-        self.pi_ip = pi_ip
-        
-        # Handle backward compatibility
-        if config is None:
-            config = NetworkConfig()
-            
-        # Override config with any passed parameters for backward compatibility
-        if update_interval is not None:
-            config.UPDATE_INTERVAL = update_interval
-        
-        self.config = config
         self.logger = get_logger("network")
+        self.pi_ip = pi_ip
+        self.update_interval = update_interval
+        self.platform = platform.system().lower()
         
         # Thread control
         self.running = False
         self.bandwidth_test_requested = False
         
-        # Platform detector
-        self.detector = PlatformNetworkDetector()
-        
-        self.logger.info(f"Network monitor initialized for Pi: {pi_ip}")
-    
+        self.logger.info(f"Network monitor initialized for {pi_ip} on {self.platform}")
+
     def run(self):
-        """Main monitoring loop with proper error handling"""
+        """Main monitoring loop"""
         self.running = True
-        self.logger.info("Network monitoring started")
-        
-        try:
-            while self.running:
+        while self.running:
+            try:
+                # Get WiFi signal strength and ping quality
+                wifi_percent = self.get_wifi_signal_strength()
+                ping_quality, avg_ping = self.get_ping_quality()
+                
+                # Format status text
+                status_text = self.format_wifi_status(wifi_percent, avg_ping)
+                
+                # Emit WiFi update
+                self.wifi_updated.emit(wifi_percent, status_text, avg_ping or 0.0)
+                
+                # Handle bandwidth test if requested
                 if self.bandwidth_test_requested:
-                    self._run_bandwidth_test()
                     self.bandwidth_test_requested = False
-                else:
-                    self._update_network_status()
+                    self.run_bandwidth_test()
                 
-                # Wait for next update or exit signal
-                self.msleep(int(self.config.UPDATE_INTERVAL * 1000))
+                # Wait for next interval
+                self.msleep(int(self.update_interval * 1000))
                 
-        except Exception as e:
-            self.logger.error(f"Network monitoring error: {e}")
-        finally:
-            self.logger.info("Network monitoring stopped")
-    
-    def _update_network_status(self):
-        """Update network status and emit signals"""
+            except Exception as e:
+                self.logger.error(f"Network monitoring error: {e}")
+                self.msleep(1000)  # Brief delay before retrying
+
+    def get_wifi_signal_strength(self) -> int:
+        """Get WiFi signal strength percentage for current platform"""
         try:
-            # Get WiFi signal strength
-            wifi_percent = self.detector.get_wifi_signal_strength()
-            if wifi_percent is None:
-                wifi_percent = 0
-                self.logger.debug("WiFi signal detection failed - using 0%")
-            
-            # Get ping quality
-            ping_quality, ping_ms = self._get_ping_quality()
-            
-            # Format status text
-            status_text = self._format_status(wifi_percent, ping_ms)
-            
-            # Emit update signals
-            self.status_updated.emit(status_text, wifi_percent, ping_ms or 0.0)
-            
-            # Emit backward compatibility signals
-            self.wifi_updated.emit(wifi_percent, status_text, ping_ms or 0.0)
-            if ping_ms is not None:
-                self.ping_updated.emit(ping_ms)
-            
+            if self.platform == "linux":
+                return self._get_wifi_signal_linux()
+            elif self.platform == "darwin":
+                return self._get_wifi_signal_macos()
+            elif self.platform == "windows":
+                return self._get_wifi_signal_windows()
+            else:
+                self.logger.debug(f"Unsupported platform: {self.platform}")
+                return self._get_fallback_wifi_signal()
         except Exception as e:
-            self.logger.error(f"Status update failed: {e}")
-            self.status_updated.emit("Network Error", 0, 0.0)
-            self.wifi_updated.emit(0, "Network Error", 0.0)
-    
-    def _get_ping_quality(self) -> Tuple[int, Optional[float]]:
-        """Get connection quality based on ping to Raspberry Pi"""
+            self.logger.debug(f"WiFi detection failed: {e}")
+            return self._get_fallback_wifi_signal()
+
+    def _get_wifi_signal_linux(self) -> int:
+        """Get WiFi signal strength on Linux"""
+        # Method 1: Try iwconfig
+        try:
+            result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                # Look for Link Quality
+                quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
+                if quality_match:
+                    current, maximum = map(int, quality_match.groups())
+                    percentage = int((current / maximum) * 100)
+                    self.logger.debug(f"WiFi signal from iwconfig: {percentage}%")
+                    return percentage
+                
+                # Look for Signal level in dBm
+                signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
+                if signal_match:
+                    dbm = int(signal_match.group(1))
+                    percentage = max(0, min(100, (dbm + 100) * 2))
+                    self.logger.debug(f"WiFi signal from iwconfig dBm: {percentage}%")
+                    return percentage
+        except Exception as e:
+            self.logger.debug(f"iwconfig failed: {e}")
+
+        # Method 2: Try nmcli
+        try:
+            result = subprocess.run(['nmcli', '-t', '-f', 'SIGNAL', 'dev', 'wifi'], 
+                                  capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if line.startswith('*'):  # Connected network
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            signal = re.search(r'(\d+)', parts[1])
+                            if signal:
+                                percentage = int(signal.group(1))
+                                self.logger.debug(f"WiFi signal from nmcli: {percentage}%")
+                                return percentage
+        except Exception as e:
+            self.logger.debug(f"nmcli failed: {e}")
+
+        # Method 3: Try /proc/net/wireless
+        try:
+            with open('/proc/net/wireless', 'r') as f:
+                lines = f.readlines()
+                for line in lines[2:]:  # Skip headers
+                    if ':' in line:
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            signal = float(parts[2])
+                            if signal < 0:  # dBm format
+                                percentage = max(0, min(100, (signal + 90) * 100 / 60))
+                            else:  # Already percentage
+                                percentage = min(100, signal)
+                            self.logger.debug(f"WiFi signal from /proc: {percentage}%")
+                            return int(percentage)
+        except Exception as e:
+            self.logger.debug(f"/proc/net/wireless failed: {e}")
+
+        return self._get_fallback_wifi_signal()
+
+    def _get_wifi_signal_macos(self) -> int:
+        """Get WiFi signal strength on macOS"""
+        try:
+            result = subprocess.run(['/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport', '-I'], 
+                                  capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                # Look for agrCtlRSSI
+                rssi_match = re.search(r'agrCtlRSSI: (-?\d+)', result.stdout)
+                if rssi_match:
+                    rssi = int(rssi_match.group(1))
+                    percentage = max(0, min(100, (rssi + 100) * 2))
+                    self.logger.debug(f"WiFi signal from airport: {percentage}%")
+                    return percentage
+        except Exception as e:
+            self.logger.debug(f"macOS airport command failed: {e}")
+
+        return self._get_fallback_wifi_signal()
+
+    def _get_wifi_signal_windows(self) -> int:
+        """Get WiFi signal strength on Windows"""
+        try:
+            # Use netsh command
+            result = subprocess.run(['netsh', 'wlan', 'show', 'profiles'], 
+                                  capture_output=True, text=True, timeout=3)
+            # This is a placeholder - would need more implementation
+            # Windows WiFi detection requires WMI or other APIs for accuracy
+            self.logger.debug("Windows WiFi detection - returning default")
+            return 75  # Return reasonable default
+        except Exception as e:
+            self.logger.debug(f"Windows netsh failed: {e}")
+
+        return self._get_fallback_wifi_signal()
+
+    def _get_fallback_wifi_signal(self) -> int:
+        """Fallback WiFi signal when platform detection fails"""
+        # Return a reasonable default based on ping success
+        try:
+            quality, ping_ms = self.get_ping_quality()
+            if ping_ms and ping_ms < 100:
+                return 70  # Assume good signal if ping is responsive
+            elif ping_ms and ping_ms < 200:
+                return 50
+            else:
+                return 25
+        except:
+            return 50  # Neutral default
+
+    def get_ping_quality(self) -> Tuple[int, Optional[float]]:
+        """Get ping quality and response time to Pi"""
         try:
             # Build platform-specific ping command
-            if self.detector.platform == "windows":
-                cmd = ['ping', '-n', str(self.config.PING_SAMPLES), '-w', '1000', self.pi_ip]
+            ping_count = 3
+            if self.platform == "windows":
+                cmd = ['ping', '-n', str(ping_count), '-w', '1000', self.pi_ip]
             else:  # macOS and Linux
-                cmd = ['ping', '-c', str(self.config.PING_SAMPLES), '-W', '1', self.pi_ip]
+                cmd = ['ping', '-c', str(ping_count), '-W', '1', self.pi_ip]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, 
-                                  timeout=self.config.PING_TIMEOUT)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:
                 return self._parse_ping_output(result.stdout)
@@ -284,116 +211,197 @@ class NetworkMonitorThread(QThread):
         except Exception as e:
             self.logger.debug(f"Ping test failed: {e}")
             return 0, None
-    
+
     def _parse_ping_output(self, output: str) -> Tuple[int, Optional[float]]:
-        """Parse ping output for different platforms"""
+        """Parse ping output to extract timing information"""
         times = []
         
-        try:
-            if self.detector.platform == "darwin":  # macOS
-                # Look for round-trip statistics
-                stats_match = re.search(r'round-trip min/avg/max/stddev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms', output)
-                if stats_match:
-                    avg_ping = float(stats_match.group(2))
-                    times = [avg_ping]
-                else:
-                    # Fallback: individual time= lines
-                    for line in output.split('\n'):
-                        if 'time=' in line:
-                            time_match = re.search(r'time=(\d+(?:\.\d+)?)', line)
-                            if time_match:
-                                times.append(float(time_match.group(1)))
-            
-            elif self.detector.platform == "linux":  # Linux
+        if self.platform == "darwin":  # macOS
+            # Look for round-trip statistics line first
+            stats_match = re.search(r'round-trip min/avg/max/stddev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms', output)
+            if stats_match:
+                times.append(float(stats_match.group(2)))  # Use average
+            else:
+                # Fall back to individual time= lines
                 for line in output.split('\n'):
                     if 'time=' in line:
                         time_match = re.search(r'time=(\d+(?:\.\d+)?)', line)
                         if time_match:
                             times.append(float(time_match.group(1)))
-            
-            elif self.detector.platform == "windows":  # Windows
-                for line in output.split('\n'):
-                    if 'time=' in line or 'time<' in line:
-                        time_match = re.search(r'time[<=](\d+)ms', line)
-                        if time_match:
-                            times.append(float(time_match.group(1)))
-            
-            if times:
-                avg_time = sum(times) / len(times)
-                quality = NetworkQuality.get_ping_quality_score(avg_time)
-                return quality, avg_time
-            
-        except (ValueError, AttributeError) as e:
-            self.logger.debug(f"Ping parsing error: {e}")
         
+        elif self.platform == "linux":  # Linux (including Steam Deck)
+            # Look for individual time= lines
+            for line in output.split('\n'):
+                if 'time=' in line:
+                    time_match = re.search(r'time=(\d+(?:\.\d+)?)', line)
+                    if time_match:
+                        times.append(float(time_match.group(1)))
+        
+        elif self.platform == "windows":  # Windows
+            # Look for time< or time= patterns
+            for line in output.split('\n'):
+                time_match = re.search(r'time[<=](\d+)ms', line)
+                if time_match:
+                    times.append(float(time_match.group(1)))
+        
+        if times:
+            avg_ping = statistics.mean(times)
+            
+            # Convert ping to quality score
+            if avg_ping <= 20:
+                quality = 100
+            elif avg_ping <= 50:
+                quality = 80
+            elif avg_ping <= 100:
+                quality = 60
+            else:
+                quality = 20
+            
+            self.logger.debug(f"Ping successful: {len(times)} samples, avg={avg_ping:.1f}ms")
+            return quality, avg_ping
+        
+        self.logger.debug("No ping times found in output")
         return 0, None
-    
-    def _format_status(self, wifi_percent: int, ping_ms: Optional[float]) -> str:
-        """Format network status text"""
-        signal_bars = NetworkQuality.get_signal_bars(wifi_percent)
+
+    def format_wifi_status(self, wifi_percent: int, ping_ms: float = None) -> str:
+        """Format WiFi status text with signal bars"""
+        # Create signal bars based on WiFi strength
+        bars = self.get_signal_bars(wifi_percent)
         
         if ping_ms is not None:
-            return f"WiFi: {signal_bars} {wifi_percent}% ({ping_ms:.0f}ms)"
+            return f"{bars} {wifi_percent}% - {ping_ms:.1f}ms"
         else:
-            return f"WiFi: {signal_bars} {wifi_percent}% (timeout)"
-    
+            return f"{bars} {wifi_percent}% - timeout"
+
+    def get_signal_bars(self, percentage: int) -> str:
+        """Generate signal bar representation using ASCII characters"""
+        if percentage >= 75:
+            return "████"  # 4 bars
+        elif percentage >= 50:
+            return "███▒"  # 3 bars
+        elif percentage >= 25:
+            return "██▒▒"  # 2 bars
+        elif percentage > 0:
+            return "█▒▒▒"  # 1 bar
+        else:
+            return "▒▒▒▒"  # 0 bars
+
     def request_bandwidth_test(self):
         """Request bandwidth test on next monitoring cycle"""
         self.bandwidth_test_requested = True
         self.logger.info("Bandwidth test requested")
-    
-    def _run_bandwidth_test(self):
-        """Run bandwidth test to Raspberry Pi"""
+
+    def run_bandwidth_test(self):
+        """Run bandwidth test to Raspberry Pi with both download and upload"""
         try:
             self.logger.info("Starting bandwidth test...")
             
+            # Download test
+            test_size_mb = 5
             start_time = time.time()
-            test_size = self.config.BANDWIDTH_TEST_SIZE_MB * 1024 * 1024
             
             response = requests.get(
                 f"http://{self.pi_ip}:8081/bandwidth_test", 
-                params={"size": test_size},
-                timeout=self.config.HTTP_TIMEOUT, 
+                params={"size": test_size_mb * 1024 * 1024},
+                timeout=30, 
                 stream=True
             )
             
             if response.status_code == 200:
                 total_bytes = 0
-                for chunk in response.iter_content(chunk_size=self.config.CHUNK_SIZE):
-                    if not self.running:  # Check for stop signal
-                        break
+                for chunk in response.iter_content(chunk_size=8192):
                     total_bytes += len(chunk)
                 
                 download_time = time.time() - start_time
-                if download_time > 0:
-                    download_mbps = (total_bytes * 8) / (download_time * 1000000)  # Convert to Mbps
-                    status_text = f"Download: {download_mbps:.1f} Mbps"
+                download_mbps = (total_bytes * 8) / (download_time * 1000000)
+                
+                # Upload test
+                upload_mbps = 0
+                try:
+                    upload_data = b'0' * (test_size_mb * 1024 * 1024)  # 5MB of data
+                    upload_start = time.time()
                     
-                    self.bandwidth_tested.emit(download_mbps, 0.0, status_text)
-                    self.logger.info(f"Bandwidth test complete: {download_mbps:.1f} Mbps")
+                    upload_response = requests.post(
+                        f"http://{self.pi_ip}:8081/bandwidth_upload",
+                        data=upload_data,
+                        headers={'Content-Type': 'application/octet-stream'},
+                        timeout=30
+                    )
+                    
+                    if upload_response.status_code == 200:
+                        upload_result = upload_response.json()
+                        upload_mbps = upload_result.get("upload_mbps", 0)
+                        self.logger.info(f"Upload test successful: {upload_mbps:.1f} Mbps")
+                    else:
+                        self.logger.warning(f"Upload test failed: HTTP {upload_response.status_code}")
+                        
+                except Exception as e:
+                    self.logger.warning(f"Upload test error: {e}")
+                    upload_mbps = 0
+                
+                # Report results
+                status_text = f"Download: {download_mbps:.1f} Mbps"
+                if upload_mbps > 0:
+                    status_text += f", Upload: {upload_mbps:.1f} Mbps"
                 else:
-                    self.bandwidth_tested.emit(0.0, 0.0, "Test failed: invalid timing")
+                    status_text += ", Upload: Not available"
+                
+                self.bandwidth_tested.emit(download_mbps, upload_mbps, status_text)
+                self.logger.info(f"Bandwidth test complete: {status_text}")
+                
             else:
-                self.bandwidth_tested.emit(0.0, 0.0, f"Test failed: HTTP {response.status_code}")
+                self.bandwidth_tested.emit(0, 0, f"Test failed: HTTP {response.status_code}")
                 self.logger.error(f"Bandwidth test failed: HTTP {response.status_code}")
                 
         except requests.exceptions.Timeout:
-            self.bandwidth_tested.emit(0.0, 0.0, "Test failed: timeout")
+            self.bandwidth_tested.emit(0, 0, "Test failed: timeout")
             self.logger.error("Bandwidth test timeout")
         except Exception as e:
-            error_msg = f"Test failed: {str(e)[:30]}"
-            self.bandwidth_tested.emit(0.0, 0.0, error_msg)
+            self.bandwidth_tested.emit(0, 0, f"Test failed: {str(e)[:50]}")
             self.logger.error(f"Bandwidth test error: {e}")
-    
+
     def stop(self):
-        """Stop the network monitoring thread with proper cleanup"""
+        """Stop the network monitoring thread"""
         self.logger.info("Stopping network monitoring thread")
         self.running = False
-        
-        # Wait for thread to finish with timeout
-        if not self.wait(3000):  # 3 second timeout
-            self.logger.warning("Network monitor thread did not stop gracefully")
-            self.terminate()
-            self.wait(1000)  # Give it 1 more second after terminate
-        
-        self.logger.info("Network monitoring thread stopped")
+        self.quit()
+        self.wait(3000)
+
+
+# Test section for standalone running
+if __name__ == "__main__":
+    import sys
+    import os
+    
+    # Add parent directory to path for imports
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    
+    print(f"Testing NetworkMonitorThread on {platform.system()}")
+    
+    # Create a simple logger for testing
+    class SimpleLogger:
+        def info(self, msg): print(f"INFO: {msg}")
+        def debug(self, msg): print(f"DEBUG: {msg}")
+        def warning(self, msg): print(f"WARNING: {msg}")
+        def error(self, msg): print(f"ERROR: {msg}")
+    
+    # Mock the core.logger module for standalone testing
+    import types
+    mock_logger_module = types.ModuleType('core.logger')
+    mock_logger_module.get_logger = lambda name: SimpleLogger()
+    sys.modules['core.logger'] = mock_logger_module
+    
+    # Now we can create the monitor
+    monitor = NetworkMonitorThread(pi_ip='10.1.1.230')
+    
+    print("\n=== Testing Ping ===")
+    quality, ping_ms = monitor.get_ping_quality()
+    print(f"Ping Result: Quality={quality}, Time={ping_ms}ms")
+    
+    print("\n=== Testing WiFi Signal ===")
+    wifi_percent = monitor.get_wifi_signal_strength()
+    print(f"WiFi Signal: {wifi_percent}%")
+    
+    print("\n=== Testing Status Format ===")
+    status = monitor.format_wifi_status(wifi_percent, ping_ms)
+    print(f"Status: {status}")

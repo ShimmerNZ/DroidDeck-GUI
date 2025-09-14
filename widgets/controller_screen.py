@@ -1,6 +1,6 @@
 """
 WALL-E Control System - Complete Controller Configuration Screen
-Fixed maestro detection and servo channel loading issue
+Fixed maestro detection and servo channel loading issue + Bluetooth controller support
 """
 
 import json
@@ -67,7 +67,6 @@ class DirectServoHandler(BehaviorHandler):
                 self.logger.error(f"Error in direct servo handler: {e}")
             return False
 
-# Add this new behavior handler class to controller_screen.py after the existing handlers
 
 class NemaStepperHandler(BehaviorHandler):
     """Handle NEMA stepper control - move between min/max positions or direct control"""
@@ -177,7 +176,6 @@ class NemaStepperHandler(BehaviorHandler):
                 self.logger.debug(f"NEMA direct: {target_position:.1f} cm (raw: {raw_value})")
         
         return True
-
 
 
 class JoystickPairHandler(BehaviorHandler):
@@ -385,12 +383,13 @@ class BehaviorHandlerRegistry:
                 return f"Cannot mix different behaviors on the same joystick."
         
         return None
-# ========================================
+    
+    # ========================================
 # MAIN CONTROLLER CONFIGURATION CLASS
 # ========================================
 
 class ControllerConfigScreen(BaseScreen):
-    """Controller configuration with all fixes applied including maestro detection"""
+    """Controller configuration with all fixes applied including maestro detection and bluetooth controller support"""
 
     calibration_update = pyqtSignal(str, float)
 
@@ -400,6 +399,7 @@ class ControllerConfigScreen(BaseScreen):
         self.selected_row_index = None
         self.parameters_panel = None
         self.config_frame = None
+        self.controller_status_label = None
         
         # Add maestro tracking (like servo screen)
         self.maestro_channel_counts = {1: 0, 2: 0}
@@ -434,6 +434,7 @@ class ControllerConfigScreen(BaseScreen):
         if self.websocket and self.websocket.is_connected():
             self.send_websocket_message("get_maestro_info", maestro=1)
             self.send_websocket_message("get_maestro_info", maestro=2)
+            self.request_controller_info()
             self.logger.info("Requesting maestro detection for controller config")
         else:
             self.logger.warning("WebSocket not connected - using fallback channel list")
@@ -448,6 +449,8 @@ class ControllerConfigScreen(BaseScreen):
             
             if msg_type == "maestro_info":
                 self._handle_maestro_info(msg)
+            elif msg_type == "controller_info":
+                self.handle_controller_info_response(msg)
             elif msg_type == "controller_input":
                 # This is already handled by handle_controller_input
                 pass
@@ -495,13 +498,24 @@ class ControllerConfigScreen(BaseScreen):
             self.logger.info(f"Updated servo channels: {len(self.servo_channels)} channels available")
 
     def _load_predefined_options(self):
-        """Load predefined dropdown options from configs"""
+        """Load predefined dropdown options from configs - now supports multiple controller types"""
+        # Steam Deck inputs (default)
         self.steam_inputs = [
             "left_stick", "right_stick",
             "left_stick_x", "left_stick_y", "right_stick_x", "right_stick_y",
             "left_trigger", "right_trigger", "button_a", "button_b", "button_x", "button_y",
             "shoulder_left", "shoulder_right", "dpad_up", "dpad_down", "dpad_left", "dpad_right"
         ]
+        
+        # Wii Remote + Nunchuk inputs
+        self.wii_inputs = [
+            "button_a", "button_b", "button_1", "button_2", "button_plus", "button_minus", "button_home",
+            "nunchuk_c", "nunchuk_z", "wiimote_tilt_x", "wiimote_tilt_y", 
+            "nunchuk_stick_x", "nunchuk_stick_y", "dpad_up", "dpad_down", "dpad_left", "dpad_right"
+        ]
+        
+        # Start with Steam Deck as default - will be updated when controller connects
+        self.current_inputs = self.steam_inputs.copy()
         
         self.input_types = ["joystick", "trigger", "button", "dpad"]
         
@@ -543,13 +557,35 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.warning(f"Could not load controller config: {e}")
 
+    def update_available_inputs(self, controller_type: str, available_inputs: list):
+        """Update available inputs based on connected controller type"""
+        if controller_type.lower() in ['wii', 'wiimote', 'nintendo']:
+            self.current_inputs = available_inputs if available_inputs else self.wii_inputs
+            controller_name = "Wii Remote"
+        else:
+            self.current_inputs = available_inputs if available_inputs else self.steam_inputs  
+            controller_name = "Steam Deck"
+        
+        # Update all input combo boxes
+        for row_data in self.mapping_rows:
+            current_selection = row_data['input_combo'].currentText()
+            row_data['input_combo'].clear()
+            row_data['input_combo'].addItems(["Select Input..."] + self.current_inputs)
+            
+            # Restore selection if still valid
+            if current_selection in self.current_inputs:
+                row_data['input_combo'].setCurrentText(current_selection)
+        
+        if self.logger:
+            self.logger.info(f"Updated input options for {controller_name}: {len(self.current_inputs)} inputs available")
+
     def _add_mapping_row_from_config(self, control_name: str, control_config: Dict):
-        """Add a mapping row from saved configuration"""
+        """Add a mapping row from saved configuration - updated to use current_inputs"""
         try:
             row = len(self.mapping_rows)
             
             input_combo = QComboBox()
-            input_combo.addItems(["Select Input..."] + self.steam_inputs)
+            input_combo.addItems(["Select Input..."] + self.current_inputs)  # Use current_inputs
             input_combo.setCurrentText(control_name)
             input_combo.setStyleSheet(self._get_combo_style())
             
@@ -610,6 +646,58 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.error(f"Error adding mapping row from config: {e}")
 
+    def request_controller_info(self):
+        """Request controller information from backend"""
+        if self.websocket and self.websocket.is_connected():
+            self.send_websocket_message("get_controller_info")
+            if self.logger:
+                self.logger.info("Requested controller info from backend")
+
+    def handle_controller_info_response(self, data: Dict):
+        """Handle controller info response from backend"""
+        try:
+
+            if not hasattr(self, 'controller_status_label') or self.controller_status_label is None:
+                if self.logger:
+                    self.logger.warning("Controller status label not yet initialized")
+                return
+        
+            try:
+                # This will raise RuntimeError if C++ object has been deleted
+                self.controller_status_label.text()
+            except RuntimeError:
+                if self.logger:
+                    self.logger.warning("Controller status label has been deleted")
+                return
+
+            controller_info = data.get("controller_info", {})
+            connected = controller_info.get("connected", False)
+            controller_type = controller_info.get("controller_type", "unknown")
+            controller_name = controller_info.get("controller_name", "Unknown")
+            available_inputs = controller_info.get("available_inputs", [])
+            
+            if connected:
+                # Update UI to show controller is connected
+                if hasattr(self, 'controller_status_label'):
+                    self.controller_status_label.setText(f"Connected: {controller_name}")
+                    self.controller_status_label.setStyleSheet("color: #4CAF50;")  # Green
+                
+                # Update available inputs
+                if available_inputs:
+                    self.update_available_inputs(controller_type, available_inputs)
+            else:
+                # Show disconnected status
+                if hasattr(self, 'controller_status_label'):
+                    self.controller_status_label.setText("No controller connected")
+                    self.controller_status_label.setStyleSheet("color: #F44336;")  # Red
+            
+            if self.logger:
+                self.logger.info(f"Controller info updated: {controller_name} ({controller_type})")
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling controller info response: {e}")
+
     def _get_target_display_text(self, behavior: str, config: Dict[str, Any]) -> str:
         """Get display text for target column based on behavior and config"""
         if behavior == "direct_servo":
@@ -641,8 +729,23 @@ class ControllerConfigScreen(BaseScreen):
     def _init_ui(self):
         """Initialize the UI layout with proper padding"""
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(100, 20, 15, 15)
+        main_layout.setContentsMargins(100, 25, 40, 15)
+
+        # Status frame at top
+        status_frame = QFrame()
+        status_layout = QHBoxLayout(status_frame)
         
+        status_label = QLabel("Controller Status:")
+        self.controller_status_label = QLabel("Checking...")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.request_controller_info)
+        
+        status_layout.addWidget(status_label)
+        status_layout.addWidget(self.controller_status_label)
+        status_layout.addStretch()
+        status_layout.addWidget(refresh_btn)
+
+        # Main layout
         config_section = self._create_config_section()
         main_layout.addWidget(config_section, stretch=3)
         
@@ -650,6 +753,7 @@ class ControllerConfigScreen(BaseScreen):
         main_layout.addWidget(params_section, stretch=1)
         
         self.setLayout(main_layout)
+        QTimer.singleShot(1000, self.request_controller_info)
 
     def _create_config_section(self):
         """Create the main configuration grid section"""
@@ -672,6 +776,10 @@ class ControllerConfigScreen(BaseScreen):
         
         # Headers with proper alignment
         headers_layout = QGridLayout()
+        headers_layout.setHorizontalSpacing(10)
+        headers_layout.setVerticalSpacing(10)
+        headers_layout.setContentsMargins(0, 0, 0, 0)
+        
         headers = ["Input", "Type", "Behavior", "Target(s)", "Actions"]
         
         self.header_labels = []
@@ -683,12 +791,12 @@ class ControllerConfigScreen(BaseScreen):
             headers_layout.addWidget(header_label, 0, i)
             self.header_labels.append(header_label)
         
-        # Set column stretch factors for proper alignment
-        headers_layout.setColumnStretch(0, 2)  # Input column
-        headers_layout.setColumnStretch(1, 1)  # Type column  
-        headers_layout.setColumnStretch(2, 2)  # Behavior column
-        headers_layout.setColumnStretch(3, 3)  # Target(s) column
-        headers_layout.setColumnStretch(4, 1)  # Actions column
+        # Set column stretch factors
+        headers_layout.setColumnStretch(0, 2)
+        headers_layout.setColumnStretch(1, 1)
+        headers_layout.setColumnStretch(2, 2)
+        headers_layout.setColumnStretch(3, 3)
+        headers_layout.setColumnStretch(4, 1)
         
         layout.addLayout(headers_layout)
         
@@ -699,31 +807,33 @@ class ControllerConfigScreen(BaseScreen):
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout(self.grid_widget)
         
-        # Apply same column stretch factors to the actual grid
-        self.grid_layout.setColumnStretch(0, 2)  # Input column
-        self.grid_layout.setColumnStretch(1, 1)  # Type column  
-        self.grid_layout.setColumnStretch(2, 2)  # Behavior column
-        self.grid_layout.setColumnStretch(3, 3)  # Target(s) column
-        self.grid_layout.setColumnStretch(4, 1)  # Actions column
+        self.grid_layout.setHorizontalSpacing(10)
+        self.grid_layout.setVerticalSpacing(10)
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Apply same column stretch factors
+        self.grid_layout.setColumnStretch(0, 2)
+        self.grid_layout.setColumnStretch(1, 1)
+        self.grid_layout.setColumnStretch(2, 2)
+        self.grid_layout.setColumnStretch(3, 3)
+        self.grid_layout.setColumnStretch(4, 1)
         
         self.scroll_area.setWidget(self.grid_widget)
-        
         layout.addWidget(self.scroll_area)
         
         buttons_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Mapping")
         self.add_btn.clicked.connect(self._add_mapping_row)
         self.update_button_style(self.add_btn)
+        buttons_layout.addWidget(self.add_btn)
         
         self.save_btn = QPushButton("Save All")
         self.save_btn.clicked.connect(self._save_all_mappings)
         self.update_button_style(self.save_btn)
-        
-        buttons_layout.addWidget(self.add_btn)
-        buttons_layout.addStretch()
         buttons_layout.addWidget(self.save_btn)
         
         layout.addLayout(buttons_layout)
+        
         return self.config_frame
 
     def _create_parameters_section(self):
@@ -750,113 +860,6 @@ class ControllerConfigScreen(BaseScreen):
         layout.addStretch()
         return self.parameters_panel
     
-    def _create_nema_stepper_params(self, row_data: Dict):
-        """Create parameters for NEMA stepper behavior"""
-        self._add_param_header("NEMA Stepper Configuration")
-        
-        control_name = row_data['input_combo'].currentText()
-        if control_name != "Select Input...":
-            axis_info = QLabel(f"Controls NEMA stepper using {control_name}")
-            self.update_axis_info_style(axis_info)
-            self.params_layout.addWidget(axis_info)
-        
-        # Behavior type selection
-        behavior_combo = QComboBox()
-        behavior_options = ["toggle_positions", "sweep_continuous", "direct_control"]
-        behavior_combo.addItems(["Select Mode..."] + behavior_options)
-        if 'nema_behavior' in row_data['config']:
-            behavior_combo.setCurrentText(row_data['config']['nema_behavior'])
-        behavior_combo.currentTextChanged.connect(
-            lambda text: self._update_row_config(row_data, 'nema_behavior', text)
-        )
-        self._add_param_row("Behavior Mode:", behavior_combo)
-        
-        # Load NEMA config from servo config
-        nema_config = self._get_nema_config()
-        
-        # Position limits
-        min_pos_spin = QSpinBox()
-        min_pos_spin.setRange(0, 100)
-        min_pos_spin.setSuffix(" cm")
-        min_pos_spin.setValue(int(row_data['config'].get('min_position', nema_config.get('min_position', 0))))
-        min_pos_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'min_position', float(value))
-        )
-        self._add_param_row("Min Position:", min_pos_spin)
-        
-        max_pos_spin = QSpinBox()
-        max_pos_spin.setRange(1, 100)
-        max_pos_spin.setSuffix(" cm")
-        max_pos_spin.setValue(int(row_data['config'].get('max_position', nema_config.get('max_position', 20))))
-        max_pos_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'max_position', float(value))
-        )
-        self._add_param_row("Max Position:", max_pos_spin)
-        
-        # Speed setting
-        speed_spin = QSpinBox()
-        speed_spin.setRange(100, 2000)
-        speed_spin.setSuffix(" steps/s")
-        speed_spin.setValue(int(row_data['config'].get('normal_speed', nema_config.get('normal_speed', 800))))
-        speed_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'normal_speed', value)
-        )
-        self._add_param_row("Movement Speed:", speed_spin)
-        
-        # Acceleration setting
-        accel_spin = QSpinBox()
-        accel_spin.setRange(100, 2000)
-        accel_spin.setSuffix(" steps/s²")
-        accel_spin.setValue(int(row_data['config'].get('acceleration', nema_config.get('acceleration', 800))))
-        accel_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'acceleration', value)
-        )
-        self._add_param_row("Acceleration:", accel_spin)
-        
-        # Trigger timing (for toggle/sweep modes)
-        current_behavior = row_data['config'].get('nema_behavior', 'toggle_positions')
-        if current_behavior in ['toggle_positions', 'sweep_continuous']:
-            timing_combo = QComboBox()
-            timing_combo.addItems(["on_press", "on_release"])
-            timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
-            timing_combo.currentTextChanged.connect(
-                lambda text: self._update_row_config(row_data, 'trigger_timing', text)
-            )
-            self._add_param_row("Trigger Timing:", timing_combo)
-        
-        # Invert direction (for direct control)
-        if current_behavior == 'direct_control':
-            invert_checkbox = QCheckBox("Invert Direction")
-            invert_checkbox.setChecked(row_data['config'].get('invert', False))
-            invert_checkbox.toggled.connect(
-                lambda checked: self._update_row_config(row_data, 'invert', checked)
-            )
-            self._add_param_row("", invert_checkbox)
-        
-        # Update target display
-        mode = row_data['config'].get('nema_behavior', 'Not configured')
-        min_pos = row_data['config'].get('min_position', '?')
-        max_pos = row_data['config'].get('max_position', '?')
-        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
-
-    def _get_nema_config(self):
-        """Get NEMA configuration from servo config"""
-        try:
-            servo_config = config_manager.get_config("resources/configs/servo_config.json")
-            return servo_config.get("nema", {
-                "min_position": 0.0,
-                "max_position": 20.0,
-                "normal_speed": 800,
-                "acceleration": 800
-            })
-        except Exception:
-            return {
-                "min_position": 0.0,
-                "max_position": 20.0,
-                "normal_speed": 800,
-                "acceleration": 800
-            }
-
     def _show_no_selection_message(self):
         """Show message when no row is selected"""
         self._clear_parameters_layout()
@@ -868,11 +871,11 @@ class ControllerConfigScreen(BaseScreen):
         self.params_layout.addWidget(self.no_selection_label)
 
     def _add_mapping_row(self):
-        """Add a new mapping configuration row"""
+        """Add a new mapping configuration row - updated to use current_inputs"""
         row = len(self.mapping_rows)
         
         input_combo = QComboBox()
-        input_combo.addItems(["Select Input..."] + self.steam_inputs)
+        input_combo.addItems(["Select Input..."] + self.current_inputs)
         input_combo.setStyleSheet(self._get_combo_style())
         
         type_combo = QComboBox()
@@ -921,7 +924,6 @@ class ControllerConfigScreen(BaseScreen):
         behavior_combo.currentTextChanged.connect(lambda text: self._on_behavior_changed(row, text))
         
         self.mapping_rows.append(row_data)
-
     
     def _check_for_conflicts(self):
         """Check for joystick axis conflicts and update UI"""
@@ -1180,6 +1182,113 @@ class ControllerConfigScreen(BaseScreen):
         scene2 = row_data['config'].get('scene_2', '?')
         row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
 
+    def _create_nema_stepper_params(self, row_data: Dict):
+        """Create parameters for NEMA stepper behavior"""
+        self._add_param_header("NEMA Stepper Configuration")
+        
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            axis_info = QLabel(f"Controls NEMA stepper using {control_name}")
+            self.update_axis_info_style(axis_info)
+            self.params_layout.addWidget(axis_info)
+        
+        # Behavior type selection
+        behavior_combo = QComboBox()
+        behavior_options = ["toggle_positions", "sweep_continuous", "direct_control"]
+        behavior_combo.addItems(["Select Mode..."] + behavior_options)
+        if 'nema_behavior' in row_data['config']:
+            behavior_combo.setCurrentText(row_data['config']['nema_behavior'])
+        behavior_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'nema_behavior', text)
+        )
+        self._add_param_row("Behavior Mode:", behavior_combo)
+        
+        # Load NEMA config from servo config
+        nema_config = self._get_nema_config()
+        
+        # Position limits
+        min_pos_spin = QSpinBox()
+        min_pos_spin.setRange(0, 100)
+        min_pos_spin.setSuffix(" cm")
+        min_pos_spin.setValue(int(row_data['config'].get('min_position', nema_config.get('min_position', 0))))
+        min_pos_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'min_position', float(value))
+        )
+        self._add_param_row("Min Position:", min_pos_spin)
+        
+        max_pos_spin = QSpinBox()
+        max_pos_spin.setRange(1, 100)
+        max_pos_spin.setSuffix(" cm")
+        max_pos_spin.setValue(int(row_data['config'].get('max_position', nema_config.get('max_position', 20))))
+        max_pos_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'max_position', float(value))
+        )
+        self._add_param_row("Max Position:", max_pos_spin)
+        
+        # Speed setting
+        speed_spin = QSpinBox()
+        speed_spin.setRange(100, 2000)
+        speed_spin.setSuffix(" steps/s")
+        speed_spin.setValue(int(row_data['config'].get('normal_speed', nema_config.get('normal_speed', 800))))
+        speed_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'normal_speed', value)
+        )
+        self._add_param_row("Movement Speed:", speed_spin)
+        
+        # Acceleration setting
+        accel_spin = QSpinBox()
+        accel_spin.setRange(100, 2000)
+        accel_spin.setSuffix(" steps/s²")
+        accel_spin.setValue(int(row_data['config'].get('acceleration', nema_config.get('acceleration', 800))))
+        accel_spin.valueChanged.connect(
+            lambda value: self._update_row_config(row_data, 'acceleration', value)
+        )
+        self._add_param_row("Acceleration:", accel_spin)
+        
+        # Trigger timing (for toggle/sweep modes)
+        current_behavior = row_data['config'].get('nema_behavior', 'toggle_positions')
+        if current_behavior in ['toggle_positions', 'sweep_continuous']:
+            timing_combo = QComboBox()
+            timing_combo.addItems(["on_press", "on_release"])
+            timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
+            timing_combo.currentTextChanged.connect(
+                lambda text: self._update_row_config(row_data, 'trigger_timing', text)
+            )
+            self._add_param_row("Trigger Timing:", timing_combo)
+        
+        # Invert direction (for direct control)
+        if current_behavior == 'direct_control':
+            invert_checkbox = QCheckBox("Invert Direction")
+            invert_checkbox.setChecked(row_data['config'].get('invert', False))
+            invert_checkbox.toggled.connect(
+                lambda checked: self._update_row_config(row_data, 'invert', checked)
+            )
+            self._add_param_row("", invert_checkbox)
+        
+        # Update target display
+        mode = row_data['config'].get('nema_behavior', 'Not configured')
+        min_pos = row_data['config'].get('min_position', '?')
+        max_pos = row_data['config'].get('max_position', '?')
+        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
+
+    def _get_nema_config(self):
+        """Get NEMA configuration from servo config"""
+        try:
+            servo_config = config_manager.get_config("resources/configs/servo_config.json")
+            return servo_config.get("nema", {
+                "min_position": 0.0,
+                "max_position": 20.0,
+                "normal_speed": 800,
+                "acceleration": 800
+            })
+        except Exception:
+            return {
+                "min_position": 0.0,
+                "max_position": 20.0,
+                "normal_speed": 800,
+                "acceleration": 800
+            }
+
     def _add_param_header(self, text: str):
         """Add a parameter section header"""
         header = QLabel(text)
@@ -1264,32 +1373,33 @@ class ControllerConfigScreen(BaseScreen):
         """Rebuild grid layout with correct row indices after removal"""
         while self.grid_layout.count():
             self.grid_layout.takeAt(0)
+            
+        # Reapply all layout settings to match headers exactly
+        self.grid_layout.setHorizontalSpacing(10)
+        self.grid_layout.setVerticalSpacing(10)
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
         
         # Reapply column stretch factors
-        self.grid_layout.setColumnStretch(0, 2)  # Input column
-        self.grid_layout.setColumnStretch(1, 1)  # Type column  
-        self.grid_layout.setColumnStretch(2, 2)  # Behavior column
-        self.grid_layout.setColumnStretch(3, 3)  # Target(s) column
-        self.grid_layout.setColumnStretch(4, 1)  # Actions column
-        
+        self.grid_layout.setColumnStretch(0, 2)
+        self.grid_layout.setColumnStretch(1, 1)
+        self.grid_layout.setColumnStretch(2, 2)
+        self.grid_layout.setColumnStretch(3, 3)
+        self.grid_layout.setColumnStretch(4, 1)
+            
         for row, row_data in enumerate(self.mapping_rows):
             self.grid_layout.addWidget(row_data['input_combo'], row, 0)
             self.grid_layout.addWidget(row_data['type_combo'], row, 1)
             self.grid_layout.addWidget(row_data['behavior_combo'], row, 2)
             self.grid_layout.addWidget(row_data['target_label'], row, 3)
             
-            actions_layout = QHBoxLayout()
-            
-            row_data['select_btn'].clicked.disconnect()
-            row_data['select_btn'].clicked.connect(lambda checked, r=row: self._select_row_for_config(r))
-            
-            row_data['remove_btn'].clicked.disconnect()
-            row_data['remove_btn'].clicked.connect(lambda checked, r=row: self._remove_mapping_row(r))
+            # Create actions widget for this row
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(5)
             
             actions_layout.addWidget(row_data['select_btn'])
             actions_layout.addWidget(row_data['remove_btn'])
-            actions_widget = QWidget()
-            actions_widget.setLayout(actions_layout)
             
             self.grid_layout.addWidget(actions_widget, row, 4)
 

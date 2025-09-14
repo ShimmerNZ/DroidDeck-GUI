@@ -843,7 +843,7 @@ class ServoConfigScreen(BaseScreen):
         grid_and_selector_layout.addWidget(control_panel)
         
         layout = QVBoxLayout()
-        layout.setContentsMargins(90, 10, 10, 5)
+        layout.setContentsMargins(90, 10, 20, 5)
         status_container = QHBoxLayout()
         status_container.addStretch()
         status_container.addWidget(self.status_label)
@@ -1145,9 +1145,9 @@ class ServoConfigScreen(BaseScreen):
         main_layout.setSpacing(20)
         
         # Left side - Configuration
-        config_frame = QFrame()
-        config_frame.setFrameStyle(QFrame.Shape.Box)
-        config_frame.setStyleSheet(f"""
+        self.config_frame = QFrame()
+        self.config_frame.setFrameStyle(QFrame.Shape.Box)
+        self.config_frame.setStyleSheet(f"""
             QFrame {{
                 border: 1px solid {theme_manager.get('primary_color')};
                 border-radius: 12px;
@@ -1160,11 +1160,11 @@ class ServoConfigScreen(BaseScreen):
         config_layout.setSpacing(15)
         
         # Configuration header
-        config_header = QLabel("NEMA CONFIGURATION")
-        config_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        config_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        config_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
-        config_layout.addWidget(config_header)
+        self.config_header = QLabel("NEMA CONFIGURATION")
+        self.config_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.config_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.config_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
+        config_layout.addWidget(self.config_header)
         
         # Configuration form in grid
         form_layout = QGridLayout()
@@ -1289,12 +1289,12 @@ class ServoConfigScreen(BaseScreen):
         config_layout.addWidget(self.nema_status_label)
         
         config_layout.addStretch()
-        config_frame.setLayout(config_layout)
+        self.config_frame.setLayout(config_layout)
         
         # Right side - Position Control
-        control_frame = QFrame()
-        control_frame.setFrameStyle(QFrame.Shape.Box)
-        control_frame.setStyleSheet(f"""
+        self.control_frame = QFrame()
+        self.control_frame.setFrameStyle(QFrame.Shape.Box)
+        self.control_frame.setStyleSheet(f"""
             QFrame {{
                 border: 1px solid {theme_manager.get('primary_color')};
                 border-radius: 12px;
@@ -1307,11 +1307,11 @@ class ServoConfigScreen(BaseScreen):
         control_layout.setSpacing(20)
         
         # Control header
-        control_header = QLabel("POSITION CONTROL")
-        control_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        control_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        control_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
-        control_layout.addWidget(control_header)
+        self.control_header = QLabel("POSITION CONTROL")
+        self.control_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.control_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.control_header.setStyleSheet(f"color: {theme_manager.get('primary_color')}; background: transparent;")
+        control_layout.addWidget(self.control_header)
         
         # Current position display
         self.position_display = QLabel(f"{self.nema_config['current_position']:.1f} cm")
@@ -1369,11 +1369,11 @@ class ServoConfigScreen(BaseScreen):
 
         # Add some spacing
         control_layout.addSpacing(10)
-        control_frame.setLayout(control_layout)
+        self.control_frame.setLayout(control_layout)
         
         # Add both frames to main layout
-        main_layout.addWidget(config_frame, stretch=1)
-        main_layout.addWidget(control_frame, stretch=1)
+        main_layout.addWidget(self.config_frame, stretch=1)
+        main_layout.addWidget(self.control_frame, stretch=1)
         
         # Create container widget and add to grid
         container_widget = QWidget()
@@ -1387,9 +1387,6 @@ class ServoConfigScreen(BaseScreen):
     # ========================================
     
     def on_maestro_changed(self, maestro_index: int):
-        """Enhanced maestro change handler with NEMA support"""
-        if maestro_index == self.current_maestro and maestro_index < 2:
-            return
         
         # Stop current operations
         self.stop_all_sweeps()
@@ -1552,6 +1549,59 @@ class ServoConfigScreen(BaseScreen):
             
             # Update all servo widgets in grid
             self._update_servo_widgets_theme()
+
+            # Update NEMA-specific elements 
+            if self.current_controller == 2:  # NEMA is active
+                # Update NEMA configuration frame borders
+                if hasattr(self, 'config_frame'):
+                    primary = theme_manager.get("primary_color")
+                    self.config_frame.setStyleSheet(f"""
+                        QFrame {{
+                            border: 1px solid {primary};
+                            border-radius: 12px;
+                            background-color: rgba(0, 0, 0, 0.1);
+                        }}
+                    """)
+                
+                if hasattr(self, 'control_frame'):
+                    primary = theme_manager.get("primary_color")
+                    self.control_frame.setStyleSheet(f"""
+                        QFrame {{
+                            border: 1px solid {primary};
+                            border-radius: 12px;
+                            background-color: rgba(0, 0, 0, 0.1);
+                        }}
+                    """)
+                
+                # Update NEMA headers
+                if hasattr(self, 'config_header'):
+                    primary = theme_manager.get("primary_color")
+                    self.config_header.setStyleSheet(f"color: {primary}; background: transparent;")
+                
+                if hasattr(self, 'control_header'):
+                    primary = theme_manager.get("primary_color")
+                    self.control_header.setStyleSheet(f"color: {primary}; background: transparent;")
+                
+                # Update all NEMA spinboxes
+                nema_spinboxes = ['pitch_spin', 'length_spin', 'homing_speed_spin', 'normal_speed_spin', 'min_pos_spin', 'max_pos_spin']
+                for spinbox_name in nema_spinboxes:
+                    if hasattr(self, spinbox_name):
+                        spinbox = getattr(self, spinbox_name)
+                        self._update_spinbox_style(spinbox)
+                
+                # Update NEMA slider
+                if hasattr(self, 'accel_slider'):
+                    self._update_slider_style(self.accel_slider)
+                if hasattr(self, 'position_slider'):
+                    self._update_slider_style(self.position_slider)
+                
+                # Update NEMA labels
+                nema_labels = ['accel_value_label', 'position_display']
+                for label_name in nema_labels:
+                    if hasattr(self, label_name):
+                        label = getattr(self, label_name)
+                        label.setStyleSheet("color: white; background: transparent;")
+            
             
             self.logger.info(f"Servo screen updated for theme: {theme_manager.get_theme_name()}")
         except Exception as e:

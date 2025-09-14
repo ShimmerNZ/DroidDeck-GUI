@@ -3,7 +3,7 @@
     "esp32_cam_url": "http://10.1.1.203:81/stream",
     "camera_proxy_url": "http://10.1.1.230:8081/stream",
     "control_websocket_url": "ws://10.1.1.230:8766",
-    "debug_level": "INFO",
+    "debug_level": "ERROR",
     "module_debug": {
       "camera": "ERROR",
       "servo": "ERROR",
@@ -13,7 +13,7 @@
       "ui": "INFO",
       "config": "WARNING",
       "main": "INFO",
-      "controller": "INFO",
+      "controller": "DEBUG",
       "error": "ERROR"
     },
     "wave_detection": {

@@ -1,21 +1,313 @@
 """
-Settings Screen (Themed) - Part 1
-- Class definition, initialization, and UI setup methods
-- Theme integration and styling methods
+Settings Screen (Themed)
 """
-
+import requests
+import socket
+import time
+from urllib.parse import urlparse 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QSpinBox, QSlider, QPushButton,
-    QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget
+    QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QProgressDialog, QApplication
 )
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+
+# ========================================
+# STEP 1: Add these imports at the top of your settings_screen.py file
+# ========================================
+
+# Add these new imports to the existing import section:
+import requests
+import socket
+import time
+from PyQt6.QtWidgets import QProgressDialog
+from PyQt6.QtCore import QThread, pyqtSignal
+
+# ========================================
+# STEP 2: Add the NetworkTestThread class INSIDE your settings_screen.py file
+# (Add this after your existing imports but before the main SettingsScreen class)
+# ========================================
+
+class NetworkTestThread(QThread):
+    """Background thread for network connectivity testing"""
+    
+    progress_updated = pyqtSignal(str, str)  # test_name, status
+    test_completed = pyqtSignal(dict)  # results dictionary
+    
+    def __init__(self, esp32_url, proxy_url, ws_url, websocket_sender=None):
+        super().__init__()
+        self.esp32_url = esp32_url
+        self.proxy_url = proxy_url 
+        self.ws_url = ws_url
+        self.websocket_sender = websocket_sender
+        self.results = {}
+
+    def run(self):
+        """Run comprehensive network tests with proper proxy state management"""
+        try:
+            # Test 1: URL Format Validation
+            self.progress_updated.emit("Validating URL formats...", "testing")
+            self.validate_url_formats()
+            
+            # Test 2: Check Camera Proxy Status FIRST
+            self.progress_updated.emit("Checking camera proxy status...", "testing")
+            proxy_initial_state = self.check_camera_proxy_status()  # True=running, False=stopped
+            
+            # Test 3: Handle ESP32 testing (needs proxy OFF)
+            proxy_needs_management = False
+            if self.esp32_url:
+                if proxy_initial_state:  # Proxy is currently running
+                    self.progress_updated.emit("Temporarily disabling camera proxy for ESP32 test...", "testing")
+                    self.disable_camera_proxy()
+                    time.sleep(3)  # Wait for proxy to shut down
+                    proxy_needs_management = True
+                
+                # Test ESP32 Camera Direct Connection (with proxy disabled)
+                self.progress_updated.emit("Testing ESP32 camera connection...", "testing")
+                self.test_esp32_connection()
+                
+                if proxy_needs_management:  # Restore proxy to original state (ON)
+                    self.progress_updated.emit("Restoring camera proxy (was originally running)...", "testing")
+                    self.enable_camera_proxy()
+                    time.sleep(2)  # Wait for proxy to start up
+            
+            # Test 4: Handle Camera Proxy testing (needs proxy ON)
+            if self.proxy_url:
+                if not proxy_initial_state:  # Proxy was originally stopped
+                    self.progress_updated.emit("Enabling camera proxy for proxy test...", "testing")
+                    self.enable_camera_proxy()
+                    time.sleep(3)  # Wait for proxy to start up
+                    proxy_needs_management = True
+                
+                # Test Camera Proxy Connection (with proxy enabled)
+                self.progress_updated.emit("Testing camera proxy connection...", "testing")
+                self.test_proxy_connection()
+                
+                if proxy_needs_management and not proxy_initial_state:  # Restore proxy to original state (OFF)
+                    self.progress_updated.emit("Restoring camera proxy to original state (off)...", "testing")
+                    self.disable_camera_proxy()
+            
+            # Test 5: Test WebSocket Connection (doesn't need proxy management)
+            if self.ws_url:
+                self.progress_updated.emit("Testing WebSocket connection...", "testing")
+                self.test_websocket_connection()
+                
+            self.progress_updated.emit("Tests completed!", "complete")
+            self.test_completed.emit(self.results)
+            
+        except Exception as e:
+            self.results['error'] = f"Test failed with error: {str(e)}"
+            self.test_completed.emit(self.results)
+
+    def validate_url_formats(self):
+        """Validate URL formats"""
+        # WebSocket URL
+        if self.ws_url:
+            try:
+                if not (self.ws_url.startswith("ws://") or self.ws_url.startswith("wss://")):
+                    test_ws_url = f"ws://{self.ws_url}"
+                else:
+                    test_ws_url = self.ws_url
+                    
+                parsed = urlparse(test_ws_url)
+                if parsed.scheme in ['ws', 'wss'] and parsed.netloc:
+                    self.results['ws_format'] = {'status': 'success', 'message': f'Valid format: {test_ws_url}'}
+                else:
+                    self.results['ws_format'] = {'status': 'error', 'message': f'Invalid WebSocket URL format: {test_ws_url}'}
+            except Exception as e:
+                self.results['ws_format'] = {'status': 'error', 'message': f'WebSocket URL validation failed: {str(e)}'}
+        
+        # ESP32 URL
+        if self.esp32_url:
+            try:
+                parsed = urlparse(self.esp32_url)
+                if parsed.scheme in ['http', 'https'] and parsed.netloc:
+                    self.results['esp32_format'] = {'status': 'success', 'message': f'Valid format: {self.esp32_url}'}
+                else:
+                    self.results['esp32_format'] = {'status': 'error', 'message': f'Invalid ESP32 URL format: {self.esp32_url}'}
+            except Exception as e:
+                self.results['esp32_format'] = {'status': 'error', 'message': f'ESP32 URL validation failed: {str(e)}'}
+        
+        # Proxy URL 
+        if self.proxy_url:
+            try:
+                parsed = urlparse(self.proxy_url)
+                if parsed.scheme in ['http', 'https'] and parsed.netloc:
+                    self.results['proxy_format'] = {'status': 'success', 'message': f'Valid format: {self.proxy_url}'}
+                else:
+                    self.results['proxy_format'] = {'status': 'error', 'message': f'Invalid proxy URL format: {self.proxy_url}'}
+            except Exception as e:
+                self.results['proxy_format'] = {'status': 'error', 'message': f'Proxy URL validation failed: {str(e)}'}
+
+    def check_camera_proxy_status(self):
+        """Check if camera proxy is currently running - returns True if running, False if stopped"""
+        if not self.proxy_url:
+            self.results['proxy_initial_status'] = {'status': 'info', 'message': 'No proxy URL configured'}
+            return False
+            
+        try:
+            # Try to access the proxy status endpoint or the stream directly
+            proxy_base = self.proxy_url.replace('/stream', '')
+            
+            # First try a status endpoint
+            try:
+                response = requests.get(f"{proxy_base}/status", timeout=3)
+                if response.status_code == 200:
+                    self.results['proxy_initial_status'] = {'status': 'success', 'message': 'Camera proxy is currently running'}
+                    return True
+            except requests.exceptions.RequestException:
+                pass  # Status endpoint might not exist, try stream directly
+            
+            # Try accessing the stream directly
+            response = requests.get(self.proxy_url, timeout=3, stream=True)
+            if response.status_code == 200:
+                self.results['proxy_initial_status'] = {'status': 'success', 'message': 'Camera proxy is currently running (detected via stream)'}
+                return True
+            elif response.status_code == 404:
+                self.results['proxy_initial_status'] = {'status': 'info', 'message': 'Camera proxy is stopped (404 response)'}
+                return False
+            else:
+                self.results['proxy_initial_status'] = {'status': 'warning', 'message': f'Camera proxy responded with status {response.status_code}'}
+                return True  # Assume running if we get any response
+                
+        except requests.exceptions.ConnectTimeout:
+            self.results['proxy_initial_status'] = {'status': 'info', 'message': 'Camera proxy appears to be stopped (connection timeout)'}
+            return False
+        except requests.exceptions.ConnectionError:
+            self.results['proxy_initial_status'] = {'status': 'info', 'message': 'Camera proxy appears to be stopped (connection refused)'}
+            return False
+        except Exception as e:
+            self.results['proxy_initial_status'] = {'status': 'warning', 'message': f'Could not determine proxy status: {str(e)}'}
+            return False  # Assume stopped if we can't determine
+
+    def disable_camera_proxy(self):
+        """Temporarily disable camera proxy"""
+        if not self.websocket_sender:
+            self.results['proxy_control'] = {'status': 'warning', 'message': 'Cannot control proxy - WebSocket not connected to backend'}
+            return False
+            
+        try:
+            success = self.websocket_sender("camera_proxy_control", action="stop")
+            if success:
+                self.results['proxy_control'] = {'status': 'success', 'message': 'Successfully disabled camera proxy'}
+                return True
+            else:
+                self.results['proxy_control'] = {'status': 'error', 'message': 'Failed to disable camera proxy - WebSocket command failed'}
+                return False
+        except Exception as e:
+            self.results['proxy_control'] = {'status': 'error', 'message': f'Error disabling proxy: {str(e)}'}
+            return False
+
+    def enable_camera_proxy(self):
+        """Re-enable camera proxy"""
+        if not self.websocket_sender:
+            self.results['proxy_control'] = {'status': 'warning', 'message': 'Cannot control proxy - WebSocket not connected to backend'}
+            return False
+            
+        try:
+            success = self.websocket_sender("camera_proxy_control", action="start") 
+            if success:
+                self.results['proxy_control'] = {'status': 'success', 'message': 'Successfully enabled camera proxy'}
+                return True
+            else:
+                self.results['proxy_control'] = {'status': 'error', 'message': 'Failed to enable camera proxy - WebSocket command failed'}
+                return False
+        except Exception as e:
+            self.results['proxy_control'] = {'status': 'error', 'message': f'Error enabling proxy: {str(e)}'}
+            return False
+
+    def test_esp32_connection(self):
+        """Test direct ESP32 camera connection"""
+        try:
+            response = requests.get(self.esp32_url, timeout=5, stream=True)
+            if response.status_code == 200:
+                # Check if we get image data
+                content_type = response.headers.get('content-type', '').lower()
+                if 'image' in content_type or 'multipart' in content_type:
+                    self.results['esp32_connection'] = {'status': 'success', 'message': f'ESP32 camera accessible - Content-Type: {content_type}'}
+                else:
+                    self.results['esp32_connection'] = {'status': 'warning', 'message': f'ESP32 responded but unexpected content type: {content_type}'}
+            else:
+                self.results['esp32_connection'] = {'status': 'error', 'message': f'ESP32 camera returned status {response.status_code}'}
+        except requests.exceptions.ConnectTimeout:
+            self.results['esp32_connection'] = {'status': 'error', 'message': 'ESP32 camera connection timed out'}
+        except requests.exceptions.ConnectionError:
+            self.results['esp32_connection'] = {'status': 'error', 'message': 'Cannot reach ESP32 camera - check IP address and network'}
+        except Exception as e:
+            self.results['esp32_connection'] = {'status': 'error', 'message': f'ESP32 test failed: {str(e)}'}
+    
+    def test_proxy_connection(self):
+        """Test camera proxy connection"""
+        try:
+            response = requests.get(self.proxy_url, timeout=5, stream=True)
+            if response.status_code == 200:
+                content_type = response.headers.get('content-type', '').lower()
+                if 'image' in content_type or 'multipart' in content_type:
+                    self.results['proxy_connection'] = {'status': 'success', 'message': f'Camera proxy accessible - Content-Type: {content_type}'}
+                else:
+                    self.results['proxy_connection'] = {'status': 'warning', 'message': f'Proxy responded but unexpected content type: {content_type}'}
+            else:
+                self.results['proxy_connection'] = {'status': 'error', 'message': f'Camera proxy returned status {response.status_code}'}
+        except requests.exceptions.ConnectTimeout:
+            self.results['proxy_connection'] = {'status': 'error', 'message': 'Camera proxy connection timed out'}
+        except requests.exceptions.ConnectionError:
+            self.results['proxy_connection'] = {'status': 'error', 'message': 'Cannot reach camera proxy - check if service is running'}
+        except Exception as e:
+            self.results['proxy_connection'] = {'status': 'error', 'message': f'Proxy test failed: {str(e)}'}
+    
+    def test_websocket_connection(self):
+        """Test WebSocket connection"""
+        try:
+            # Test basic TCP connectivity first
+            if not (self.ws_url.startswith("ws://") or self.ws_url.startswith("wss://")):
+                test_ws_url = f"ws://{self.ws_url}"
+            else:
+                test_ws_url = self.ws_url
+                
+            parsed = urlparse(test_ws_url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == 'wss' else 80)
+            
+            # Test TCP connection
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            
+            if result == 0:
+                self.results['websocket_connection'] = {'status': 'success', 'message': f'WebSocket server reachable at {host}:{port}'}
+            else:
+                self.results['websocket_connection'] = {'status': 'error', 'message': f'Cannot reach WebSocket server at {host}:{port}'}
+                
+        except socket.gaierror:
+            self.results['websocket_connection'] = {'status': 'error', 'message': f'Cannot resolve hostname: {host}'}
+        except Exception as e:
+            self.results['websocket_connection'] = {'status': 'error', 'message': f'WebSocket test failed: {str(e)}'}
+
+    def cancel_network_test(self):
+        """Cancel the running network test with better cleanup"""
+        try:
+            if hasattr(self, 'test_thread') and self.test_thread.isRunning():
+                # Request thread to finish gracefully
+                self.test_thread.requestInterruption()
+                
+                # Give thread a moment to finish naturally
+                if not self.test_thread.wait(1000):  # Wait 1 second
+                    # Force termination if needed
+                    self.test_thread.terminate()
+                    self.test_thread.wait(2000)  # Wait up to 2 more seconds
+            
+            if hasattr(self, 'progress_dialog'):
+                self.progress_dialog.close()
+                
+        except Exception as e:
+            self.logger.warning(f"Error during test cleanup: {e}")
 
 
 class SettingsScreen(BaseScreen):
@@ -43,7 +335,7 @@ class SettingsScreen(BaseScreen):
 
         # Root layout (similar outer margins to Home screen)
         root = QVBoxLayout()
-        root.setContentsMargins(100, 20, 90, 10)
+        root.setContentsMargins(98, 22, 90, 8)
         root.setSpacing(8)
 
         # Main themed frame (like Home right panel)
@@ -51,7 +343,7 @@ class SettingsScreen(BaseScreen):
         self._update_main_frame_style()
 
         main = QVBoxLayout(self.main_frame)
-        main.setContentsMargins(0, 10, 0, 10)
+        main.setContentsMargins(0, 10, 0, 0)
         main.setSpacing(10)
 
         # Add header
@@ -90,11 +382,13 @@ class SettingsScreen(BaseScreen):
         # Two-column placement to use width
         content_layout.addWidget(self.network_group, 0, 0, 2, 1)  # row, col, rowspan, colspan
         content_layout.addWidget(self.logging_group, 0, 1)
-        content_layout.addWidget(self.wave_group,    1, 1)
-        # Buttons row (full width)
+        content_layout.addWidget(self.wave_group, 1, 1)
+        # Add spacing below network configuration
+        content_layout.setRowMinimumHeight(2, 10)  # 20px spacing row
+        # Buttons row (full width) - moved to row 3 to account for spacing
         content_layout.setRowStretch(1, 1)
-        self.buttons_row = self._create_control_buttons()
-        content_layout.addLayout(self.buttons_row, 2, 0, 1, 2)
+        buttons_layout = self._create_control_buttons()
+        content_layout.addLayout(buttons_layout, 3, 0, 1, 2)  # Changed from row 2 to 3
 
         self.scroll_area.setWidget(content_widget)
         main.addWidget(self.scroll_area)
@@ -117,7 +411,7 @@ class SettingsScreen(BaseScreen):
             background-color: {panel_bg};
             border: 2px solid {primary_color};
             border-radius: 12px;
-            padding: 6px 12px 12px 12px;
+            padding: 6px 6px 12px 6px;
         }}
         """)
 
@@ -272,7 +566,7 @@ class SettingsScreen(BaseScreen):
         for i, (text, key, placeholder) in enumerate(labels):
             lab = QLabel(text)
             lab.setFont(font)
-            lab.setMinimumWidth(140)
+            lab.setMinimumWidth(170)
             self._update_label_style(lab)
 
             edit = QLineEdit()
@@ -747,34 +1041,108 @@ class SettingsScreen(BaseScreen):
             QMessageBox.information(self, "Defaults Created", "Default configuration has been created and applied.")
 
     @error_boundary
-    def test_websocket_connection(self):
-        """Basic format validation of WebSocket URL (non-blocking)"""
-        url = self.network_inputs["control_ws"].text().strip()
-        if not url:
-            QMessageBox.warning(self, "Invalid URL", "Please enter a WebSocket URL before testing.")
+    def test_websocket_connection(self, checked=False):
+        """Comprehensive network connectivity test with progress dialog"""
+        # Get all network URLs
+        ws_url = self.network_inputs["control_ws"].text().strip()
+        esp32_url = self.network_inputs["esp32_url"].text().strip()
+        proxy_url = self.network_inputs["proxy_url"].text().strip()
+        
+        if not any([ws_url, esp32_url, proxy_url]):
+            QMessageBox.warning(self, "No URLs to Test", "Please enter at least one network URL before testing.")
             return
 
-        try:
-            if not (url.startswith("ws://") or url.startswith("wss://")):
-                test_url = f"ws://{url}"
-            else:
-                test_url = url
+        # Create and configure progress dialog
+        self.progress_dialog = QProgressDialog("Initializing network tests...", "Cancel", 0, 0, self)
+        self.progress_dialog.setWindowTitle("Network Connectivity Test")
+        self.progress_dialog.setModal(True)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.show()
+        
+        # Create and start test thread
+        self.test_thread = NetworkTestThread(
+            esp32_url=esp32_url,
+            proxy_url=proxy_url, 
+            ws_url=ws_url,
+            websocket_sender=self.send_websocket_message if hasattr(self, 'send_websocket_message') else None
+        )
+        
+        # Connect signals
+        self.test_thread.progress_updated.connect(self.update_test_progress)
+        self.test_thread.test_completed.connect(self.show_test_results)
+        self.progress_dialog.canceled.connect(self.test_thread.terminate)
+        
+        # Start testing
+        self.test_thread.start()
+    # ---------- Network Testing ----------
 
-            from urllib.parse import urlparse
-            parsed = urlparse(test_url)
+    def update_test_progress(self, message, status):
+        """Update progress dialog with current test status"""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setLabelText(message)
+            QApplication.processEvents()  # Keep UI responsive
 
-            if parsed.scheme in ['ws', 'wss'] and parsed.netloc:
-                QMessageBox.information(
-                    self,
-                    "Connection Test",
-                    f"WebSocket URL format is valid: {test_url}\n\n"
-                    "Note: Actual connectivity will be tested when you save settings."
-                )
-            else:
-                QMessageBox.warning(self, "Invalid URL", f"WebSocket URL format is invalid: {test_url}")
-        except Exception as e:
-            QMessageBox.critical(self, "Test Failed", f"Connection test failed: {str(e)}")
-            self.logger.error(f"WebSocket connection test failed: {e}")
+    def show_test_results(self, results):
+        """Display comprehensive test results"""
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.close()
+        
+        if 'error' in results:
+            QMessageBox.critical(self, "Test Failed", results['error'])
+            return
+        
+        # Build results display
+        result_lines = ["Network Connectivity Test Results:", ""]
+        
+        test_categories = [
+            ("URL Format Validation", ['ws_format', 'esp32_format', 'proxy_format']),
+            ("Camera Proxy Management", ['proxy_status', 'proxy_disable', 'proxy_enable']), 
+            ("Network Connectivity", ['esp32_connection', 'proxy_connection', 'websocket_connection'])
+        ]
+        
+        overall_success = True
+        
+        for category, test_keys in test_categories:
+            result_lines.append(f"🔍 {category}:")
+            
+            for key in test_keys:
+                if key in results:
+                    result = results[key]
+                    status = result['status']
+                    message = result['message']
+                    
+                    if status == 'success':
+                        icon = "✅"
+                    elif status == 'warning':
+                        icon = "⚠️"
+                    elif status == 'info':
+                        icon = "ℹ️"
+                    else:
+                        icon = "❌"
+                        overall_success = False
+                    
+                    result_lines.append(f"  {icon} {message}")
+            
+            result_lines.append("")
+        
+        # Add summary
+        if overall_success:
+            result_lines.append("🎉 All critical tests passed! Your network configuration looks good.")
+        else:
+            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
+        
+        # Show results in appropriate dialog type
+        result_text = "\n".join(result_lines)
+        if overall_success:
+            QMessageBox.information(self, "Network Test - Success", result_text)
+        else:
+            QMessageBox.warning(self, "Network Test - Issues Found", result_text)
+        
+        # Log results
+        passed_count = len([r for r in results.values() if isinstance(r, dict) and r.get('status') == 'success'])
+        total_count = len([r for r in results.values() if isinstance(r, dict)])
+        self.logger.info(f"Network connectivity test completed: {passed_count}/{total_count} tests passed")
+
 
     # ---------- Validation / Notifications ----------
 

@@ -16,6 +16,7 @@ from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
 from threads.network_monitor import NetworkMonitorThread
 from core.utils import error_boundary
+from widgets.voltage_alert_splash import VoltageAlertSplash
 
 
 class HealthScreen(BaseScreen):
@@ -40,6 +41,7 @@ class HealthScreen(BaseScreen):
     def _setup_screen(self):
         """Initialize health monitoring interface"""
         self.setFixedWidth(1180)
+        self.startup_complete = False
         
         # Rate limiting for telemetry updates
         self.last_telemetry_update = 0
@@ -69,7 +71,58 @@ class HealthScreen(BaseScreen):
         
         # Start network monitoring
         self.network_monitor.start()
-    
+
+        from PyQt6.QtCore import QTimer
+        self.startup_timer = QTimer()
+        self.startup_timer.timeout.connect(self._check_and_enable_alerts)
+        self.startup_timer.start(500)  # Check every 500ms
+
+    def _check_and_enable_alerts(self):
+        """Check if application is ready and enable voltage alerts"""
+        try:
+            # Check multiple conditions for application readiness
+            app_ready = False
+            
+            if (hasattr(self, 'parent') and self.parent() and 
+                hasattr(self.parent(), 'isVisible') and 
+                self.parent().isVisible()):
+                
+                # Additional check - make sure we're not in startup/loading screen
+                # You can add more specific checks here based on your app structure
+                app_ready = True
+            
+            if app_ready:
+                self.voltage_alerts_enabled = True
+                self.startup_complete = True  # Set both flags
+                self.startup_timer.stop()
+                self.logger.info("Voltage alerts enabled - application fully loaded")
+            else:
+                # Keep checking but add a maximum timeout
+                if not hasattr(self, '_startup_check_count'):
+                    self._startup_check_count = 0
+                
+                self._startup_check_count += 1
+                if self._startup_check_count > 20:  # 10 seconds maximum wait
+                    self.voltage_alerts_enabled = True
+                    self.startup_complete = True
+                    self.startup_timer.stop()
+                    self.logger.info("Voltage alerts enabled - timeout reached")
+                    
+        except Exception as e:
+            self.logger.warning(f"Error checking application state: {e}")
+
+
+    def _enable_voltage_alerts(self):
+        """Enable voltage alerts after startup is complete"""
+        self.startup_complete = True
+        self.logger.info("Voltage alerts enabled after startup delay")
+
+    def check_voltage_alarms(self, voltage: float):
+        """Check and display voltage alarms when thresholds are crossed"""
+        # Simple flag check at the start
+        if not getattr(self, 'voltage_alerts_enabled', False):
+            return  # Skip all voltage alerts until enabled
+        
     def init_ui(self):
         """Initialize health monitoring UI with graphs and status displays"""
         # Main graph for battery voltage and current
@@ -414,7 +467,7 @@ class HealthScreen(BaseScreen):
     def setup_layout(self):
         """Setup main layout with full-height graph and wider control panel"""
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(100, 15, 15, 10)
+        main_layout.setContentsMargins(98, 19, 15, 6)
         
         # Graph container - full height with theme styling
         self.graph_frame = QFrame()
@@ -602,8 +655,15 @@ class HealthScreen(BaseScreen):
         self.status_labels["battery"].setText(battery_text)
         self.status_labels["battery"].setStyleSheet(battery_style)
         
-        # Check for voltage alarms
-        self.check_voltage_alarms(voltage)
+        # Only check voltage alarms if startup is complete AND alerts are enabled
+        if (getattr(self, 'voltage_alerts_enabled', False) and 
+            getattr(self, 'startup_complete', False)):
+            self.check_voltage_alarms(voltage)
+        else:
+            # Log why we're skipping (for debugging)
+            alerts_enabled = getattr(self, 'voltage_alerts_enabled', False)
+            startup_complete = getattr(self, 'startup_complete', False)
+            self.logger.debug(f"Skipping voltage alert - alerts_enabled: {alerts_enabled}, startup_complete: {startup_complete}")
 
     def _update_status_displays(self, data: dict):
         """Thread-safe status display updates with theme colors"""
@@ -696,20 +756,30 @@ class HealthScreen(BaseScreen):
         elif voltage < 12.0:
             current_alarm = "LOW"
         
-        # Only show popup if alarm state changed
-        if current_alarm != self.last_voltage_alarm and current_alarm is not None:
-            if current_alarm == "CRITICAL":
-                QMessageBox.critical(
-                    self, "Battery Critical", 
-                    f"CRITICAL: Battery voltage is {voltage:.2f}V!\nLand immediately to prevent damage!"
-                )
-            elif current_alarm == "LOW":
-                QMessageBox.warning(
-                    self, "Battery Low", 
-                    f"WARNING: Battery voltage is {voltage:.2f}V\nConsider landing soon."
-                )
+        # Only show splash if alarm state changed and we don't already have one open
+        if (current_alarm != self.last_voltage_alarm and 
+            current_alarm is not None and 
+            not hasattr(self, '_active_voltage_splash')):
+            
+            # Create and show splash screen
+            self._active_voltage_splash = VoltageAlertSplash(
+                alert_type=current_alarm,
+                voltage=voltage,
+                parent=self
+            )
+            
+            # Connect to cleanup when splash closes
+            self._active_voltage_splash.splash_closed.connect(self._on_voltage_splash_closed)
+            
+            self.logger.info(f"Showing {current_alarm.lower()} voltage alert: {voltage:.2f}V")
         
         self.last_voltage_alarm = current_alarm
+
+    def _on_voltage_splash_closed(self):
+        """Handle voltage splash close event"""
+        if hasattr(self, '_active_voltage_splash'):
+            delattr(self, '_active_voltage_splash')
+        self.logger.debug("Voltage alert splash closed")    
 
     def get_battery_health_summary(self) -> str:
         """Get battery health summary for display"""
@@ -746,6 +816,11 @@ class HealthScreen(BaseScreen):
 
     def cleanup(self):
         """Cleanup health screen resources"""
+        # Close any active voltage splash
+        if hasattr(self, '_active_voltage_splash'):
+            self._active_voltage_splash.close_splash()
+            delattr(self, '_active_voltage_splash')
+        
         if hasattr(self, 'network_monitor'):
             self.network_monitor.stop()
         super().cleanup()

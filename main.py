@@ -6,8 +6,7 @@ Droid Deck - Main Entry Point
 import sys
 from PyQt6.QtWidgets import QApplication
 
-from core.application import WalleApplication
-
+from core.application import DroidDeckApplication
 
 def main():
     """Main entry point for Droid Deck"""
@@ -15,8 +14,8 @@ def main():
     app.setQuitOnLastWindowClosed(True)
     
     # Create Droid Deck application
-    walle_app = WalleApplication()
-    walle_app.show()
+    droid_deck_app = DroidDeckApplication()
+    droid_deck_app.show()
     
     sys.exit(app.exec())
 

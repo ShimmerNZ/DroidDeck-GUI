@@ -1,0 +1,28 @@
+{
+  "voltage_alerts": {
+    "enabled": true,
+    "display_duration": 3.0,
+    "audio_enabled": true,
+    "thresholds": {
+      "low_voltage": 12.0,
+      "critical_voltage": 11.0
+    },
+    "audio_files": {
+      "Wall-e": {
+        "battery_low": "resources/theme/Wall-e/audio/battery_low.mp3",
+        "battery_critical": "resources/theme/Wall-e/audio/battery_critical.mp3"
+      },
+      "Star Wars": {
+        "battery_low": "resources/theme/Star Wars/audio/battery_low.mp3", 
+        "battery_critical": "resources/theme/Star Wars/audio/battery_critical.mp3"
+      }
+    },
+    "visual_settings": {
+      "splash_width": 500,
+      "splash_height": 200,
+      "auto_close_on_click": true,
+      "stay_on_top": true,
+      "center_on_parent": true
+    }
+  }
+}

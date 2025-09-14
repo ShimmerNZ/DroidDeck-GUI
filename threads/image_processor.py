@@ -1,490 +1,383 @@
+#!/usr/bin/env python3
 """
-WALL-E Control System - Image Processing Thread (Cleaned)
+Image Processing Thread - Fixed for Camera Proxy MJPEG Stream
+Handles camera stream processing and pose detection in dedicated thread.
+FIXED: Better stream handling and error recovery
 """
 
+import cv2
 import time
-from typing import Optional, Dict, Any, Tuple
-from dataclasses import dataclass
-from enum import Enum
-
 import requests
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
-
 from core.logger import get_logger
-from core.utils import mediapipe_manager
+from core.utils import error_boundary
 
+class ProcessedFrameData:
+    """Container for processed frame data"""
+    def __init__(self, frame=None, wave_detected=False, pose_landmarks=None):
+        self.frame = frame
+        self.wave_detected = wave_detected
+        self.pose_landmarks = pose_landmarks
 
-class ConnectionState(Enum):
-    """Connection state enumeration"""
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    ERROR = "error"
-
-
-@dataclass
-class ProcessingConfig:
-    """Image processing configuration"""
-    TARGET_FPS: int = 15
-    MAX_FRAME_WIDTH: int = 640
-    STATS_FETCH_INTERVAL: float = 2.0
+class ImageProcessingThread(QThread):
+    """Thread for processing camera stream with pose detection"""
     
-    # Connection settings
-    STREAM_TIMEOUT: int = 5
-    STATS_TIMEOUT: int = 2
-    CHUNK_SIZE: int = 1024
+    frame_processed = pyqtSignal(ProcessedFrameData)
+    stats_updated = pyqtSignal(dict)
     
-    # Reconnection settings
-    MAX_RECONNECT_ATTEMPTS: int = 5
-    BASE_RECONNECT_DELAY: float = 1.0
-    MAX_RECONNECT_DELAY: float = 30.0
-    
-    # Wave detection settings
-    WAVE_TEXT_POSITION: Tuple[int, int] = (50, 50)
-    WAVE_FONT_SCALE: float = 0.5
-    WAVE_COLOR: Tuple[int, int, int] = (0, 255, 0)
-    WAVE_THICKNESS: int = 1
-    
-    # Error frame settings
-    ERROR_FRAME_SIZE: Tuple[int, int] = (320, 240)
-    ERROR_TEXT_POSITION: Tuple[int, int] = (10, 120)
-    ERROR_COLOR: Tuple[int, int, int] = (255, 255, 255)
-
-
-@dataclass
-class FrameResult:
-    """Frame processing result"""
-    frame: Optional[np.ndarray]
-    wave_detected: bool
-    stats: str
-    processing_time_ms: float = 0.0
-    frame_size: Optional[Tuple[int, int]] = None
-
-
-class StreamProcessor:
-    """Handles MJPEG stream processing"""
-    
-    def __init__(self, config: ProcessingConfig):
-        self.config = config
+    def __init__(self, camera_url):
+        super().__init__()
         self.logger = get_logger("camera")
-        self._bytes_buffer = b""
-    
-    def process_stream_chunk(self, chunk: bytes) -> Optional[np.ndarray]:
-        """Process incoming stream chunk and extract JPEG frames"""
-        if not chunk:
-            return None
+        self.camera_url = camera_url
+        self.running = False
+        self.should_connect = False
+        self.frame_count = 0
+        self.last_stats_time = time.time()
+        self.tracking_enabled = False
         
-        self._bytes_buffer += chunk
+        self.logger.info(f"ImageProcessingThread initialized with URL: {camera_url}")
         
-        # Look for JPEG markers
-        start_marker = self._bytes_buffer.find(b'\xff\xd8')  # JPEG start
-        end_marker = self._bytes_buffer.find(b'\xff\xd9')    # JPEG end
+        # Initialize MediaPipe if available
+        self.mp_pose = None
+        self.pose = None
+        self.mp_drawing = None
+        self.pose_detection_available = False
         
-        if start_marker != -1 and end_marker != -1 and end_marker > start_marker:
-            # Extract JPEG data
-            jpeg_data = self._bytes_buffer[start_marker:end_marker + 2]
-            self._bytes_buffer = self._bytes_buffer[end_marker + 2:]
-            
-            return self._decode_jpeg(jpeg_data)
-        
-        # Prevent buffer from growing too large
-        if len(self._bytes_buffer) > 1024 * 1024:  # 1MB limit
-            self.logger.warning("Stream buffer overflow, clearing")
-            self._bytes_buffer = b""
-        
-        return None
-    
-    def _decode_jpeg(self, jpeg_data: bytes) -> Optional[np.ndarray]:
-        """Decode JPEG data to numpy array"""
         try:
-            if not mediapipe_manager.is_available:
+            import mediapipe as mp
+            self.mp_pose = mp.solutions.pose
+            self.pose = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                enable_segmentation=False,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            self.mp_drawing = mp.solutions.drawing_utils
+            self.pose_detection_available = True
+            self.logger.info("MediaPipe pose detection initialized")
+        except ImportError:
+            self.logger.warning("MediaPipe not available - pose detection disabled")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize MediaPipe: {e}")
+
+    def start_processing(self):
+        """Start the image processing thread"""
+        if not self.running:
+            self.running = True
+            self.should_connect = True
+            self.start()
+            self.logger.info("Image processing thread started")
+
+    def stop_processing(self):
+        """Stop the image processing thread"""
+        if self.running:
+            self.running = False
+            self.should_connect = False
+            self.wait(3000)  # Wait up to 3 seconds for thread to finish
+            self.logger.info("Image processing thread stopped")
+
+    def start_connecting(self):
+        """Signal the thread to start connecting to stream"""
+        self.should_connect = True
+        self.logger.info("Image thread: start connecting requested")
+
+    def stop_connecting(self):
+        """Signal the thread to stop connecting to stream"""
+        self.should_connect = False
+        self.logger.info("Image thread: stop connecting requested")
+
+    def set_tracking_enabled(self, enabled):
+        """Enable/disable pose tracking"""
+        self.tracking_enabled = enabled
+        self.logger.info(f"Pose tracking {'enabled' if enabled else 'disabled'}")
+
+    @error_boundary
+    def run(self):
+        """Main processing loop with improved error handling"""
+        self.logger.info(f"Starting camera stream processing from: {self.camera_url}")
+        
+        last_connection_attempt = 0
+        connection_retry_delay = 2.0
+        max_retry_delay = 30.0
+        consecutive_failures = 0
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                if not self.should_connect:
+                    time.sleep(0.1)
+                    continue
+                
+                # Rate limit connection attempts
+                if current_time - last_connection_attempt < connection_retry_delay:
+                    time.sleep(0.1)
+                    continue
+                
+                last_connection_attempt = current_time
+                
+                # FIXED: Check if camera proxy is available first
+                if not self._check_camera_proxy_status():
+                    self.logger.warning("Camera proxy not available, retrying...")
+                    consecutive_failures += 1
+                    connection_retry_delay = min(connection_retry_delay * 1.2, max_retry_delay)
+                    continue
+                
+                # Connect to camera stream
+                if self._connect_to_mjpeg_stream():
+                    # Reset retry delay on successful connection
+                    connection_retry_delay = 2.0
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    # Exponential backoff for connection retries
+                    connection_retry_delay = min(connection_retry_delay * 1.5, max_retry_delay)
+                    self.logger.warning(f"Stream connection failed, retrying in {connection_retry_delay:.1f}s")
+                
+                # If too many consecutive failures, wait longer
+                if consecutive_failures > 10:
+                    self.logger.error("Too many consecutive failures, waiting 30 seconds...")
+                    time.sleep(30)
+                    consecutive_failures = 0
+                    connection_retry_delay = 2.0
+                
+            except Exception as e:
+                self.logger.error(f"Image processing error: {e}")
+                time.sleep(1)
+        
+        self.logger.info("Image processing thread finished")
+
+    def _check_camera_proxy_status(self):
+        """Check if camera proxy is running and responding"""
+        if not self.camera_url:
+            return False
+            
+        try:
+            # Extract base URL from stream URL
+            base_url = self.camera_url.replace("/stream", "")
+            
+            # Try to get status from camera proxy
+            response = requests.get(f"{base_url}/stream/status", timeout=2)
+            if response.status_code == 200:
+                status = response.json()
+                streaming_enabled = status.get("streaming_enabled", False)
+                stream_active = status.get("stream_active", False)
+                self.logger.debug(f"Proxy status: enabled={streaming_enabled}, active={stream_active}")
+                return streaming_enabled or stream_active
+        except requests.exceptions.RequestException:
+            pass
+        except Exception as e:
+            self.logger.debug(f"Status check error: {e}")
+        
+        return False
+
+    def _connect_to_mjpeg_stream(self):
+        """FIXED: Connect to MJPEG stream using requests (not OpenCV)"""
+        if not self.camera_url:
+            self.logger.error("No camera URL configured")
+            return False
+        
+        try:
+            self.logger.info(f"Connecting to MJPEG stream: {self.camera_url}")
+            
+            # FIXED: Use requests with stream=True for MJPEG
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'WALL-E-ImageProcessor/1.0',
+                'Accept': 'multipart/x-mixed-replace',
+                'Connection': 'keep-alive'
+            })
+            
+            response = session.get(
+                self.camera_url,
+                stream=True,
+                timeout=10,
+                allow_redirects=True
+            )
+            
+            if response.status_code != 200:
+                self.logger.error(f"HTTP {response.status_code} from camera stream")
+                return False
+            
+            self.logger.info("Connected to MJPEG stream, processing frames...")
+            
+            # Process MJPEG stream
+            return self._process_mjpeg_stream(response)
+            
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"Stream connection error: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected stream error: {e}")
+            return False
+
+    def _process_mjpeg_stream(self, response):
+        """Process MJPEG stream from requests response"""
+        try:
+            bytes_buffer = bytearray()
+            frame_count_local = 0
+            last_frame_time = time.time()
+            last_stats_time = time.time()
+            
+            self.logger.info("Starting MJPEG frame processing...")
+            
+            for chunk in response.iter_content(chunk_size=8192):
+                if not self.running or not self.should_connect:
+                    self.logger.info("MJPEG processing stopped by request")
+                    break
+                
+                bytes_buffer.extend(chunk)
+                
+                # Look for JPEG frames in the buffer
+                while True:
+                    # Find JPEG start marker
+                    start_idx = bytes_buffer.find(b'\xff\xd8')
+                    if start_idx == -1:
+                        break
+                    
+                    # Find JPEG end marker
+                    end_idx = bytes_buffer.find(b'\xff\xd9', start_idx)
+                    if end_idx == -1:
+                        break
+                    
+                    # Extract JPEG frame
+                    jpeg_data = bytes_buffer[start_idx:end_idx + 2]
+                    
+                    # Remove processed data from buffer
+                    del bytes_buffer[:end_idx + 2]
+                    
+                    # Decode and process frame
+                    current_time = time.time()
+                    
+                    # Limit frame rate to prevent overwhelming (30 FPS max)
+                    if current_time - last_frame_time >= 0.033:
+                        if self._process_jpeg_frame(jpeg_data):
+                            frame_count_local += 1
+                            last_frame_time = current_time
+                    
+                    # Emit stats periodically (every 2 seconds)
+                    if current_time - last_stats_time >= 2.0:
+                        fps = frame_count_local / (current_time - last_stats_time) if (current_time - last_stats_time) > 0 else 0
+                        stats = {
+                            'fps': fps,
+                            'frame_count': self.frame_count,
+                            'pose_detection': self.pose_detection_available,
+                            'tracking_enabled': self.tracking_enabled,
+                            'camera_url': self.camera_url,
+                            'running': self.running
+                        }
+                        self.stats_updated.emit(stats)
+                        self.logger.debug(f"Stats: {fps:.1f} FPS, {self.frame_count} total frames")
+                        last_stats_time = current_time
+                        frame_count_local = 0
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"MJPEG processing error: {e}")
+            return False
+
+    def _process_jpeg_frame(self, jpeg_data):
+        """Process a JPEG frame from bytes"""
+        try:
+            # Decode JPEG to numpy array
+            nparr = np.frombuffer(jpeg_data, np.uint8)
+            frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if frame_bgr is None:
+                self.logger.debug("Failed to decode JPEG frame")
+                return False
+            
+            # Convert BGR to RGB for Qt display
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            
+            # Process the frame (pose detection, etc.)
+            processed_data = self._process_frame(frame_rgb)
+            
+            # Emit the processed frame
+            if processed_data:
+                self.frame_processed.emit(processed_data)
+                self.frame_count += 1
+                self.logger.debug(f"Processed frame {self.frame_count}: {frame_rgb.shape}")
+                return True
+            
+        except Exception as e:
+            self.logger.debug(f"JPEG frame processing error: {e}")
+        
+        return False
+
+    @error_boundary
+    def _process_frame(self, frame_rgb):
+        """Process a single frame with pose detection"""
+        try:
+            if frame_rgb is None:
                 return None
             
-            import cv2
-            img_array = np.frombuffer(jpeg_data, dtype=np.uint8)
-            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            return frame
-            
-        except Exception as e:
-            self.logger.debug(f"JPEG decode error: {e}")
-            return None
-    
-    def reset_buffer(self):
-        """Reset the internal buffer"""
-        self._bytes_buffer = b""
-
-
-class PoseDetector:
-    """Handles pose detection and wave recognition"""
-    
-    def __init__(self, config: ProcessingConfig):
-        self.config = config
-        self.logger = get_logger("camera")
-    
-    def detect_wave(self, frame: np.ndarray) -> Tuple[bool, np.ndarray]:
-        """Detect wave gesture in frame and return annotated frame"""
-        if not mediapipe_manager.is_initialized:
-            return False, frame
-        
-        try:
-            import cv2
-            
-            # Convert to RGB for MediaPipe
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Process with MediaPipe
-            results = mediapipe_manager.pose.process(frame_rgb)
+            # Resize frame if too large (for performance)
+            height, width = frame_rgb.shape[:2]
+            if width > 800:
+                scale = 800 / width
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                frame_rgb = cv2.resize(frame_rgb, (new_width, new_height))
             
             wave_detected = False
-            if results.pose_landmarks:
-                landmarks = results.pose_landmarks.landmark
-                
-                # Get key points
-                right_wrist = landmarks[mediapipe_manager.mp_pose.PoseLandmark.RIGHT_WRIST]
-                right_shoulder = landmarks[mediapipe_manager.mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                
-                # Simple wave detection: right wrist above right shoulder
-                if right_wrist.y < right_shoulder.y and right_wrist.visibility > 0.5:
-                    wave_detected = True
-                    
-                    # Annotate frame
-                    cv2.putText(
-                        frame_rgb, 
-                        'Wave Detected', 
-                        self.config.WAVE_TEXT_POSITION,
-                        cv2.FONT_HERSHEY_SIMPLEX, 
-                        self.config.WAVE_FONT_SCALE, 
-                        self.config.WAVE_COLOR, 
-                        self.config.WAVE_THICKNESS
-                    )
+            pose_landmarks = None
             
-            return wave_detected, frame_rgb
-            
-        except Exception as e:
-            self.logger.debug(f"Pose detection error: {e}")
-            return False, frame
-
-
-class FrameProcessor:
-    """Handles individual frame processing"""
-    
-    def __init__(self, config: ProcessingConfig):
-        self.config = config
-        self.logger = get_logger("camera")
-        self.pose_detector = PoseDetector(config)
-    
-    def process_frame(self, frame: np.ndarray, tracking_enabled: bool) -> FrameResult:
-        """Process a single frame"""
-        start_time = time.time()
-        
-        try:
-            if frame is None:
-                return FrameResult(
-                    frame=None,
-                    wave_detected=False,
-                    stats="No frame data",
-                    processing_time_ms=0.0
-                )
-            
-            # Resize frame if too large for performance
-            processed_frame = self._resize_frame_if_needed(frame)
-            
-            # Pose detection and wave recognition
-            wave_detected = False
-            if tracking_enabled:
-                wave_detected, processed_frame = self.pose_detector.detect_wave(processed_frame)
-            else:
-                # Convert BGR to RGB for display consistency
+            # Pose detection if available and tracking enabled
+            if self.pose_detection_available and self.pose and self.tracking_enabled:
                 try:
-                    import cv2
-                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-                except ImportError:
-                    pass  # Keep original frame if OpenCV not available
+                    # MediaPipe expects RGB, and we already have RGB
+                    results = self.pose.process(frame_rgb)
+                    
+                    if results.pose_landmarks:
+                        pose_landmarks = results.pose_landmarks
+                        
+                        # Draw pose landmarks on frame (convert to BGR for drawing, then back to RGB)
+                        frame_bgr_for_drawing = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                        self.mp_drawing.draw_landmarks(
+                            frame_bgr_for_drawing, 
+                            results.pose_landmarks, 
+                            self.mp_pose.POSE_CONNECTIONS
+                        )
+                        frame_rgb = cv2.cvtColor(frame_bgr_for_drawing, cv2.COLOR_BGR2RGB)
+                        
+                        # Simple wave detection (check if right hand is raised)
+                        landmarks = results.pose_landmarks.landmark
+                        right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
+                        right_elbow = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
+                        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                        
+                        # Wave detected if wrist is above elbow and elbow is above shoulder
+                        if (right_wrist.y < right_elbow.y < right_shoulder.y and 
+                            right_wrist.visibility > 0.5):
+                            wave_detected = True
+                            
+                            # Draw wave indicator
+                            frame_bgr_for_text = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                            cv2.putText(frame_bgr_for_text, "WAVE DETECTED!", (10, 30), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            frame_rgb = cv2.cvtColor(frame_bgr_for_text, cv2.COLOR_BGR2RGB)
+                
+                except Exception as e:
+                    self.logger.debug(f"Pose detection error: {e}")
             
-            processing_time = (time.time() - start_time) * 1000  # Convert to ms
-            frame_size = (processed_frame.shape[1], processed_frame.shape[0]) if processed_frame is not None else None
-            
-            return FrameResult(
-                frame=processed_frame,
+            return ProcessedFrameData(
+                frame=frame_rgb,
                 wave_detected=wave_detected,
-                stats=f"Processing: {frame_size[0]}x{frame_size[1]}" if frame_size else "Processing",
-                processing_time_ms=processing_time,
-                frame_size=frame_size
+                pose_landmarks=pose_landmarks
             )
             
         except Exception as e:
             self.logger.error(f"Frame processing error: {e}")
-            return self._create_error_frame(str(e), time.time() - start_time)
-    
-    def _resize_frame_if_needed(self, frame: np.ndarray) -> np.ndarray:
-        """Resize frame if it exceeds maximum width"""
-        try:
-            height, width = frame.shape[:2]
-            if width > self.config.MAX_FRAME_WIDTH:
-                scale = self.config.MAX_FRAME_WIDTH / width
-                import cv2
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                return cv2.resize(frame, (new_width, new_height))
-            return frame
-        except Exception as e:
-            self.logger.debug(f"Frame resize error: {e}")
-            return frame
-    
-    def _create_error_frame(self, error_msg: str, processing_time: float) -> FrameResult:
-        """Create an error frame with error message"""
-        try:
-            import cv2
-            
-            width, height = self.config.ERROR_FRAME_SIZE
-            error_frame = np.zeros((height, width, 3), dtype=np.uint8)
-            
-            # Truncate error message to fit frame
-            truncated_msg = f"Error: {error_msg[:25]}"
-            
-            cv2.putText(
-                error_frame, 
-                truncated_msg, 
-                self.config.ERROR_TEXT_POSITION,
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                self.config.WAVE_FONT_SCALE, 
-                self.config.ERROR_COLOR, 
-                self.config.WAVE_THICKNESS
-            )
-            
-            return FrameResult(
-                frame=error_frame,
-                wave_detected=False,
-                stats=f"Error: {error_msg}",
-                processing_time_ms=processing_time * 1000,
-                frame_size=self.config.ERROR_FRAME_SIZE
-            )
-            
-        except ImportError:
-            return FrameResult(
-                frame=None,
-                wave_detected=False,
-                stats=f"Error: {error_msg}",
-                processing_time_ms=processing_time * 1000
-            )
+            return None
 
-
-class ImageProcessingThread(QThread):
-    """Enhanced image processing thread with proper resource management"""
-    
-    # Signals for thread-safe communication
-    frame_processed = pyqtSignal(object)  # FrameResult
-    stats_updated = pyqtSignal(str)
-    connection_state_changed = pyqtSignal(str)  # ConnectionState
-    
-    def __init__(self, camera_proxy_url: str, stats_url: Optional[str] = None, 
-                 config: Optional[ProcessingConfig] = None):
-        super().__init__()
-        
-        self.config = config or ProcessingConfig()
-        self.logger = get_logger("camera")
-        
-        # URLs
-        self.camera_proxy_url = camera_proxy_url
-        self.stats_url = stats_url or self._build_stats_url(camera_proxy_url)
-        
-        # Thread control
-        self.running = False
-        self.tracking_enabled = False
-        
-        # Processing components
-        self.stream_processor = StreamProcessor(self.config)
-        self.frame_processor = FrameProcessor(self.config)
-        
-        # State tracking
-        self.connection_state = ConnectionState.DISCONNECTED
-        self.last_stats_update = 0.0
-        self.frame_count = 0
-        self.reconnect_attempts = 0
-        
-        self.logger.info(f"Image processor initialized - Camera: {self.camera_proxy_url}")
-    
-    def _build_stats_url(self, camera_url: str) -> str:
-        """Build stats URL from camera URL"""
-        try:
-            # Extract base URL and port from camera URL
-            import re
-            match = re.match(r'https?://([^:]+):(\d+)', camera_url)
-            if match:
-                host, port = match.groups()
-                return f"http://{host}:{port}/stats"
-            return camera_url.replace('/stream', '/stats')
-        except Exception:
-            return "http://10.1.1.230:8081/stats"
-    
-    def set_tracking_enabled(self, enabled: bool):
-        """Enable or disable pose tracking"""
-        self.tracking_enabled = enabled
-        if enabled:
-            mediapipe_manager.initialize()
-        self.logger.info(f"Tracking {'enabled' if enabled else 'disabled'}")
-    
-    def run(self):
-        """Main thread execution with proper error handling and reconnection"""
-        if not mediapipe_manager.is_available:
-            self.logger.error("Camera processing disabled - OpenCV/MediaPipe not available")
-            self.stats_updated.emit("OpenCV/MediaPipe not available")
-            self.connection_state_changed.emit(ConnectionState.ERROR.value)
-            return
-        
-        self.running = True
-        self.logger.info("Image processing thread started")
-        
-        frame_interval = 1.0 / self.config.TARGET_FPS
-        last_frame_time = 0.0
-        
-        while self.running:
-            try:
-                if self._should_attempt_connection():
-                    self._attempt_connection()
-                
-                if self.connection_state == ConnectionState.CONNECTED:
-                    current_time = time.time()
-                    
-                    # Process frames at target FPS
-                    if current_time - last_frame_time >= frame_interval:
-                        self._process_stream_data()
-                        last_frame_time = current_time
-                    
-                    # Update stats periodically
-                    if current_time - self.last_stats_update >= self.config.STATS_FETCH_INTERVAL:
-                        self._update_camera_stats()
-                        self.last_stats_update = current_time
-                
-                # Small sleep to prevent CPU spinning
-                self.msleep(10)
-                
-            except Exception as e:
-                self.logger.error(f"Unexpected error in processing loop: {e}")
-                self._handle_connection_error(str(e))
-                self.msleep(1000)  # Wait before retrying
-        
-        self.logger.info("Image processing thread stopped")
-    
-    def _should_attempt_connection(self) -> bool:
-        """Check if we should attempt a connection"""
-        return (self.connection_state in [ConnectionState.DISCONNECTED, ConnectionState.ERROR] and
-                self.reconnect_attempts < self.config.MAX_RECONNECT_ATTEMPTS)
-    
-    def _attempt_connection(self):
-        """Attempt to connect to the camera stream"""
-        self.connection_state = ConnectionState.CONNECTING
-        self.connection_state_changed.emit(ConnectionState.CONNECTING.value)
-        
-        delay = min(
-            self.config.BASE_RECONNECT_DELAY * (2 ** self.reconnect_attempts),
-            self.config.MAX_RECONNECT_DELAY
-        )
-        
-        self.stats_updated.emit(f"Connecting... (Attempt {self.reconnect_attempts + 1}/{self.config.MAX_RECONNECT_ATTEMPTS})")
-        
-        try:
-            self.stream = requests.get(
-                self.camera_proxy_url, 
-                stream=True, 
-                timeout=self.config.STREAM_TIMEOUT
-            )
-            self.stream.raise_for_status()
-            
-            self.connection_state = ConnectionState.CONNECTED
-            self.connection_state_changed.emit(ConnectionState.CONNECTED.value)
-            self.stats_updated.emit("Stream connected")
-            self.reconnect_attempts = 0
-            self.stream_processor.reset_buffer()
-            
-            self.logger.info("Successfully connected to MJPEG stream")
-            
-        except Exception as e:
-            self.reconnect_attempts += 1
-            self._handle_connection_error(f"Connection failed: {e}")
-            
-            if self.reconnect_attempts < self.config.MAX_RECONNECT_ATTEMPTS:
-                self.logger.warning(f"Connection attempt {self.reconnect_attempts} failed, retrying in {delay:.1f}s")
-                time.sleep(delay)
-            else:
-                self.logger.error("Max reconnection attempts reached")
-                self.stats_updated.emit("Connection failed - max attempts reached")
-    
-    def _process_stream_data(self):
-        """Process incoming stream data"""
-        if not hasattr(self, 'stream') or self.connection_state != ConnectionState.CONNECTED:
-            return
-        
-        try:
-            # Read chunk from stream
-            chunk = self.stream.raw.read(self.config.CHUNK_SIZE)
-            if not chunk:
-                raise requests.exceptions.ConnectionError("Empty chunk received")
-            
-            # Process chunk to extract frame
-            frame = self.stream_processor.process_stream_chunk(chunk)
-            
-            if frame is not None:
-                # Process frame
-                result = self.frame_processor.process_frame(frame, self.tracking_enabled)
-                self.frame_processed.emit(result)
-                self.frame_count += 1
-                
-        except Exception as e:
-            self.logger.error(f"Stream processing error: {e}")
-            self._handle_connection_error(f"Stream error: {e}")
-    
-    def _update_camera_stats(self):
-        """Update camera statistics"""
-        try:
-            response = requests.get(self.stats_url, timeout=self.config.STATS_TIMEOUT)
-            if response.status_code == 200:
-                stats_data = response.json()
-                fps = stats_data.get("fps", 0)
-                frame_count = stats_data.get("frame_count", 0)
-                latency = stats_data.get("latency", 0)
-                status = stats_data.get("status", "unknown")
-                
-                stats_text = f"FPS: {fps}, Frames: {frame_count}, Latency: {latency}ms, Status: {status}"
-                self.stats_updated.emit(stats_text)
-            else:
-                self.stats_updated.emit(f"Stats Error: HTTP {response.status_code}")
-                
-        except Exception as e:
-            self.logger.debug(f"Stats fetch error: {e}")
-            # Don't emit stats errors as they're not critical
-    
-    def _handle_connection_error(self, error_msg: str):
-        """Handle connection errors"""
-        self.connection_state = ConnectionState.ERROR
-        self.connection_state_changed.emit(ConnectionState.ERROR.value)
-        
-        if hasattr(self, 'stream'):
-            try:
-                self.stream.close()
-            except:
-                pass
-            delattr(self, 'stream')
-        
-        self.stats_updated.emit(f"Error: {error_msg[:50]}")
-    
     def stop(self):
-        """Stop the image processing thread with proper cleanup"""
-        self.logger.info("Stopping image processing thread")
-        self.running = False
-        
-        # Close stream connection
-        if hasattr(self, 'stream'):
-            try:
-                self.stream.close()
-            except:
-                pass
-        
-        # Wait for thread to finish with timeout
-        if not self.wait(3000):  # 3 second timeout
-            self.logger.warning("Image processing thread did not stop gracefully")
-            self.terminate()
-            self.wait(1000)  # Give it 1 more second after terminate
-        
-        self.logger.info("Image processing thread stopped")
+        """Legacy method for compatibility - calls stop_processing"""
+        self.stop_processing()
+
+    def _emit_stats(self):
+        """Legacy method for compatibility - stats are now emitted in _process_mjpeg_stream"""
+        pass
