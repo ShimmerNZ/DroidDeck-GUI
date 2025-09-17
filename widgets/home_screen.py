@@ -1,9 +1,12 @@
 import os
+import json
+import time
 from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout
+    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout,
+    QMessageBox, QApplication
 )
-from PyQt6.QtGui import QPixmap, QFont
+from PyQt6.QtGui import QPixmap, QFont, QColor
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
@@ -23,7 +26,7 @@ LAYOUT_TOP_MARGIN_PX = 4
 
 
 class HomeScreen(BaseScreen):
-    """Scene selection dashboard with category filter, queue, and mode selection."""
+    """Scene selection dashboard with WebSocket-based controller navigation."""
     
     # Signal emitted when a scene should be triggered
     scene_triggered = pyqtSignal(str, int)  # category, scene_index
@@ -31,49 +34,130 @@ class HomeScreen(BaseScreen):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Simple navigation tracking
+        # Navigation state tracking
         self.current_scene_index = 0
-
-        # Add these to your existing __init__ method
         self.auto_advance_enabled = True
         self.is_playing_scene = False
         self.last_triggered_scene = None
 
-        # Connect to WebSocket messages for scene completion
+        # Connect to WebSocket messages for navigation and scene completion
         if hasattr(self, 'websocket') and self.websocket:
             self.websocket.textMessageReceived.connect(self._handle_websocket_message)
         
-        # Enable focus and key events
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Remove focus policy - no local input handling
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
 
-    def keyPressEvent(self, event):
-        """Handle keyboard/D-pad input for simplified navigation"""
-        key = event.key()
+    def _handle_websocket_message(self, message):
+        """Handle WebSocket messages including controller navigation and scene events"""
+        try:
+            data = json.loads(message)
+            
+            # Handle controller navigation commands from backend
+            if data.get('type') == 'navigation':
+                action = data.get('action')
+                self._handle_navigation_command(action)
+                return
+                
+            # Handle scene completion notifications
+            if data.get('type') == 'scene_completed':
+                scene_name = data.get("scene_name", "")
+                success = data.get("success", False)
+                
+                if success and self.auto_advance_enabled:
+                    self.is_playing_scene = False
+                    self._advance_to_next_scene()
+                return
+                    
+            # Handle scene started notifications
+            if data.get('type') == 'scene_started':
+                self.is_playing_scene = True
+                scene_name = data.get("scene_name", "")
+                self.last_triggered_scene = scene_name
+                return
+                
+            # Handle scene errors
+            if data.get('type') == 'scene_error':
+                self.is_playing_scene = False
+                return
+                
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse WebSocket message: {e}")
+        except Exception as e:
+            self.logger.error(f"Error handling WebSocket message: {e}")
+
+    def _handle_navigation_command(self, action):
+        """Handle navigation commands from controller via backend"""
+        self.logger.debug(f"Received navigation command: {action}")
         
-        # Left/Right: Navigate categories with looping
-        if key == Qt.Key.Key_Left:
-            self._navigate_categories(-1)
-        elif key == Qt.Key.Key_Right:
-            self._navigate_categories(1)
-        
-        # Up/Down: Navigate scene list
-        elif key == Qt.Key.Key_Up:
+        if action == 'up':
             self._navigate_scenes(-1)
-        elif key == Qt.Key.Key_Down:
+        elif action == 'down':
             self._navigate_scenes(1)
-        
-        # Enter/Space: Trigger selected scene
-        elif key in [Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space]:
+        elif action == 'left':
+            self._navigate_categories(-1)
+        elif action == 'right':
+            self._navigate_categories(1)
+        elif action == 'select':
             self._trigger_selected_scene()
+        elif action == 'exit':
+            self._handle_exit_command()
+
+    def _handle_exit_command(self):
+        """Handle exit command from controller"""
+        # If playing a scene, stop it
+        if self.is_playing_scene:
+            self._stop_current_scene()
+            return
         
-        # Call parent implementation for any unhandled keys
-        super().keyPressEvent(event)
+        # If on home screen, show exit confirmation
+        reply = QMessageBox.question(
+            self, 'Exit Application', 
+            'Do you want to exit the application?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if hasattr(self, 'parent') and hasattr(self.parent(), 'close'):
+                self.parent().close()
+            else:
+                QApplication.quit()
+
+    def _stop_current_scene(self):
+        """Stop currently playing scene"""
+        if self.websocket:
+            stop_message = {
+                "type": "scene_stop",
+                "timestamp": time.time()
+            }
+            self.websocket.sendTextMessage(json.dumps(stop_message))
+        
+        self.is_playing_scene = False
+        self.last_triggered_scene = None
+
+    def _navigate_scenes(self, direction):
+        """Navigate scene list up/down with visual feedback"""
+        if self.queue_list.count() == 0:
+            return
+        
+        current = self.queue_list.currentRow()
+        if current == -1:  # No selection
+            current = 0
+            
+        # Calculate new index with bounds checking (no looping for scenes)
+        new_index = current + direction
+        new_index = max(0, min(self.queue_list.count() - 1, new_index))
+        
+        # Update selection with visual feedback
+        self.queue_list.setCurrentRow(new_index)
+        self.current_scene_index = new_index
+        self._highlight_selected_scene()
 
     def _navigate_categories(self, direction):
-        """Navigate categories left/right with looping"""
+        """Navigate categories left/right with looping and visual feedback"""
         if not hasattr(self, 'category_buttons') or not self.category_buttons:
             return
             
@@ -83,33 +167,47 @@ class HomeScreen(BaseScreen):
         # Calculate new index with looping
         new_index = (current + direction) % total
         
-        # Update selection
+        # Update selection with visual feedback
         self._on_category_selected(new_index)
+        self._highlight_selected_category()
 
-    def _navigate_scenes(self, direction):
-        """Navigate scene list up/down"""
-        if self.queue_list.count() == 0:
-            return
+    def _highlight_selected_scene(self):
+        """Provide visual feedback for selected scene"""
+        current_item = self.queue_list.currentItem()
+        if current_item:
+            # Add temporary highlighting
+            primary_color = theme_manager.get("primary_color", "#ffa500")
+            current_item.setBackground(QColor(primary_color))
             
-        current = self.queue_list.currentRow()
-        if current == -1:  # No selection
-            current = 0
+            # Reset highlight after a short delay
+            QTimer.singleShot(300, lambda: current_item.setBackground(QColor("transparent")))
+
+    def _highlight_selected_category(self):
+        """Provide visual feedback for selected category"""
+        if hasattr(self, 'category_buttons') and self.selected_category_idx < len(self.category_buttons):
+            button = self.category_buttons[self.selected_category_idx]
             
-        # Calculate new index with bounds checking (no looping for scenes)
-        new_index = current + direction
-        new_index = max(0, min(self.queue_list.count() - 1, new_index))
-        
-        # Update selection
-        self.queue_list.setCurrentRow(new_index)
-        self.current_scene_index = new_index
+            # Add temporary glow effect
+            original_style = button.styleSheet()
+            primary_color = theme_manager.get("primary_color", "#ffa500")
+            highlight_style = original_style + f"""
+                border: 3px solid {primary_color};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 165, 0, 40), stop:1 rgba(255, 165, 0, 20));
+            """
+            
+            button.setStyleSheet(highlight_style)
+            
+            # Reset after short delay
+            QTimer.singleShot(400, lambda: button.setStyleSheet(original_style))
 
     def _trigger_selected_scene(self):
-        """Trigger the currently selected scene"""
+        """Trigger the currently selected scene with controller feedback"""
         if not hasattr(self, "categories") or not self.categories:
             return
             
         # Don't trigger if already playing (prevent rapid-fire)
-        if hasattr(self, 'is_playing_scene') and self.is_playing_scene:
+        if self.is_playing_scene:
             self.logger.debug("Scene already playing, ignoring trigger")
             return
             
@@ -122,12 +220,12 @@ class HomeScreen(BaseScreen):
             scene_name = scene.get("label", "Unknown")
             
             # Don't re-trigger same scene immediately
-            if (hasattr(self, 'last_triggered_scene') and 
-                scene_name == self.last_triggered_scene and 
-                hasattr(self, 'is_playing_scene') and 
-                self.is_playing_scene):
+            if (scene_name == self.last_triggered_scene and self.is_playing_scene):
                 self.logger.debug(f"Scene {scene_name} is currently playing, ignoring trigger")
                 return
+            
+            # Provide immediate visual feedback
+            self._provide_trigger_feedback()
             
             # Send WebSocket command to backend
             success = self.send_websocket_message("scene", emotion=scene_name)
@@ -138,26 +236,24 @@ class HomeScreen(BaseScreen):
                 self.progress_label.setText(f"Progress: Playing '{scene_name}'")
                 
                 # Update state tracking
-                if hasattr(self, 'is_playing_scene'):
-                    self.is_playing_scene = True
-                    # Reset scene state after estimated duration as fallback
-                    scene_duration = scene.get("duration", 3.0)  # Get duration or default to 3 seconds
-                    fallback_timeout = int((scene_duration + 2) * 1000)  # Add 2 second buffer, convert to ms
-                    QTimer.singleShot(fallback_timeout, self._reset_scene_state)
-                    self.last_triggered_scene = scene_name
+                self.is_playing_scene = True
+                scene_duration = scene.get("duration", 3.0)
+                fallback_timeout = int((scene_duration + 2) * 1000)
+                QTimer.singleShot(fallback_timeout, self._reset_scene_state)
+                self.last_triggered_scene = scene_name
                 
                 self.logger.info(f"Triggered scene: {scene_name} from category: {cat}")
             else:
                 self.logger.error(f"Failed to trigger scene: {scene_name}")
 
-    def showEvent(self, event):
-        """Set focus when screen is shown"""
-        super().showEvent(event)
-        self.setFocus()
-        # Reset scene selection to first item
-        if self.queue_list.count() > 0:
-            self.queue_list.setCurrentRow(0)
-            self.current_scene_index = 0
+    def _provide_trigger_feedback(self):
+        """Provide immediate visual feedback for scene trigger"""
+        current_item = self.queue_list.currentItem()
+        if current_item:
+            # Flash green to show activation
+            original_bg = current_item.background()
+            current_item.setBackground(QColor("#00ff00"))  # Green flash
+            QTimer.singleShot(200, lambda: current_item.setBackground(original_bg))
 
     def _reset_scene_state(self):
         """Reset scene playing state as fallback"""
@@ -165,9 +261,52 @@ class HomeScreen(BaseScreen):
             self.is_playing_scene = False
             self.logger.debug("Scene state reset by fallback timer")
 
+    def _advance_to_next_scene(self):
+        """Advance to next scene based on current mode (Sequential/Random)"""
+        try:
+            if not hasattr(self, "categories") or not self.categories:
+                return
+                
+            cat = self.categories[self.selected_category_idx]
+            scenes = self.category_to_scenes.get(cat, [])
+            
+            if len(scenes) <= 1:
+                return  # Don't auto-advance if only one scene
+                
+            current_row = self.queue_list.currentRow()
+            if current_row < 0:
+                current_row = 0
+                
+            # Sequential vs Random logic
+            if self.selected_mode_idx == 0:  # Sequential mode
+                next_index = (current_row + 1) % len(scenes)
+            else:  # Random mode
+                import random
+                available_indices = list(range(len(scenes)))
+                if len(scenes) > 1 and current_row in available_indices:
+                    available_indices.remove(current_row)  # Avoid immediate repeat
+                next_index = random.choice(available_indices)
+            
+            # Update UI selection ONLY - don't auto-trigger
+            self.queue_list.setCurrentRow(next_index)
+            self.current_scene_index = next_index
+            
+            self.logger.info(f"Auto-advancing from scene {current_row} to {next_index} (selected, not triggered)")
+            
+        except Exception as e:
+            self.logger.error(f"Error advancing to next scene: {e}")
+
+    def showEvent(self, event):
+        """Set initial state when screen is shown"""
+        super().showEvent(event)
+        # Reset scene selection to first item
+        if self.queue_list.count() > 0:
+            self.queue_list.setCurrentRow(0)
+            self.current_scene_index = 0
+
     def _setup_screen(self):
         root = QHBoxLayout()
-        # Outer screen margins (leave these as-is unless you want to reduce global padding)
+        # Outer screen margins
         root.setContentsMargins(80, 20, 90, 5)
 
         # Left WALL-E image
@@ -178,7 +317,6 @@ class HomeScreen(BaseScreen):
 
         self.setLayout(root)
 
-    # ------------------------------------------------------------------ LEFT
     def _create_image_section(self, parent_layout: QHBoxLayout):
         image_container = QVBoxLayout()
         image_container.addStretch()
@@ -203,13 +341,12 @@ class HomeScreen(BaseScreen):
             self.image_label.setPixmap(pixmap)
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
-    # --------------------------------------------------------------- RIGHT PANE
     def _create_right_panel(self, parent_layout: QHBoxLayout):
         self.right_frame = QFrame()
         self._update_right_frame_style()
         right_layout = QVBoxLayout(self.right_frame)
         right_layout.setSpacing(8)
-        right_layout.setContentsMargins(8, LAYOUT_TOP_MARGIN_PX, 8, 8)  # small top margin inside frame
+        right_layout.setContentsMargins(8, LAYOUT_TOP_MARGIN_PX, 8, 8)
 
         # Header
         self.header = QLabel("SCENE SELECTION")
@@ -218,14 +355,14 @@ class HomeScreen(BaseScreen):
         self._update_header_style()
         right_layout.addWidget(self.header)
 
-        # Category bar (buttons show CATEGORIES, not scene names) - now with wrapping
+        # Category bar with wrapping
         self._create_category_bar(right_layout)
 
-        # Scene queue panel (stretches to take available vertical space)
+        # Scene queue panel
         scene_panel = self._create_scene_queue_panel()
-        right_layout.addWidget(scene_panel, 1)  # stretch=1
+        right_layout.addWidget(scene_panel, 1)
 
-        # Mode selector + Idle (anchored below the stretched queue)
+        # Mode selector + Idle
         self._create_mode_selector(right_layout)
 
         parent_layout.addWidget(self.right_frame)
@@ -239,7 +376,7 @@ class HomeScreen(BaseScreen):
                 background-color: {panel_bg};
                 border: 2px solid {primary_color};
                 border-radius: 12px;
-                padding: {FRAME_TOP_PADDING_PX}px 12px 12px 12px;  /* top,right,bottom,left */
+                padding: {FRAME_TOP_PADDING_PX}px 12px 12px 12px;
             }}
         """)
 
@@ -255,17 +392,16 @@ class HomeScreen(BaseScreen):
             }}
         """)
 
-    # --------------------------------------------------------- CATEGORY (TOP)
     def _create_category_bar(self, parent_layout: QVBoxLayout):
         # Create a widget to contain the grid layout
         category_widget = QWidget()
         self.category_grid = QGridLayout(category_widget)
-        self.category_grid.setSpacing(8)  # spacing between buttons
+        self.category_grid.setSpacing(8)
         self.category_grid.setContentsMargins(0, 0, 0, 0)
         
         self.category_buttons = []
 
-        # Load scenes config (new flow uses scenes.json; fallback to emotion_buttons.json converted)
+        # Load scenes config
         cfg = config_manager.get_config("resources/configs/scenes_config.json")
         self.scenes = cfg if isinstance(cfg, list) else []
 
@@ -282,10 +418,7 @@ class HomeScreen(BaseScreen):
         self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
 
         font = QFont("Arial", 18, QFont.Weight.Bold)
-        
-        # Calculate how many buttons can fit per row (approximate)
-        # Assuming button width ~140px + spacing, and available width ~800px
-        buttons_per_row = 5  # You can adjust this based on your needs
+        buttons_per_row = 5
         
         for idx, cat in enumerate(self.categories):
             btn = QPushButton(cat)
@@ -294,7 +427,6 @@ class HomeScreen(BaseScreen):
             btn.setMinimumSize(130, 40)
             btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
             btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
-            
             
             # Calculate row and column for grid placement
             row = idx // buttons_per_row
@@ -312,24 +444,6 @@ class HomeScreen(BaseScreen):
         
         # Add the category widget to the parent layout
         parent_layout.addWidget(category_widget)
-
-    def _convert_old_emotion_format(self, old_config):
-        """Convert old emotion_buttons.json to new scene-like records."""
-        converted = []
-        for item in old_config:
-            new_item = {
-                "label": item.get("label", "Unknown"),
-                "emoji": item.get("emoji", "🎭"),
-                "categories": item.get("categories", []),
-                "audio_enabled": item.get("audio_enabled", False),
-                "audio_file": item.get("audio_file", ""),
-                "script_enabled": item.get("script_enabled", False),
-                "script_name": item.get("script_name", 0),
-                "duration": item.get("duration", 1.0),
-                "delay": item.get("delay", 0)
-            }
-            converted.append(new_item)
-        return converted
 
     def _get_category_button_style(self, selected: bool) -> str:
         """Get category button style based on current theme"""
@@ -350,8 +464,6 @@ class HomeScreen(BaseScreen):
             btn.setChecked(i == idx)
             btn.setStyleSheet(self._get_category_button_style(selected=(i == idx)))
         self.selected_category_idx = idx
-        self._update_scene_queue_panel()
-        self.selected_category_idx = idx
         self.last_triggered_scene = None  # Clear to allow re-triggering scenes
         self._update_scene_queue_panel()
         
@@ -360,7 +472,6 @@ class HomeScreen(BaseScreen):
             self.queue_list.setCurrentRow(0)
             self.current_scene_index = 0
 
-    # --------------------------------------------------------------- QUEUE
     def _create_scene_queue_panel(self) -> QWidget:
         self.scene_panel = QFrame()
         self._update_scene_panel_style()
@@ -374,10 +485,10 @@ class HomeScreen(BaseScreen):
         self._update_current_scene_label_style()
         self.scene_layout.addWidget(self.current_scene_label, 0)
 
-        # Queue list (expands to fill available space)
+        # Queue list
         self.queue_list = QListWidget()
         self.queue_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.queue_list.setMinimumHeight(120)  # Reduced minimum height to allow more flexibility
+        self.queue_list.setMinimumHeight(120)
         self._update_queue_list_style()
         self.scene_layout.addWidget(self.queue_list, 1)
 
@@ -387,7 +498,7 @@ class HomeScreen(BaseScreen):
         self._update_progress_label_style()
         self.scene_layout.addWidget(self.progress_label, 0)
 
-        # Stretch priorities within the panel - queue list gets all available space
+        # Stretch priorities
         self.scene_layout.setStretch(0, 0)  # header - fixed size
         self.scene_layout.setStretch(1, 1)  # list - expands to fill space
         self.scene_layout.setStretch(2, 0)  # progress - fixed size
@@ -487,7 +598,7 @@ class HomeScreen(BaseScreen):
             elif script_enabled:
                 sym = SCENE_TYPE_SYMBOLS["Animation"]
             else:
-                sym = "❌"
+                sym = "⌘"
             duration = f"{s.get('duration', '--')}s"
             text = f"{sym}  {label}    {duration}"
             self.queue_list.addItem(QListWidgetItem(text))
@@ -498,7 +609,6 @@ class HomeScreen(BaseScreen):
             self.current_scene_index = 0
         self.progress_label.setText("Progress: Ready to play")
 
-    # -------------------------------------------------------------- MODES
     def _create_mode_selector(self, parent_layout: QVBoxLayout):
         self.mode_bar = QHBoxLayout()
         self.mode_buttons = []
@@ -509,7 +619,7 @@ class HomeScreen(BaseScreen):
             btn.setCheckable(True)
             btn.setFont(font)
             btn.setMinimumSize(110, 36)
-            btn.setStyleSheet(self._get_mode_button_style(selected=(idx == 0)))  # Sequential default
+            btn.setStyleSheet(self._get_mode_button_style(selected=(idx == 0)))
             btn.clicked.connect(lambda checked, i=idx: self._on_mode_selected(i))
             self.mode_bar.addWidget(btn)
             self.mode_buttons.append(btn)
@@ -575,12 +685,12 @@ class HomeScreen(BaseScreen):
                 self.logger.error("Failed to send idle activation to backend")
                 
             self.idle_timer = QTimer(self)
-            self.auto_advance_enabled = False  # Disable auto-advance during idle
+            self.auto_advance_enabled = False
             self.idle_timer.timeout.connect(self._play_idle_scene)
             self.idle_timer.start(20000)
         else:
             # Send idle mode deactivation to backend  
-            self.auto_advance_enabled = True   # Re-enable auto-advance
+            self.auto_advance_enabled = True
             success = self.send_websocket_message("mode", name="idle", state=False)
             if success:
                 self.logger.info("Idle mode deactivated - sent to backend")
@@ -614,7 +724,6 @@ class HomeScreen(BaseScreen):
         except Exception as e:
             self.logger.error(f"Error playing idle scene: {e}")
 
-    # ----------------------------------------------------------- Theme Updates
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
         try:
@@ -648,7 +757,6 @@ class HomeScreen(BaseScreen):
         except Exception as e:
             self.logger.error(f"Error updating theme: {e}")
 
-    # ----------------------------------------------------------- Utilities
     @error_boundary
     def reload_emotions(self):
         """Backward-compatible: refresh categories when SceneScreen updates."""
@@ -700,9 +808,9 @@ class HomeScreen(BaseScreen):
         """Connect signals from SceneScreen to update categories when changed."""
         scene_screen.scenes_updated.connect(self.reload_emotions)
 
-    # ------------------------------ DPad stubs
+    # Backward compatibility methods (now handled via WebSocket)
     def select_queue_item(self, idx: int):
-        """Select a specific queue item by index"""
+        """Select a specific queue item by index (for compatibility)"""
         count = self.queue_list.count()
         if 0 <= idx < count:
             self.queue_list.setCurrentRow(idx)
@@ -718,67 +826,3 @@ class HomeScreen(BaseScreen):
             theme_manager.unregister_callback(self._on_theme_changed)
         except:
             pass  # Ignore errors during cleanup
-
-    def _handle_websocket_message(self, message: str):
-        """Handle WebSocket messages for scene completion"""
-        try:
-            import json
-            msg = json.loads(message)
-            msg_type = msg.get("type")
-            
-            if msg_type == "scene_completed":
-                scene_name = msg.get("scene_name", "")
-                success = msg.get("success", False)
-                
-                if success and self.auto_advance_enabled:
-                    self.is_playing_scene = False
-                    self._advance_to_next_scene()
-                    
-            elif msg_type == "scene_started":
-                self.is_playing_scene = True
-                scene_name = msg.get("scene_name", "")
-                self.last_triggered_scene = scene_name
-                
-            elif msg_type == "scene_error":
-                self.is_playing_scene = False
-                
-        except Exception as e:
-            self.logger.error(f"Error handling WebSocket message: {e}")
-
-    def _advance_to_next_scene(self):
-        """Advance to next scene based on current mode (Sequential/Random)"""
-        try:
-            if not hasattr(self, "categories") or not self.categories:
-                return
-                
-            cat = self.categories[self.selected_category_idx]
-            scenes = self.category_to_scenes.get(cat, [])
-            
-            if len(scenes) <= 1:
-                return  # Don't auto-advance if only one scene
-                
-            current_row = self.queue_list.currentRow()
-            if current_row < 0:
-                current_row = 0
-                
-            # Sequential vs Random logic
-            if self.selected_mode_idx == 0:  # Sequential mode
-                next_index = (current_row + 1) % len(scenes)
-            else:  # Random mode (idx == 1)
-                import random
-                available_indices = list(range(len(scenes)))
-                if len(scenes) > 1 and current_row in available_indices:
-                    available_indices.remove(current_row)  # Avoid immediate repeat
-                next_index = random.choice(available_indices)
-            
-            # Update UI selection ONLY - don't auto-trigger
-            self.queue_list.setCurrentRow(next_index)
-            self.current_scene_index = next_index
-            
-            # REMOVE THIS LINE - it was auto-triggering the scene:
-            # QTimer.singleShot(500, self._trigger_selected_scene)
-            
-            self.logger.info(f"Auto-advancing from scene {current_row} to {next_index} (selected, not triggered)")
-            
-        except Exception as e:
-            self.logger.error(f"Error advancing to next scene: {e}")

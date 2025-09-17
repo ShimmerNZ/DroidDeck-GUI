@@ -23,7 +23,7 @@
   "right_trigger": {
     "behavior": "direct_servo",
     "input_type": "trigger",
-    "target": "m1_ch6",
+    "target": "m1_ch7",
     "invert": false
   },
   "button_a": {

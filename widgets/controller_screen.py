@@ -6,9 +6,10 @@ Fixed maestro detection and servo channel loading issue + Bluetooth controller s
 import json
 from typing import Optional, Dict, Any, List
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QWidget, QComboBox, QCheckBox, QMessageBox,
-    QProgressBar, QFrame, QSlider, QSpinBox, QGroupBox
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
+    QStackedWidget, QProgressBar, QFrame, QGridLayout, QComboBox,
+    QSlider, QSpinBox, QGroupBox, QTextEdit, QCheckBox, QLineEdit, 
+    QMessageBox, QScrollArea
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -740,21 +741,44 @@ class ControllerConfigScreen(BaseScreen):
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.request_controller_info)
         
+        # Add calibration button to status frame
+        self.calibration_button = QPushButton("Controller Calibration")
+        self.calibration_button.setStyleSheet("""
+            QPushButton {
+                background-color: #1e90ff;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #4dabf7; }
+            QPushButton:disabled { background-color: #555555; }
+        """)
+        self.calibration_button.clicked.connect(self.open_calibration_dialog)
+        
         status_layout.addWidget(status_label)
         status_layout.addWidget(self.controller_status_label)
         status_layout.addStretch()
+        status_layout.addWidget(self.calibration_button)
         status_layout.addWidget(refresh_btn)
 
-        # Main layout
+        # Main content
         config_section = self._create_config_section()
         main_layout.addWidget(config_section, stretch=3)
         
         params_section = self._create_parameters_section()  
         main_layout.addWidget(params_section, stretch=1)
         
-        self.setLayout(main_layout)
+        # Create overall layout
+        overall_layout = QVBoxLayout()
+        overall_layout.addWidget(status_frame)
+        overall_layout.addLayout(main_layout, stretch=1)
+        
+        self.setLayout(overall_layout)
         QTimer.singleShot(1000, self.request_controller_info)
-
+        
     def _create_config_section(self):
         """Create the main configuration grid section"""
         self.config_frame = QFrame()
@@ -835,6 +859,147 @@ class ControllerConfigScreen(BaseScreen):
         layout.addLayout(buttons_layout)
         
         return self.config_frame
+    
+    def _create_header_with_calibration_button(self):
+        """Create header layout with calibration button if one doesn't exist"""
+        # Create header layout
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 10)
+        
+        # Main title
+        title_label = QLabel("Controller Configuration")
+        title_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title_label.setStyleSheet("color: #1e90ff; margin: 10px 0;")
+        header_layout.addWidget(title_label)
+        
+        # Stretch to push button right
+        header_layout.addStretch()
+        
+        # Calibration button
+        self.calibration_button = QPushButton("🎮 Controller Calibration")
+        self.calibration_button.setStyleSheet("""
+            QPushButton {
+                background-color: #1e90ff;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #4dabf7; }
+            QPushButton:disabled { background-color: #555555; }
+        """)
+        self.calibration_button.clicked.connect(self.open_calibration_dialog)
+        header_layout.addWidget(self.calibration_button)
+        
+        # Insert at top of main layout
+        if hasattr(self, 'layout'):
+            self.layout().insertWidget(0, header_widget)
+    
+    def open_calibration_dialog(self):
+        """Open the controller calibration dialog"""
+        try:
+            # Import here to avoid circular imports
+            from widgets.controller_calibration_screen import ControllerCalibrationDialog
+            
+            dialog = ControllerCalibrationDialog(
+                websocket=self.websocket,
+                parent=self
+            )
+            
+            # Connect completion signal
+            dialog.calibration_completed.connect(self.on_calibration_completed)
+            
+            # Show dialog
+            result = dialog.exec()
+            
+            if result == QDialog.DialogCode.Accepted:
+                self.logger.info("Controller calibration completed successfully")
+            else:
+                self.logger.info("Controller calibration cancelled")
+                
+        except ImportError as e:
+            self.logger.error(f"Failed to import calibration dialog: {e}")
+            self.show_error_message("Calibration Error", 
+                                  "Failed to load calibration interface. Please check the installation.")
+        except Exception as e:
+            self.logger.error(f"Failed to open calibration dialog: {e}")
+            self.show_error_message("Calibration Error", 
+                                  f"Failed to open calibration dialog: {str(e)}")
+    
+    def on_calibration_completed(self, calibration_data: dict):
+        """Handle completion of controller calibration"""
+        self.logger.info("Controller calibration data received")
+        
+        # Optionally refresh the controller configuration
+        # to reflect any changes made during calibration
+        self._refresh_controller_mappings()
+        
+        # Show success message
+        self.show_info_message("Calibration Complete", 
+                              "Controller calibration completed successfully!\n"
+                              "New settings have been applied.")
+    
+    def show_error_message(self, title: str, message: str):
+        """Show error message dialog"""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(QMessageBox.Icon.Critical)
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: #2d2d2d;
+                color: white;
+            }
+            QMessageBox QPushButton {
+                background-color: #1e90ff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 3px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #4dabf7;
+            }
+        """)
+        msg_box.exec()
+    
+    def show_info_message(self, title: str, message: str):
+        """Show info message dialog"""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: #2d2d2d;
+                color: white;
+            }
+            QMessageBox QPushButton {
+                background-color: #1e90ff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 3px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #4dabf7;
+            }
+        """)
+        msg_box.exec()
+    
+    def _refresh_controller_mappings(self):
+        """Refresh controller mappings after calibration"""
+        # This method can be used to reload mappings or update displays
+        # based on the new calibration data
+        if hasattr(self, 'mapping_rows') and self.mapping_rows:
+            self.logger.info("Refreshing controller mappings with new calibration")
+            # Add any specific refresh logic here if needed
+
+
+
 
     def _create_parameters_section(self):
         """Create the parameters panel section"""
