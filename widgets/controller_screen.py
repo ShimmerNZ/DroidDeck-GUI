@@ -681,7 +681,7 @@ class ControllerConfigScreen(BaseScreen):
                 # Update UI to show controller is connected
                 if hasattr(self, 'controller_status_label'):
                     self.controller_status_label.setText(f"Connected: {controller_name}")
-                    self.controller_status_label.setStyleSheet("color: #4CAF50;")  # Green
+                    self.controller_status_label.setStyleSheet("color: #4CAF50;border: none; background: transparent; padding: 0px;")  # Green
                 
                 # Update available inputs
                 if available_inputs:
@@ -690,7 +690,7 @@ class ControllerConfigScreen(BaseScreen):
                 # Show disconnected status
                 if hasattr(self, 'controller_status_label'):
                     self.controller_status_label.setText("No controller connected")
-                    self.controller_status_label.setStyleSheet("color: #F44336;")  # Red
+                    self.controller_status_label.setStyleSheet("color: #F44336;border: none; background: transparent; padding: 0px;")  # Red
             
             if self.logger:
                 self.logger.info(f"Controller info updated: {controller_name} ({controller_type})")
@@ -732,16 +732,42 @@ class ControllerConfigScreen(BaseScreen):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(100, 25, 40, 15)
 
-        # Status frame at top
-        status_frame = QFrame()
-        status_layout = QHBoxLayout(status_frame)
+        # Main content - no more separate status frame
+        config_section = self._create_config_section()
+        main_layout.addWidget(config_section, stretch=3)
         
+        params_section = self._create_parameters_section()  
+        main_layout.addWidget(params_section, stretch=1)
+        
+        # Create overall layout - just the main layout, no status bar
+        self.setLayout(main_layout)
+        QTimer.singleShot(1000, self.request_controller_info)
+
+    def _create_config_section(self):
+        """Create the main configuration grid section"""
+        self.config_frame = QFrame()
+        self.update_config_frame_style()
+        layout = QVBoxLayout(self.config_frame)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Status and controls header (replaces the title)
+        status_header_layout = QHBoxLayout()
+        status_header_layout.setContentsMargins(0, 0, 0, 10)
+        
+        # Controller status on the left
         status_label = QLabel("Controller Status:")
+        status_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.controller_status_label = QLabel("Checking...")
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.request_controller_info)
         
-        # Add calibration button to status frame
+        # Apply status styling
+        status_label.setStyleSheet("color: #cccccc; border: none; background: transparent;")
+        self.controller_status_label.setStyleSheet("color: #ff6b6b; margin-left: 10px; border: none; background: transparent;")
+        
+        status_header_layout.addWidget(status_label)
+        status_header_layout.addWidget(self.controller_status_label)
+        status_header_layout.addStretch()  # Push buttons to the right
+        
+        # Control buttons on the right
         self.calibration_button = QPushButton("Controller Calibration")
         self.calibration_button.setStyleSheet("""
             QPushButton {
@@ -758,39 +784,28 @@ class ControllerConfigScreen(BaseScreen):
         """)
         self.calibration_button.clicked.connect(self.open_calibration_dialog)
         
-        status_layout.addWidget(status_label)
-        status_layout.addWidget(self.controller_status_label)
-        status_layout.addStretch()
-        status_layout.addWidget(self.calibration_button)
-        status_layout.addWidget(refresh_btn)
-
-        # Main content
-        config_section = self._create_config_section()
-        main_layout.addWidget(config_section, stretch=3)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #666666;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+                margin-left: 10px;
+            }
+            QPushButton:hover { background-color: #777777; }
+        """)
+        refresh_btn.clicked.connect(self.request_controller_info)
         
-        params_section = self._create_parameters_section()  
-        main_layout.addWidget(params_section, stretch=1)
+        status_header_layout.addWidget(self.calibration_button)
+        status_header_layout.addWidget(refresh_btn)
         
-        # Create overall layout
-        overall_layout = QVBoxLayout()
-        overall_layout.addWidget(status_frame)
-        overall_layout.addLayout(main_layout, stretch=1)
+        layout.addLayout(status_header_layout)
         
-        self.setLayout(overall_layout)
-        QTimer.singleShot(1000, self.request_controller_info)
-        
-    def _create_config_section(self):
-        """Create the main configuration grid section"""
-        self.config_frame = QFrame()
-        self.update_config_frame_style()
-        layout = QVBoxLayout(self.config_frame)
-        layout.setContentsMargins(15, 15, 15, 15)
-        
-        self.header = QLabel("CONTROLLER CONFIGURATION")
-        self.header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.update_header_style()
-        layout.addWidget(self.header)
+        # Remove the old header title section
+        # self.header = QLabel("CONTROLLER CONFIGURATION") - REMOVED
         
         self.conflict_warning = QLabel("")
         self.conflict_warning.setWordWrap(True)
@@ -824,6 +839,7 @@ class ControllerConfigScreen(BaseScreen):
         
         layout.addLayout(headers_layout)
         
+        # Rest of the method remains the same...
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.update_scroll_area_style()
@@ -859,7 +875,7 @@ class ControllerConfigScreen(BaseScreen):
         layout.addLayout(buttons_layout)
         
         return self.config_frame
-    
+
     def _create_header_with_calibration_button(self):
         """Create header layout with calibration button if one doesn't exist"""
         # Create header layout
@@ -1008,7 +1024,7 @@ class ControllerConfigScreen(BaseScreen):
         self.update_parameters_panel_style()
         
         layout = QVBoxLayout(self.parameters_panel)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(6, 12, 6, 12)
         
         self.params_header = QLabel("BEHAVIOR PARAMETERS")
         self.params_header.setFont(QFont("Arial", 13, QFont.Weight.Bold))
@@ -1177,12 +1193,19 @@ class ControllerConfigScreen(BaseScreen):
 
     def _create_direct_servo_params(self, row_data: Dict):
         """Create parameters for direct servo behavior"""
-        self._add_param_header("Direct Servo Configuration")
+        # Replace _add_param_header with direct styling
+        header = QLabel("Direct Servo Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
         
         control_name = row_data['input_combo'].currentText()
         if control_name != "Select Input...":
             axis_info = QLabel(f"Maps {control_name} to one servo")
-            self.update_axis_info_style(axis_info)
+            # Replace update_axis_info_style with direct styling
+            grey = theme_manager.get("grey")
+            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
             self.params_layout.addWidget(axis_info)
         
         servo_combo = QComboBox()
@@ -1192,14 +1215,21 @@ class ControllerConfigScreen(BaseScreen):
         servo_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'target', text)
         )
-        self._add_param_row("Target Servo:", servo_combo)
+        # Use clean param row instead of regular _add_param_row
+        servo_combo.setStyleSheet(self._get_combo_style())
+        label = QLabel("Target Servo:")
+        label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label)
+        self.params_layout.addWidget(servo_combo)
+        self.params_layout.addSpacing(6)
         
         invert_checkbox = QCheckBox("Invert Direction")
         invert_checkbox.setChecked(row_data['config'].get('invert', False))
         invert_checkbox.toggled.connect(
             lambda checked: self._update_row_config(row_data, 'invert', checked)
         )
-        self._add_param_row("", invert_checkbox)
+        # Use clean param row for checkbox too
+        self._add_clean_param_row("", invert_checkbox)
         
         target = row_data['config'].get('target', 'Not configured')
         row_data['target_label'].setText(f"→ {target}")
@@ -1291,8 +1321,14 @@ class ControllerConfigScreen(BaseScreen):
 
     def _create_scene_trigger_params(self, row_data: Dict):
         """Create parameters for scene trigger behavior"""
-        self._add_param_header("Scene Trigger Configuration")
+        # Header without border - direct styling
+        header = QLabel("Scene Trigger Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
         
+        # Target Scene combo with clean label
         scene_combo = QComboBox()
         scene_combo.addItems(["Select Scene..."] + self.scene_names)
         if 'scene' in row_data['config']:
@@ -1300,23 +1336,44 @@ class ControllerConfigScreen(BaseScreen):
         scene_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'scene', text)
         )
-        self._add_param_row("Target Scene:", scene_combo)
+        scene_combo.setStyleSheet(self._get_combo_style())
         
+        # Add label and combo manually with clean label styling
+        label1 = QLabel("Target Scene:")
+        label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label1)
+        self.params_layout.addWidget(scene_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Trigger Timing combo with clean label
         timing_combo = QComboBox()
         timing_combo.addItems(["on_press", "on_release", "continuous"])
         timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
         timing_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'trigger_timing', text)
         )
-        self._add_param_row("Trigger Timing:", timing_combo)
+        timing_combo.setStyleSheet(self._get_combo_style())
+        
+        # Add label and combo manually with clean label styling
+        label2 = QLabel("Trigger Timing:")
+        label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label2)
+        self.params_layout.addWidget(timing_combo)
+        self.params_layout.addSpacing(6)
         
         scene = row_data['config'].get('scene', 'Not configured')
         row_data['target_label'].setText(f"→ {scene}")
 
     def _create_toggle_scenes_params(self, row_data: Dict):
         """Create parameters for toggle scenes behavior"""
-        self._add_param_header("Toggle Scenes Configuration")
+        # Header without border - direct styling
+        header = QLabel("Toggle Scenes Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
         
+        # Scene 1 combo with clean label
         scene1_combo = QComboBox()
         scene1_combo.addItems(["Select Scene 1..."] + self.scene_names)
         if 'scene_1' in row_data['config']:
@@ -1324,8 +1381,16 @@ class ControllerConfigScreen(BaseScreen):
         scene1_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'scene_1', text)
         )
-        self._add_param_row("Scene 1:", scene1_combo)
+        scene1_combo.setStyleSheet(self._get_combo_style())
         
+        # Add label and combo manually with clean label styling
+        label1 = QLabel("Scene 1:")
+        label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label1)
+        self.params_layout.addWidget(scene1_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Scene 2 combo with clean label
         scene2_combo = QComboBox()
         scene2_combo.addItems(["Select Scene 2..."] + self.scene_names)
         if 'scene_2' in row_data['config']:
@@ -1333,29 +1398,51 @@ class ControllerConfigScreen(BaseScreen):
         scene2_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'scene_2', text)
         )
-        self._add_param_row("Scene 2:", scene2_combo)
+        scene2_combo.setStyleSheet(self._get_combo_style())
         
+        # Add label and combo manually with clean label styling
+        label2 = QLabel("Scene 2:")
+        label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label2)
+        self.params_layout.addWidget(scene2_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Trigger Timing combo with clean label
         timing_combo = QComboBox()
         timing_combo.addItems(["on_press", "on_release"])
         timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
         timing_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'trigger_timing', text)
         )
-        self._add_param_row("Trigger Timing:", timing_combo)
+        timing_combo.setStyleSheet(self._get_combo_style())
+        
+        # Add label and combo manually with clean label styling
+        label3 = QLabel("Trigger Timing:")
+        label3.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label3)
+        self.params_layout.addWidget(timing_combo)
+        self.params_layout.addSpacing(6)
         
         scene1 = row_data['config'].get('scene_1', '?')
         scene2 = row_data['config'].get('scene_2', '?')
         row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
 
     def _create_nema_stepper_params(self, row_data: Dict):
-        """Create parameters for NEMA stepper behavior"""
-        self._add_param_header("NEMA Stepper Configuration")
+        """Create streamlined parameters for NEMA stepper behavior"""
+        header = QLabel("NEMA Stepper Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
         
         control_name = row_data['input_combo'].currentText()
         if control_name != "Select Input...":
             axis_info = QLabel(f"Controls NEMA stepper using {control_name}")
-            self.update_axis_info_style(axis_info)
+            # Direct styling without borders - replace update_axis_info_style call
+            grey = theme_manager.get("grey")
+            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
             self.params_layout.addWidget(axis_info)
+
         
         # Behavior type selection
         behavior_combo = QComboBox()
@@ -1366,49 +1453,102 @@ class ControllerConfigScreen(BaseScreen):
         behavior_combo.currentTextChanged.connect(
             lambda text: self._update_row_config(row_data, 'nema_behavior', text)
         )
-        self._add_param_row("Behavior Mode:", behavior_combo)
+        behavior_combo.setStyleSheet(self._get_clean_combo_style())
+
+        # Load NEMA config from servo config to initialize row values
+        nema_config = self._get_nema_config()
+        row_data['config']['min_position'] = float(nema_config.get('min_position', 0.0))
+        row_data['config']['max_position'] = float(nema_config.get('max_position', 20.0))  
+        row_data['config']['normal_speed'] = int(nema_config.get('normal_speed', 800))
+        row_data['config']['acceleration'] = int(nema_config.get('acceleration', 800))
+
+        # Update the target display with the actual values
+        self._update_nema_target_display(row_data)
+
+        self._add_clean_param_row("Behavior Mode:", behavior_combo)
         
-        # Load NEMA config from servo config
+        # Current NEMA Configuration Display (read-only)
+        self._add_nema_config_display()
+        
+        # Trigger timing section
+        self._add_trigger_timing_section(row_data)
+        
+        # Update target display with current servo config values
+        self._update_nema_target_display(row_data)
+
+    def _add_clean_param_row(self, label_text: str, widget: QWidget):
+        """Add a parameter row with label and control without borders"""
+        if label_text:
+            label = QLabel(label_text)
+            label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+            self.params_layout.addWidget(label)
+        
+        widget.setStyleSheet(widget.styleSheet() + "; border: none; background: transparent;")
+        self.params_layout.addWidget(widget)
+        self.params_layout.addSpacing(6)
+
+    def _add_nema_config_display(self):
+        """Add read-only display of current NEMA configuration from servo config"""
+        # Load current NEMA config from servo config
         nema_config = self._get_nema_config()
         
-        # Position limits
-        min_pos_spin = QSpinBox()
-        min_pos_spin.setRange(0, 100)
-        min_pos_spin.setSuffix(" cm")
-        min_pos_spin.setValue(int(row_data['config'].get('min_position', nema_config.get('min_position', 0))))
-        min_pos_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'min_position', float(value))
-        )
-        self._add_param_row("Min Position:", min_pos_spin)
+        # Create config display frame
+        config_frame = QFrame()
+        config_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(42, 42, 58, 0.8);
+                border: 1px solid #555;
+                border-radius: 4px;
+                margin: 5px 0px;
+            }
+        """)
         
-        max_pos_spin = QSpinBox()
-        max_pos_spin.setRange(1, 100)
-        max_pos_spin.setSuffix(" cm")
-        max_pos_spin.setValue(int(row_data['config'].get('max_position', nema_config.get('max_position', 20))))
-        max_pos_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'max_position', float(value))
-        )
-        self._add_param_row("Max Position:", max_pos_spin)
+        config_layout = QVBoxLayout(config_frame)
+        config_layout.setContentsMargins(8, 8, 8, 8)
+        config_layout.setSpacing(3)
         
-        # Speed setting
-        speed_spin = QSpinBox()
-        speed_spin.setRange(100, 2000)
-        speed_spin.setSuffix(" steps/s")
-        speed_spin.setValue(int(row_data['config'].get('normal_speed', nema_config.get('normal_speed', 800))))
-        speed_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'normal_speed', value)
-        )
-        self._add_param_row("Movement Speed:", speed_spin)
+        # Header
+        primary_color = theme_manager.get("primary_color")
+        header = QLabel("Current NEMA Configuration:")
+        header.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {primary_color}; margin-bottom: 5px; border: none; background: transparent;")
+        config_layout.addWidget(header)
         
-        # Acceleration setting
-        accel_spin = QSpinBox()
-        accel_spin.setRange(100, 2000)
-        accel_spin.setSuffix(" steps/s²")
-        accel_spin.setValue(int(row_data['config'].get('acceleration', nema_config.get('acceleration', 800))))
-        accel_spin.valueChanged.connect(
-            lambda value: self._update_row_config(row_data, 'acceleration', value)
-        )
-        self._add_param_row("Acceleration:", accel_spin)
+        # Configuration rows
+        config_items = [
+            ("Min Position:", f"{nema_config.get('min_position', 0.0):.1f} cm"),
+            ("Max Position:", f"{nema_config.get('max_position', 20.0):.1f} cm"),
+            ("Movement Speed:", f"{nema_config.get('normal_speed', 800)} steps/s"),
+            ("Acceleration:", f"{nema_config.get('acceleration', 800)} steps/s²")
+        ]
+        
+        for label_text, value_text in config_items:
+            row_widget = QWidget()
+            row_widget.setStyleSheet("border: none; background: transparent;")
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 2, 0, 2)
+            
+            label = QLabel(label_text)
+            label.setStyleSheet("color: #aaa; font-size: 11px; border: none; background: transparent;")
+            
+            value = QLabel(value_text)
+            value.setStyleSheet("color: #4CAF50; font-size: 11px; border: none; background: transparent;")
+            
+            row_layout.addWidget(label)
+            row_layout.addStretch()
+            row_layout.addWidget(value)
+            
+            config_layout.addWidget(row_widget)
+        
+        self.params_layout.addWidget(config_frame)
+
+    def _add_trigger_timing_section(self, row_data: Dict):
+        """Add trigger timing section with visual separation"""
+        # Add visual separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("color: #444; margin: 8px 0px; border: none; background: transparent;")
+        self.params_layout.addWidget(separator)
         
         # Trigger timing (for toggle/sweep modes)
         current_behavior = row_data['config'].get('nema_behavior', 'toggle_positions')
@@ -1419,7 +1559,8 @@ class ControllerConfigScreen(BaseScreen):
             timing_combo.currentTextChanged.connect(
                 lambda text: self._update_row_config(row_data, 'trigger_timing', text)
             )
-            self._add_param_row("Trigger Timing:", timing_combo)
+            timing_combo.setStyleSheet(self._get_clean_combo_style())
+            self._add_clean_param_row("Trigger Timing:", timing_combo)
         
         # Invert direction (for direct control)
         if current_behavior == 'direct_control':
@@ -1428,13 +1569,50 @@ class ControllerConfigScreen(BaseScreen):
             invert_checkbox.toggled.connect(
                 lambda checked: self._update_row_config(row_data, 'invert', checked)
             )
-            self._add_param_row("", invert_checkbox)
-        
-        # Update target display
+            invert_checkbox.setStyleSheet("border: none; background: transparent; color: white;")
+            self._add_clean_param_row("", invert_checkbox)
+
+    def _update_nema_target_display(self, row_data: Dict):
+        """Update target display using current servo config values"""
+        nema_config = self._get_nema_config()
         mode = row_data['config'].get('nema_behavior', 'Not configured')
-        min_pos = row_data['config'].get('min_position', '?')
-        max_pos = row_data['config'].get('max_position', '?')
-        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
+        min_pos = nema_config.get('min_position', 0.0)
+        max_pos = nema_config.get('max_position', 20.0)
+        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos:.1f}-{max_pos:.1f}cm")
+
+    def _get_clean_combo_style(self):
+        """Get clean combobox styling without borders"""
+        primary = theme_manager.get("primary_color")
+        panel_bg = theme_manager.get("panel_bg")
+        
+        return f"""
+            QComboBox {{
+                background-color: {panel_bg};
+                color: {primary};
+                border: none;
+                border-radius: 3px;
+                padding: 4px;
+                font-size: 10px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 4px solid {primary};
+                margin-right: 3px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {panel_bg};
+                color: {primary};
+                border: 1px solid {primary};
+                selection-background-color: {primary};
+                selection-color: black;
+            }}
+        """
 
     def _get_nema_config(self):
         """Get NEMA configuration from servo config"""
@@ -1590,6 +1768,15 @@ class ControllerConfigScreen(BaseScreen):
         
         try:
             config_manager.save_config("resources/configs/controller_config.json", controller_config)
+            if self.websocket and self.websocket.is_connected():
+                success = self.send_websocket_message("save_controller_config", config=controller_config)
+                if success:
+                    self.logger.info("Controller config sent to backend")
+                else:
+                    self.logger.warning("Failed to send controller config to backend")
+            else:
+                self.logger.warning("WebSocket not connected - controller config not synced to backend")
+
             QMessageBox.information(self, "Saved", f"Saved {len(controller_config)} controller mappings.")
             
             # Update behavior registry

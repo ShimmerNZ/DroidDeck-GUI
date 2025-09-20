@@ -1,42 +1,9 @@
 {
-  "left_stick": {
-    "behavior": "differential_tracks",
-    "input_type": "joystick",
-    "left_servo": "m2_ch0",
-    "right_servo": "m2_ch1",
-    "turn_sensitivity": 1.24
-  },
-  "right_stick": {
-    "behavior": "joystick_pair",
-    "input_type": "joystick",
-    "x_servo": "m1_ch0",
-    "y_servo": "m1_ch1",
-    "invert_x": false,
-    "invert_y": false
-  },
   "left_trigger": {
-    "behavior": "direct_servo",
-    "input_type": "trigger",
-    "target": "m1_ch5",
-    "invert": false
-  },
-  "right_trigger": {
     "behavior": "direct_servo",
     "input_type": "trigger",
     "target": "m1_ch7",
     "invert": false
-  },
-  "button_a": {
-    "behavior": "scene_trigger",
-    "input_type": "button",
-    "scene": "Happy",
-    "trigger_timing": "on_press"
-  },
-  "button_b": {
-    "behavior": "scene_trigger",
-    "input_type": "button",
-    "scene": "Sad",
-    "trigger_timing": "on_press"
   },
   "button_x": {
     "behavior": "toggle_scenes",
@@ -45,32 +12,26 @@
     "scene_2": "Alert",
     "trigger_timing": "on_press"
   },
+  "left_stick_y": {
+    "behavior": "differential_tracks",
+    "left_servo": "m2_ch0",
+    "right_servo": "m2_ch1"
+  },
+  "left_stick_x": {
+    "behavior": "differential_tracks",
+    "left_servo": "m2_ch0",
+    "right_servo": "m2_ch1"
+  },
   "button_y": {
-    "behavior": "scene_trigger",
-    "input_type": "button",
-    "scene": "Excited",
-    "trigger_timing": "on_press"
-  },
-  "shoulder_left": {
-    "behavior": "direct_servo",
-    "input_type": "button",
-    "target": "m1_ch7",
-    "invert": false
-  },
-  "shoulder_right": {
-    "behavior": "direct_servo",
-    "input_type": "button",
-    "target": "m1_ch8",
-    "invert": false
-  },
-  "dpad_up": {
-    "behavior": "scene_trigger",
-    "input_type": "dpad",
-    "scene": "Alert",
-    "trigger_timing": "on_press"
-  },
-  "dpad_down": {
     "behavior": "nema_stepper",
+    "min_position": 5.0,
+    "max_position": 15.0,
+    "normal_speed": 4800,
+    "acceleration": 5163,
     "nema_behavior": "toggle_positions"
+  },
+  "right_trigger": {
+    "behavior": "direct_servo",
+    "target": "m1_ch17"
   }
 }

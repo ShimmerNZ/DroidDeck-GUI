@@ -17,6 +17,8 @@ from core.theme_manager import theme_manager
 from threads.network_monitor import NetworkMonitorThread
 from core.utils import error_boundary
 from widgets.voltage_alert_splash import VoltageAlertSplash
+from widgets.bandwidth_test_splash import show_bandwidth_test_splash
+
 
 
 class HealthScreen(BaseScreen):
@@ -57,7 +59,7 @@ class HealthScreen(BaseScreen):
         pi_ip = "10.1.1.230"  # You can move this to config later
         self.network_monitor = NetworkMonitorThread(pi_ip=pi_ip, update_interval=5.0)
         self.network_monitor.wifi_updated.connect(self.update_network_status)
-        self.network_monitor.bandwidth_tested.connect(self.show_bandwidth_results)
+
         
         # Connect WebSocket for telemetry updates
         if self.websocket:
@@ -527,35 +529,21 @@ class HealthScreen(BaseScreen):
 
     @error_boundary
     def start_bandwidth_test(self, checked=False):
-        """Start bandwidth test"""
+        """Start bandwidth test with progress splash screen"""
+        # Disable button during test
         self.bandwidth_btn.setEnabled(False)
         self.bandwidth_btn.setText("TESTING...")
-        self.network_monitor.request_bandwidth_test()
-
-    @error_boundary
-    def show_bandwidth_results(self, download_mbps: float, upload_mbps: float, status_text: str):
-        """Show bandwidth test results in a popup"""
+        
+        # Determine camera proxy URL (you can adjust this based on your config)
+        camera_proxy_url = "http://10.1.1.230:8081"  # Or get from your config
+        
+        # Show the bandwidth test splash screen
+        results = show_bandwidth_test_splash(self, camera_proxy_url)
+        
+        # Re-enable button
         self.bandwidth_btn.setEnabled(True)
         self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
         
-        if download_mbps > 0:
-            QMessageBox.information(
-                self,
-                "Bandwidth Test Results",
-                f"Network Speed Test to Raspberry Pi:\n\n"
-                f"Download Speed: {download_mbps:.1f} Mbps\n"
-                f"Upload Speed: {'Not tested' if upload_mbps == 0 else f'{upload_mbps:.1f} Mbps'}\n\n"
-                f"Status: {status_text}"
-            )
-            self.logger.info(f"Bandwidth test results: {download_mbps:.1f} Mbps download")
-        else:
-            QMessageBox.warning(
-                self,
-                "Bandwidth Test Failed",
-                f"Network speed test failed:\n\n{status_text}\n\n"
-                "Check network connection to Raspberry Pi."
-            )
-            self.logger.warning(f"Bandwidth test failed: {status_text}")
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
         """Get voltage status with theme color coding"""

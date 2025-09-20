@@ -1941,7 +1941,7 @@ class ServoConfigScreen(BaseScreen):
             speed_spin.setRange(0, 100)
             speed_spin.setValue(config.get("speed", 0))
             speed_spin.setFixedWidth(60)
-            speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "speed", val))
+            speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_servo_speed_config(k, val))
             self._update_spinbox_style(speed_spin)
             self.grid_layout.addWidget(speed_spin, row, 5)
             
@@ -1950,7 +1950,7 @@ class ServoConfigScreen(BaseScreen):
             accel_spin.setRange(0, 100)
             accel_spin.setValue(config.get("accel", 0))
             accel_spin.setFixedWidth(60)
-            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "accel", val))
+            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_servo_accel_config(k, val))
             self._update_spinbox_style(accel_spin)
             self.grid_layout.addWidget(accel_spin, row, 6)
             
@@ -1994,6 +1994,26 @@ class ServoConfigScreen(BaseScreen):
             self.servo_widgets[channel_key] = (slider, pos_label, play_btn, live_checkbox, name_edit)
         
         self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
+
+    def update_servo_speed_config(self, channel_key: str, speed: int):
+        """Update servo speed configuration"""
+        if channel_key not in self.servo_config:
+            self.servo_config[channel_key] = {}
+        self.servo_config[channel_key]["speed"] = speed
+        self.save_config()
+        
+        # Send to backend immediately
+        self.send_websocket_message("servo_speed", channel=channel_key, speed=speed)
+
+    def update_servo_accel_config(self, channel_key: str, accel: int):
+        """Update servo acceleration configuration"""
+        if channel_key not in self.servo_config:
+            self.servo_config[channel_key] = {}
+        self.servo_config[channel_key]["accel"] = accel
+        self.save_config()
+        
+        # Send to backend immediately
+        self.send_websocket_message("servo_acceleration", channel=channel_key, acceleration=accel)
 
 # ========================================
     # POSITION UPDATES AND SERVO CONTROL

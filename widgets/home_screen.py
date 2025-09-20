@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import pygame
 from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout,
@@ -12,6 +13,7 @@ from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+from core.logger import get_logger
 
 # Symbols for scene types
 SCENE_TYPE_SYMBOLS = {
@@ -39,6 +41,17 @@ class HomeScreen(BaseScreen):
         self.auto_advance_enabled = True
         self.is_playing_scene = False
         self.last_triggered_scene = None
+        self.navigation_locked = False
+        self.last_navigation_time = 0
+        self.navigation_cooldown = 0.1
+
+        # Simple navigation tracking
+        self.current_scene_index = 0
+
+        # Add these to your existing __init__ method
+        self.auto_advance_enabled = True
+        self.is_playing_scene = False
+        self.last_triggered_scene = None
 
         # Connect to WebSocket messages for navigation and scene completion
         if hasattr(self, 'websocket') and self.websocket:
@@ -50,43 +63,62 @@ class HomeScreen(BaseScreen):
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
 
-    def _handle_websocket_message(self, message):
-        """Handle WebSocket messages including controller navigation and scene events"""
+        # Initialize logger
+        self.logger = get_logger("home_screen")
+
+        # Initialize pygame mixer for sound effects
+        self._init_audio()
+
+
+    def _handle_websocket_message(self, message: str):
+        """Handle WebSocket messages for scene completion - ENHANCED"""
         try:
-            data = json.loads(message)
+            import json
+            msg = json.loads(message)
+            msg_type = msg.get("type")
             
-            # Handle controller navigation commands from backend
-            if data.get('type') == 'navigation':
-                action = data.get('action')
-                self._handle_navigation_command(action)
-                return
+            if msg_type == "scene_completed":
+                scene_name = msg.get("scene_name", "")
+                success = msg.get("success", False)
                 
-            # Handle scene completion notifications
-            if data.get('type') == 'scene_completed':
-                scene_name = data.get("scene_name", "")
-                success = data.get("success", False)
+                # FIXED: Always unlock navigation when scene completes
+                self._unlock_scene_state()
                 
                 if success and self.auto_advance_enabled:
-                    self.is_playing_scene = False
                     self._advance_to_next_scene()
-                return
                     
-            # Handle scene started notifications
-            if data.get('type') == 'scene_started':
-                self.is_playing_scene = True
-                scene_name = data.get("scene_name", "")
+            elif msg_type == "scene_started":
+                scene_name = msg.get("scene_name", "")
                 self.last_triggered_scene = scene_name
-                return
+                # Keep navigation locked during scene playback
                 
-            # Handle scene errors
-            if data.get('type') == 'scene_error':
-                self.is_playing_scene = False
-                return
+            elif msg_type == "scene_error":
+                # FIXED: Unlock navigation on scene error
+                self._unlock_scene_state()
+
+            elif msg_type == "navigation":
+                # Handle navigation commands from dpad/controller
+                action = msg.get("action")
+                if action == "left":
+                    self._navigate_categories(-1)
+                elif action == "right":
+                    self._navigate_categories(1)
+                elif action == "up":
+                    self._navigate_scenes(-1)
+                elif action == "down":
+                    self._navigate_scenes(1)
+                elif action == "select":
+                    self._trigger_selected_scene()
+                elif action == "exit":
+                    # Handle exit if needed - could go back to main menu or close app
+                    self.logger.debug("Exit action received")
                 
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse WebSocket message: {e}")
+                self.logger.debug(f"Navigation action received: {action}")
+                
         except Exception as e:
             self.logger.error(f"Error handling WebSocket message: {e}")
+            # Always unlock on error to prevent permanent lock
+            self._unlock_scene_state()
 
     def _handle_navigation_command(self, action):
         """Handle navigation commands from controller via backend"""
@@ -139,10 +171,10 @@ class HomeScreen(BaseScreen):
         self.last_triggered_scene = None
 
     def _navigate_scenes(self, direction):
-        """Navigate scene list up/down with visual feedback"""
+        """Navigate scene list up/down"""
         if self.queue_list.count() == 0:
             return
-        
+    
         current = self.queue_list.currentRow()
         if current == -1:  # No selection
             current = 0
@@ -151,25 +183,43 @@ class HomeScreen(BaseScreen):
         new_index = current + direction
         new_index = max(0, min(self.queue_list.count() - 1, new_index))
         
-        # Update selection with visual feedback
+        # Only play sound if we actually moved
+        if new_index != current:
+            self._play_sound_effect("move.mp3")
+        
+        # Update selection
         self.queue_list.setCurrentRow(new_index)
         self.current_scene_index = new_index
-        self._highlight_selected_scene()
+        
+    def _unlock_navigation(self):
+        """Unlock navigation after debounce period"""
+        self.navigation_locked = False
 
     def _navigate_categories(self, direction):
-        """Navigate categories left/right with looping and visual feedback"""
+        """Navigate categories left/right with simple time-based debouncing"""
         if not hasattr(self, 'category_buttons') or not self.category_buttons:
             return
+
+        import time
+        current_time = time.time()
+        
+        # Simple time-based debouncing (matching your keyPressEvent approach)
+        if current_time - self.last_navigation_time < self.navigation_cooldown:
+            return
             
+        self.last_navigation_time = current_time
+
         current = self.selected_category_idx
         total = len(self.category_buttons)
         
         # Calculate new index with looping
         new_index = (current + direction) % total
-        
-        # Update selection with visual feedback
+                
+        # Play move sound effect when navigating categories
+        self._play_sound_effect("move.mp3")
+
+        # Update selection
         self._on_category_selected(new_index)
-        self._highlight_selected_category()
 
     def _highlight_selected_scene(self):
         """Provide visual feedback for selected scene"""
@@ -202,15 +252,16 @@ class HomeScreen(BaseScreen):
             QTimer.singleShot(400, lambda: button.setStyleSheet(original_style))
 
     def _trigger_selected_scene(self):
-        """Trigger the currently selected scene with controller feedback"""
+        """Trigger the currently selected scene with improved state management"""
         if not hasattr(self, "categories") or not self.categories:
             return
             
-        # Don't trigger if already playing (prevent rapid-fire)
-        if self.is_playing_scene:
-            self.logger.debug("Scene already playing, ignoring trigger")
+        # FIXED: Add more robust state checking
+        if (hasattr(self, 'is_playing_scene') and self.is_playing_scene) or self.navigation_locked:
+            self.logger.debug("Scene playing or navigation locked, ignoring trigger")
             return
-            
+        self._play_sound_effect("select.mp3")
+
         cat = self.categories[self.selected_category_idx]
         scenes = self.category_to_scenes.get(cat, [])
         
@@ -220,12 +271,15 @@ class HomeScreen(BaseScreen):
             scene_name = scene.get("label", "Unknown")
             
             # Don't re-trigger same scene immediately
-            if (scene_name == self.last_triggered_scene and self.is_playing_scene):
+            if (hasattr(self, 'last_triggered_scene') and 
+                scene_name == self.last_triggered_scene and 
+                hasattr(self, 'is_playing_scene') and 
+                self.is_playing_scene):
                 self.logger.debug(f"Scene {scene_name} is currently playing, ignoring trigger")
                 return
             
-            # Provide immediate visual feedback
-            self._provide_trigger_feedback()
+            # FIXED: Lock navigation during scene trigger
+            self.navigation_locked = True
             
             # Send WebSocket command to backend
             success = self.send_websocket_message("scene", emotion=scene_name)
@@ -236,15 +290,63 @@ class HomeScreen(BaseScreen):
                 self.progress_label.setText(f"Progress: Playing '{scene_name}'")
                 
                 # Update state tracking
-                self.is_playing_scene = True
-                scene_duration = scene.get("duration", 3.0)
-                fallback_timeout = int((scene_duration + 2) * 1000)
-                QTimer.singleShot(fallback_timeout, self._reset_scene_state)
-                self.last_triggered_scene = scene_name
-                
-                self.logger.info(f"Triggered scene: {scene_name} from category: {cat}")
+                if hasattr(self, 'is_playing_scene'):
+                    self.is_playing_scene = True
+                    self.last_triggered_scene = scene_name
+                    
+                    # Reset scene state after estimated duration as fallback
+                    scene_duration = scene.get("duration", 3.0)
+                    fallback_timeout = int((scene_duration + 2) * 1000)  # Convert to ms
+                    
+                    # Unlock navigation after scene duration
+                    QTimer.singleShot(fallback_timeout, self._unlock_scene_state)
+                else:
+                    # No scene state tracking, unlock navigation quickly
+                    QTimer.singleShot(200, self._unlock_navigation)
             else:
-                self.logger.error(f"Failed to trigger scene: {scene_name}")
+                # Failed to send, unlock immediately
+                self._unlock_navigation()
+
+    def _unlock_scene_state(self):
+        """Unlock scene state after playback"""
+        if hasattr(self, 'is_playing_scene'):
+            self.is_playing_scene = False
+        self.navigation_locked = False
+        self.progress_label.setText("Progress: Ready to play")
+
+    def keyPressEvent(self, event):
+        """Handle keyboard/D-pad input with improved debouncing"""
+        key = event.key()
+        
+        # FIXED: Check navigation lock first
+        if self.navigation_locked:
+            event.accept()  # Accept but don't process
+            return
+        
+        # Left/Right: Navigate categories with looping
+        if key == Qt.Key.Key_Left:
+            self._navigate_categories(-1)
+            event.accept()
+        elif key == Qt.Key.Key_Right:
+            self._navigate_categories(1)
+            event.accept()
+        
+        # Up/Down: Navigate scene list
+        elif key == Qt.Key.Key_Up:
+            self._navigate_scenes(-1)
+            event.accept()
+        elif key == Qt.Key.Key_Down:
+            self._navigate_scenes(1)
+            event.accept()
+        
+        # Enter/Space: Trigger selected scene
+        elif key in [Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space]:
+            self._trigger_selected_scene()
+            event.accept()
+        else:
+            # Call parent implementation for unhandled keys
+            super().keyPressEvent(event)
+
 
     def _provide_trigger_feedback(self):
         """Provide immediate visual feedback for scene trigger"""
@@ -392,6 +494,63 @@ class HomeScreen(BaseScreen):
             }}
         """)
 
+    def _init_audio(self):
+        """Initialize pygame mixer for sound effects"""
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            self.audio_available = True
+            self.logger.debug("HomeScreen audio system initialized successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize HomeScreen audio: {e}")
+            self.audio_available = False
+
+    def _play_sound_effect(self, sound_file):
+        """Play a themed sound effect"""
+        if not self.audio_available:
+            self.logger.debug("Audio not available, skipping sound playback")
+            return
+        
+        try:
+            # Get current theme name
+            theme_name = theme_manager.get_theme_name()
+            
+            # Build path to themed audio file
+            audio_path = os.path.join(
+                "resources", "theme", theme_name, "audio", sound_file
+            )
+            
+            # Fallback to other theme if file doesn't exist
+            if not os.path.exists(audio_path):
+                # Try the other theme
+                fallback_theme = "Wall-e" if theme_name == "Star Wars" else "Star Wars"
+                audio_path = os.path.join(
+                    "resources", "theme", fallback_theme, "audio", sound_file
+                )
+            
+            # Play audio if file exists
+            if os.path.exists(audio_path):
+                # Stop any current background music briefly to avoid conflicts
+                was_playing_music = pygame.mixer.music.get_busy()
+                if was_playing_music:
+                    pygame.mixer.music.pause()
+                
+                # Play the sound effect
+                sound = pygame.mixer.Sound(audio_path)
+                sound.play()
+                self.logger.debug(f"Playing sound effect: {audio_path}")
+                
+                # Resume background music if it was playing
+                if was_playing_music:
+                    # Short delay to let sound effect start, then resume music
+                    QTimer.singleShot(100, lambda: pygame.mixer.music.unpause())
+                    
+            else:
+                self.logger.debug(f"Sound effect file not found: {sound_file}")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to play sound effect {sound_file}: {e}")
+
     def _create_category_bar(self, parent_layout: QVBoxLayout):
         # Create a widget to contain the grid layout
         category_widget = QWidget()
@@ -444,6 +603,13 @@ class HomeScreen(BaseScreen):
         
         # Add the category widget to the parent layout
         parent_layout.addWidget(category_widget)
+        if self.category_buttons:
+            self.selected_category_idx = 0
+            self.category_buttons[0].setChecked(True)
+            # Force clear all other buttons
+            for i, btn in enumerate(self.category_buttons[1:], 1):
+                btn.setChecked(False)
+
 
     def _get_category_button_style(self, selected: bool) -> str:
         """Get category button style based on current theme"""
@@ -459,18 +625,34 @@ class HomeScreen(BaseScreen):
         return base_style + custom_padding
 
     def _on_category_selected(self, idx: int):
-        # Ensure single-selection behaviour
+        """Handle category selection with improved state management"""
+        # Add bounds checking
+        if not hasattr(self, 'category_buttons') or not self.category_buttons:
+            return
+            
+        if idx < 0 or idx >= len(self.category_buttons):
+            return
+        
+        # FIXED: Force clear ALL buttons first, regardless of current state
         for i, btn in enumerate(self.category_buttons):
-            btn.setChecked(i == idx)
-            btn.setStyleSheet(self._get_category_button_style(selected=(i == idx)))
+            btn.setChecked(False)
+            btn.setStyleSheet(self._get_category_button_style(selected=False))
+        
+        # Then set only the target button as selected
+        target_button = self.category_buttons[idx]
+        target_button.setChecked(True)
+        target_button.setStyleSheet(self._get_category_button_style(selected=True))
+        
+        # Update the selected category
         self.selected_category_idx = idx
-        self.last_triggered_scene = None  # Clear to allow re-triggering scenes
+        self.last_triggered_scene = None
         self._update_scene_queue_panel()
         
         # Reset scene selection when category changes
-        if self.queue_list.count() > 0:
+        if hasattr(self, 'queue_list') and self.queue_list.count() > 0:
             self.queue_list.setCurrentRow(0)
-            self.current_scene_index = 0
+            if hasattr(self, 'current_scene_index'):
+                self.current_scene_index = 0
 
     def _create_scene_queue_panel(self) -> QWidget:
         self.scene_panel = QFrame()
@@ -818,6 +1000,7 @@ class HomeScreen(BaseScreen):
 
     def trigger_selected_scene(self):
         """Trigger the currently selected scene (backwards compatibility)"""
+        self._play_sound_effect("select.mp3")
         self._trigger_selected_scene()
 
     def __del__(self):
