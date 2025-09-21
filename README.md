@@ -1,83 +1,78 @@
-# WALL-E Control System Documentation
+# Droid Deck
 
-## Table of Contents
+A comprehensive PyQt6-based robot control interface designed for droid robots, featuring real-time telemetry, servo control, camera feeds, gesture recognition, and Steam Deck controller integration.
 
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Installation & Setup](#installation--setup)
-4. [Configuration](#configuration)
-5. [Core Components](#core-components)
-6. [UI Components](#ui-components)
-7. [Background Processing](#background-processing)
-8. [API Reference](#api-reference)
-9. [Development Guide](#development-guide)
-10. [Troubleshooting](#troubleshooting)
-11. [To-Do List](#to-do-list)
+## 🚀 Features
 
-## Overview
+### Core Functionality
+- **Live Camera Feed**: MJPEG stream processing with MediaPipe pose detection and gesture recognition
+- **Advanced Servo Control**: Dual-Maestro servo controller support with real-time position feedback
+- **Health Monitoring**: System telemetry with battery voltage, current monitoring, and performance graphs
+- **Controller Integration**: Steam Deck gamepad mapping with calibration and differential steering
+- **Scene Management**: Emotion-based scene triggering with audio playback integration
+- **Network Monitoring**: WiFi signal strength visualization and connection quality assessment
 
-The WALL-E Control System is a comprehensive PyQt6 application for controlling robotic systems through multiple interfaces including live camera feeds, advanced servo control, health monitoring, gesture recognition, and Steam Deck controller mapping. The system uses WebSocket-based communication with automatic reconnection and sophisticated error handling.
+### User Interface
+- **Modular Screen Architecture**: Clean separation between different control interfaces
+- **Theme System**: Customizable theming with icon and background support
+- **Dynamic Header**: Real-time status display with network quality and battery indicators
+- **Responsive Design**: Optimized for various screen sizes and orientations
 
-### Key Features
+### Technical Highlights
+- **WebSocket Communication**: Real-time bidirectional communication with automatic reconnection
+- **Thread-Safe Processing**: Background image processing and network monitoring
+- **Configuration Management**: JSON-based configuration with hot-reloading and validation
+- **Error Handling**: Comprehensive error boundaries and graceful degradation
+- **Memory Management**: Periodic cleanup and resource optimization
 
-- **Live Camera Feed**: MJPEG stream processing with MediaPipe pose detection and wave detection
-- **Advanced Servo Control**: Real-time dual-Maestro support with home position indicators, sweep testing, and live position feedback
-- **Health Monitoring**: System telemetry with pyqtgraph-based battery/current monitoring and network quality assessment
-- **Gesture Recognition**: Configurable wave detection with confidence thresholds and stand-down periods
-- **Controller Integration**: Steam Deck control mapping with calibration, differential steering, and advanced input processing
-- **Network Monitoring**: WiFi signal strength monitoring with visual indicators and bandwidth testing
-- **Scene Management**: Emotion-based scene triggering with audio integration
-- **Modular Architecture**: Clean separation with dependency injection and thread-safe communication
+## 📋 Requirements
 
-### System Requirements
+### Python Dependencies
+```
+Python 3.9+
+PyQt6
+pyqtgraph (for health monitoring graphs)
+pygame (for audio playback)
+requests (for network testing)
+websockets (for WebSocket communication)
+```
 
-- Python 3.9
-- PyQt6
-- pyqtgraph (for health monitoring graphs)
-- OpenCV 4.0+ (optional, for camera features)
-- MediaPipe (optional, for pose detection)
+### Optional Dependencies
+```
+opencv-python (for camera processing)
+mediapipe (for pose detection and gesture recognition)
+```
+
+### Hardware Requirements
 - Network connectivity to robot backend
+- Optional: USB gamepad/Steam Deck for controller input
+- Optional: Camera for live feed processing
 
-## Architecture
+## 🛠️ Installation
 
-The system follows a modular architecture with clear separation between infrastructure, UI, and processing components.
-
-### High-Level Architecture
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   UI Widgets    │◄──►│  Core Services   │◄──►│ Background      │
-│                 │    │                  │    │ Processing      │
-│ - Home Screen   │    │ - Config Manager │    │                 │
-│ - Camera Screen │    │ - Logger         │    │ - Image Proc    │
-│ - Health Screen │    │ - WebSocket Mgr  │    │ - Network Mon   │
-│ - Servo Screen  │    │ - Utils          │    │ - Controller    │
-│ - Controller    │    │                  │    │                 │
-│ - Settings      │    │                  │    │                 │
-│ - Scene Editor  │    │                  │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-        │                        │                        │
-        └────────────────────────┼────────────────────────┘
-                                 │
-                    ┌──────────────────┐
-                    │   Robot Backend  │
-                    │   (WebSocket)    │
-                    └──────────────────┘
+### 1. Clone or Download
+```bash
+git clone <repository-url>
+cd droid-deck
 ```
 
-### Design Principles
-
-1. **Single Responsibility**: Each module has one clear purpose
-2. **Dependency Injection**: Services are passed to components that need them
-3. **Error Isolation**: Failures in one component don't cascade
-4. **Thread Safety**: Background processing isolated from UI with Qt signals
-5. **Configuration Driven**: Behavior controlled through JSON config files
-
-
-### Directory Structure
-
+### 2. Install Dependencies
+```bash
+pip install PyQt6 pyqtgraph pygame requests websockets
 ```
-wall-e-frontend/
+
+### 3. Optional Dependencies
+```bash
+# For camera features
+pip install opencv-python mediapipe
+
+# For additional features
+pip install numpy
+```
+
+### 4. Directory Structure Setup
+```
+droid-deck/
 ├── main.py
 ├── core/
 │   ├── __init__.py
@@ -85,6 +80,7 @@ wall-e-frontend/
 │   ├── config_manager.py
 │   ├── logger.py
 │   ├── websocket_manager.py
+│   ├── theme_manager.py
 │   └── utils.py
 ├── widgets/
 │   ├── __init__.py
@@ -95,39 +91,23 @@ wall-e-frontend/
 │   ├── servo_screen.py
 │   ├── controller_screen.py
 │   ├── settings_screen.py
-│   └── scene_screen.py
+│   ├── scene_screen.py
+│   └── splash_screen.py
 ├── threads/
 │   ├── __init__.py
 │   ├── image_processor.py
 │   └── network_monitor.py
-├── resources/
-│   ├── icons/
-│   ├── images/
-│   └── configs/
-│       ├── steamdeck_config.json
-│       ├── servo_config.json
-│       ├── motion_config.json
-│       ├── controller_config.json
-│       ├── emotion_buttons.json
-│       └── movement_controls.json
-└── tests/
-    └── __init__.py
+└── resources/
+    ├── configs/
+    ├── icons/
+    ├── images/
+    └── themes/
 ```
 
-### Quick Start
-
-1. Copy all source files to appropriate directories
-2. Create configuration files in `resources/configs/`
-3. Add icons and images to `resources/` subdirectories
-4. Run: `python main.py`
-
-## Configuration
-
-The system uses JSON configuration files managed centrally through the `ConfigManager` class with LRU caching and file modification monitoring.
+## ⚙️ Configuration
 
 ### Main Configuration File
-
-`resources/configs/steamdeck_config.json`:
+Create `resources/configs/steamdeck_config.json`:
 
 ```json
 {
@@ -135,10 +115,10 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
     "esp32_cam_url": "http://10.1.1.203:81/stream",
     "camera_proxy_url": "http://10.1.1.230:8081/stream",
     "control_websocket_url": "ws://10.1.1.230:8766",
-    "debug_level": "ERROR",
+    "debug_level": "INFO",
     "module_debug": {
-      "camera": "ERROR",
-      "servo": "ERROR",
+      "camera": "INFO",
+      "servo": "INFO",
       "network": "INFO",
       "websocket": "WARNING",
       "telemetry": "INFO",
@@ -153,17 +133,20 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
       "sample_rate": 5,
       "confidence_threshold": 0.7,
       "stand_down_time": 30
+    },
+    "network_monitoring": {
+      "update_interval": 5.0,
+      "ping_samples": 3
     }
   },
   "defaults": {
-    // Same structure with default values
+    // Copy of current section for reset functionality
   }
 }
 ```
 
 ### Servo Configuration
-
-`resources/configs/servo_config.json`:
+Create `resources/configs/servo_config.json`:
 
 ```json
 {
@@ -171,9 +154,9 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
     "name": "Head Pan",
     "min": 993,
     "max": 2000,
-    "speed": 0,
-    "accel": 0,
-    "home": 993
+    "speed": 20,
+    "accel": 10,
+    "home": 1500
   },
   "m1_ch1": {
     "name": "Head Tilt",
@@ -187,8 +170,7 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
 ```
 
 ### Controller Configuration
-
-`resources/configs/controller_config.json`:
+Create `resources/configs/controller_config.json`:
 
 ```json
 {
@@ -198,6 +180,12 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
     "tracks": {
       "left": {"maestro": "Maestro 2 / Ch 0", "invert": false},
       "right": {"maestro": "Maestro 2 / Ch 1", "invert": true}
+    },
+    "calibration": {
+      "min": -32768,
+      "max": 32767,
+      "center": 0,
+      "deadzone": 0.1
     }
   },
   "button_a": {
@@ -207,301 +195,83 @@ The system uses JSON configuration files managed centrally through the `ConfigMa
 }
 ```
 
-## Core Components
+## 🚀 Quick Start
 
-### Logger (`core/logger.py`)
+1. **Configure Network Settings**
+   - Update IP addresses in `steamdeck_config.json`
+   - Ensure robot backend is running and accessible
 
-Centralized logging system with per-module configuration and runtime reconfiguration.
+2. **Launch Application**
+   ```bash
+   python main.py
+   ```
 
-#### Key Features
-- Module-specific log levels
-- Configurable output formatting
-- Runtime level adjustment
-- Thread-safe operation
+3. **Initial Setup**
+   - Navigate to Settings screen to verify connectivity
+   - Test WebSocket connection to robot backend
+   - Configure camera URLs if using video feed
+   - Calibrate controller if using gamepad input
 
-#### Usage Example
-```python
-from core.logger import get_logger
+## 📱 User Interface Guide
 
-logger = get_logger("my_module")
-logger.info("Operation completed successfully")
-logger.debug("Detailed debugging information")
-logger.error("An error occurred", exc_info=True)
-```
+### Home Screen
+- **Scene Selection**: Grid of emotion-based scene buttons
+- **Audio Feedback**: Sound effects for button interactions
+- **Controller Navigation**: Navigate scenes using gamepad D-pad
 
-### Configuration Manager (`core/config_manager.py`)
+### Camera Screen
+- **Live Video Feed**: MJPEG stream from robot camera
+- **Pose Detection**: Real-time human pose tracking with MediaPipe
+- **Wave Detection**: Configurable gesture recognition for robot interaction
+- **Performance Statistics**: Frame rate and processing metrics
 
-Singleton configuration manager with file monitoring, LRU caching, and validation.
+### Health Screen
+- **System Telemetry**: Real-time monitoring of robot systems
+- **Battery Monitoring**: Voltage tracking with visual alerts
+- **Current Draw**: Power consumption monitoring
+- **Network Quality**: Connection status and ping latency
+- **Performance Graphs**: Historical data visualization with pyqtgraph
 
-#### Key Features
-- Automatic file change detection with mtime checking
-- LRU caching for performance
-- Type-safe configuration access
-- Centralized configuration logic with defaults
+### Servo Screen
+- **Dual-Maestro Support**: Switch between multiple servo controllers
+- **Real-time Control**: Interactive sliders with live position feedback
+- **Home Position Indicators**: Visual markers showing servo home positions
+- **Sweep Testing**: Automated min/max position testing
+- **Speed & Acceleration**: Per-servo configuration controls
 
-#### Usage Example
-```python
-from core.config_manager import config_manager
+### Controller Screen
+- **Live Input Display**: Real-time gamepad input visualization
+- **Calibration Wizard**: Step-by-step controller calibration process
+- **Mapping Configuration**: Assign controls to servos, tracks, or scenes
+- **Differential Steering**: Tank-style drive control configuration
+- **System Controls**: Emergency shutdown and restart commands
 
-# Get specific configurations
-wave_config = config_manager.get_wave_config()
-network_config = config_manager.get_network_config()
-servo_names = config_manager.load_servo_names()
-
-# Save configuration with validation
-success = config_manager.save_config("path/to/file.json", data)
-```
-
-### WebSocket Manager (`core/websocket_manager.py`)
-
-Handles WebSocket connections with automatic reconnection, exponential backoff, and structured command interface.
-
-#### Key Features
-- Automatic reconnection with configurable retry limits
-- Connection state management
-- Safe message sending with validation
-- Structured command interface
-
-#### Usage Example
-```python
-from core.websocket_manager import WebSocketManager
-
-# Create connection
-ws = WebSocketManager("ws://localhost:8766")
-
-# Send structured command
-success = ws.send_command("servo", channel="m1_ch0", pos=1500)
-
-# Check connection status
-if ws.is_connected():
-    print("Connected to backend")
-```
-
-### Utilities (`core/utils.py`)
-
-Common utilities including error handling, memory management, and MediaPipe integration.
-
-#### Error Boundary Decorator
-```python
-@error_boundary
-def risky_function():
-    # Function that might throw exceptions
-    pass
-```
-
-#### MediaPipe Manager
-```python
-from core.utils import mediapipe_manager
-
-if mediapipe_manager.initialize():
-    # Use MediaPipe functionality
-    results = mediapipe_manager.pose.process(frame)
-```
-
-## UI Components
-
-### Base Screen (`widgets/base_screen.py`)
-
-Abstract base class providing common functionality, WebSocket communication helpers, and dynamic header with network monitoring.
-
-#### DynamicHeader Features
-- Battery voltage display with color coding
-- WiFi signal strength with visual bars and ping-based coloring
-- Current screen name display
-- Network monitoring integration
-
-#### WiFiSignalWidget
-Custom widget displaying signal bars with:
-- 5-bar signal strength indicator
-- Ping-based color coding (green/yellow/orange/red)
-- Timeout flash animation
-- Real-time percentage display
-
-### Home Screen (`widgets/home_screen.py`)
-
-Main dashboard with emotion controls, mode selection, and WALL-E imagery.
-
-#### Features
-- Scrollable emotion button grid from configuration
-- Mode controls (Idle/Demo modes) with toggle states
-- Configurable emoji-based scene triggers
-- Real-time scene command transmission
-
-### Camera Screen (`widgets/camera_screen.py`)
-
-Live camera feed with pose tracking, camera controls, and unified control panel.
-
-#### Components
-- **Live Video Display**: MJPEG stream rendering with error handling
-- **Camera Controls**: ESP32 settings (resolution, quality, brightness, contrast, saturation, mirroring)
-- **Stream Control**: Start/stop streaming with visual state indicators
-- **Wave Detection**: Configurable gesture recognition with confidence thresholds
-
-#### Wave Detection Features
-- Sample collection over configurable time windows
-- Confidence threshold filtering with buffer analysis
-- Stand-down period between detections
-- Visual feedback and status updates
-
-### Health Screen (`widgets/health_screen.py`)
-
-System monitoring with telemetry graphs, network testing, and component status.
-
-#### Features
-- **Battery Monitoring**: Real-time voltage graphing with alarm thresholds
-- **Current Monitoring**: Dual current sensor displays with separate Y-axis
-- **Network Quality**: WiFi monitoring and bandwidth testing
-- **System Stats**: CPU, memory, temperature monitoring
-- **Component Status**: Maestro, audio system connection status
-
-#### Graph Configuration
-- Battery voltage range: 0-20V optimized for 4S LiPo
-- Current range: 0-70A for motor controllers
-- Time-based X-axis with configurable windowing
-- Color-coded status displays with threshold warnings
-
-### Servo Screen (`widgets/servo_screen.py`)
-
-Advanced servo control interface with dual-Maestro support and real-time position feedback.
-
-#### Features
-- **Dual-Maestro Support**: Switch between Maestro 1 and 2 with independent configurations
-- **Real-time Control**: Live position sliders with conditional updates
-- **Home Positions**: Diamond indicators on sliders showing home positions
-- **Sweep Testing**: Automated min/max position sweeps with speed control
-- **Live Updates**: Toggle-able real-time position feedback
-- **Configuration Management**: Per-channel settings (min/max/speed/acceleration)
-
-#### Advanced Features
-- Custom `HomePositionSlider` with diamond position indicators
-- `MinMaxSweep` class for automated testing with position validation
-- Thread-safe position updates via Qt signals
-- Automatic servo configuration loading and validation
-
-### Controller Screen (`widgets/controller_screen.py`)
-
-Advanced Steam Deck controller configuration with calibration and differential steering.
-
-#### Features
-- **Controller Calibration**: Real-time input sampling with min/max/center detection
-- **Mapping Configuration**: Visual mapping of controls to servos/tracks/scenes
-- **Differential Steering**: Tank-style track control with configurable parameters
-- **Live Position Display**: Real-time controller input visualization
-- **Advanced Mapping Types**: Servo control, scene triggers, track control, joystick axes
-
-#### Calibration Process
-- 100ms backend polling during calibration
-- Min/max/center value capture with validation
-- Visual progress indication and data validation
-- Automatic calibration file generation and backend synchronization
-
-### Settings Screen (`widgets/settings_screen.py`)
-
-Configuration interface with scrollable layout and grouped settings sections.
-
-#### Sections
-- **Network Configuration**: Camera URLs, WebSocket endpoints
+### Settings Screen
+- **Network Configuration**: Camera URLs and WebSocket endpoints
 - **Logging Configuration**: Global and per-module debug levels
-- **Wave Detection**: Sample duration, confidence thresholds, stand-down periods
+- **Wave Detection**: Gesture recognition sensitivity and timing
+- **Connectivity Testing**: Built-in network diagnostics
 
-#### Features
-- Compact scrollable layout with grouped sections
-- Real-time configuration validation
-- WebSocket connection testing
-- Reset to defaults functionality with confirmation dialogs
+### Scene Screen
+- **Scene Management**: Import and organize scenes from robot backend
+- **Category Assignment**: Group scenes by emotion or type
+- **Audio Integration**: Scene playback with sound effect synchronization
+- **Testing Interface**: Preview scenes before deployment
 
-### Scene Screen (`widgets/scene_screen.py`)
+## 🔧 Development Guide
 
-Scene management interface for emotion configuration and audio mapping.
+### Architecture Overview
 
-#### Features
-- Import scenes from backend with WebSocket communication
-- Category assignment for scene organization
-- Scene testing with real-time playback
-- Configuration export to emotion buttons
-- Integration with home screen emotion grid
+The application follows a modular architecture with clear separation of concerns:
 
-## Background Processing
-
-### Image Processing Thread (`threads/image_processor.py`)
-
-Handles camera stream processing and pose detection in dedicated thread.
-
-#### Features
-- **MJPEG Stream Processing**: Frame parsing with reconnection logic
-- **Pose Detection**: MediaPipe integration for gesture recognition
-- **Performance Optimization**: Frame rate limiting and memory management
-- **Error Recovery**: Automatic stream reconnection with exponential backoff
-
-#### Thread Communication
-- Qt signals for thread-safe UI updates
-- Frame processing results with pose data
-- Statistics and status information
-- Proper thread lifecycle management
-
-### Network Monitor Thread (`threads/network_monitor.py`)
-
-Background WiFi signal monitoring and network quality assessment.
-
-#### Features
-- **WiFi Signal Detection**: Multiple detection methods (iwconfig, nmcli, /proc/net/wireless)
-- **Ping Quality Assessment**: Connection quality based on ping latency
-- **Bandwidth Testing**: Download speed testing with configurable file sizes
-- **Thread-safe Updates**: Qt signals for UI synchronization
-
-## API Reference
-
-### WebSocket Message Protocol
-
-#### Outgoing Messages
-```python
-# Servo control
-{"type": "servo", "channel": "m1_ch0", "pos": 1500}
-{"type": "servo_speed", "channel": "m1_ch0", "speed": 50}
-
-# Scene triggers
-{"type": "scene", "emotion": "happy"}
-
-# Controller calibration
-{"type": "start_controller_calibration"}
-{"type": "controller_calibration_update", "calibration": {...}}
-
-# Status requests
-{"type": "get_maestro_info", "maestro": 1}
-{"type": "get_all_servo_positions", "maestro": 1}
-```
-
-#### Incoming Messages
-```python
-# Telemetry data
-{
-  "type": "telemetry",
-  "battery_voltage": 14.2,
-  "current": 5.3,
-  "cpu": 45,
-  "memory": 67,
-  "maestro1": {"connected": true, "channels": 12},
-  "maestro2": {"connected": false}
-}
-
-# Servo positions
-{"type": "servo_position", "channel": "m1_ch0", "position": 1500}
-{"type": "all_servo_positions", "maestro": 1, "positions": {...}}
-
-# Controller input
-{"type": "controller_input", "control": "left_stick_x", "value": 0.75}
-```
-
-## Development Guide
+- **Core Services**: Configuration, logging, WebSocket communication, utilities
+- **UI Widgets**: Screen-specific interfaces inheriting from BaseScreen
+- **Background Processing**: Threaded image processing and network monitoring
+- **Theme System**: Centralized styling and resource management
 
 ### Adding New Screens
 
-1. Create new file in `widgets/` directory inheriting from `BaseScreen`
-2. Implement `_setup_screen()` method
-3. Add to `widgets/__init__.py` exports
-4. Register in `core/application.py`
-
-Example:
+1. Create new screen class inheriting from `BaseScreen`:
 ```python
 from widgets.base_screen import BaseScreen
 
@@ -516,142 +286,130 @@ class NewScreen(BaseScreen):
         pass
 ```
 
-### Configuration Management
+2. Register screen in `core/application.py`:
+```python
+from widgets.new_screen import NewScreen
 
-When adding new configuration options:
+# In DroidDeckApplication.__init__
+self.new_screen = NewScreen(websocket=self.websocket)
+self.stack.addWidget(self.new_screen)
+```
 
-1. Update appropriate JSON configuration file
-2. Add getter method to `ConfigManager` if needed
-3. Update settings screen UI
-4. Provide sensible defaults
-5. Add validation logic
+3. Add navigation button in `_setup_navigation()` method
 
-### Error Handling Best Practices
+### WebSocket Message Protocol
 
-1. Use `@error_boundary` decorator for UI methods
-2. Log errors with full context using module-specific loggers
-3. Provide user-friendly error messages
-4. Implement graceful degradation
-5. Test error conditions thoroughly
+#### Outgoing Messages
+```python
+# Servo control
+{"type": "servo", "channel": "m1_ch0", "pos": 1500}
 
-## Troubleshooting
+# Scene triggers
+{"type": "scene", "emotion": "happy"}
+
+# System commands
+{"type": "pi_control", "action": "restart"}
+```
+
+#### Incoming Messages
+```python
+# Telemetry data
+{
+  "type": "telemetry",
+  "battery_voltage": 14.2,
+  "current": 5.3,
+  "cpu_usage": 45,
+  "memory_usage": 67
+}
+
+# Servo position feedback
+{"type": "servo_position", "channel": "m1_ch0", "position": 1500}
+```
+
+### Error Handling
+
+Use the error boundary decorator for robust error handling:
+```python
+from core.utils import error_boundary
+
+@error_boundary
+def risky_function():
+    # Function that might throw exceptions
+    pass
+```
+
+### Logging
+
+Use module-specific loggers for debugging:
+```python
+from core.logger import get_logger
+
+logger = get_logger("module_name")
+logger.info("Operation completed")
+logger.debug("Detailed debug info")
+logger.error("Error occurred", exc_info=True)
+```
+
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-#### Camera Not Working
-- **Symptoms**: Black screen, "OpenCV not available" message
-- **Solutions**: 
-  - Install OpenCV: `pip install opencv-python`
-  - Check camera URLs in settings
-  - Verify network connectivity to camera proxy
-  - Check ESP32 camera power and WiFi connection
+**WebSocket Connection Failed**
+- Verify robot backend is running
+- Check IP address and port in configuration
+- Ensure network connectivity between devices
 
-#### WebSocket Connection Failed
-- **Symptoms**: "WebSocket not connected" messages, no backend communication
-- **Solutions**:
-  - Verify backend is running on specified port
-  - Check WebSocket URL format (ws:// prefix)
-  - Examine firewall/network configuration
-  - Review WebSocket manager logs for detailed errors
+**Camera Feed Not Loading**
+- Verify camera URLs are accessible
+- Check if ESP32/camera is powered and connected
+- Test URLs in web browser first
 
-#### Servo Control Not Responding
-- **Symptoms**: Position sliders don't move servos, timeout errors
-- **Solutions**:
-  - Check Maestro USB connections and power
-  - Verify servo power supply voltage
-  - Test with Pololu Maestro Control Center
-  - Check servo configuration limits and channel assignments
+**Controller Not Responding**
+- Ensure controller is paired and connected
+- Run controller calibration wizard
+- Check USB/Bluetooth connection status
 
-#### Network Monitoring Issues
-- **Symptoms**: WiFi shows "No signal" or constant timeouts
-- **Solutions**:
-  - Verify Pi IP address in configuration
-  - Check network connectivity to Raspberry Pi
-  - Test ping manually to verify network path
-  - Review network interface configuration
+**Audio Not Playing**
+- Verify pygame is installed
+- Check audio file paths in scene configuration
+- Ensure system audio is enabled
 
-### Debug Logging
+### Debug Mode
 
-Enable detailed logging for troubleshooting:
-
+Enable detailed logging by updating `steamdeck_config.json`:
 ```json
 {
   "debug_level": "DEBUG",
   "module_debug": {
     "camera": "DEBUG",
-    "servo": "DEBUG", 
+    "servo": "DEBUG",
     "websocket": "DEBUG",
     "network": "DEBUG"
   }
 }
 ```
 
-### Performance Monitoring
+### Performance Optimization
 
-Monitor these metrics for performance issues:
+- **Memory Usage**: Monitor memory consumption in Health screen
+- **Frame Rate**: Adjust camera processing rate if needed
+- **Network**: Use local proxy for camera streams to reduce bandwidth
+- **Threading**: Ensure background threads are properly cleaned up
 
-- Memory usage growth over time
-- CPU usage during camera processing
-- WebSocket message queuing and latency
-- Configuration file access patterns
-- Thread communication overhead
+## 🔒 Safety Features
 
-## To-Do List
+- **Emergency Stop**: Keyboard shortcut (Ctrl+Q) for immediate shutdown
+- **Failsafe Mode**: Visual indicator and system protection
+- **Connection Monitoring**: Automatic reconnection with exponential backoff
+- **Error Isolation**: Component failures don't cascade to entire system
+- **Battery Protection**: Low voltage alerts and monitoring
 
-### High Priority
+## 📄 License
 
-- [ ] **Battery Management System Integration**
-  - Add low voltage cutoff automation with graceful shutdown
-  - Create battery health tracking and capacity estimation
+This project is provided as-is for educational and hobbyist purposes. Please ensure compliance with any applicable hardware and software licenses when using with specific robot platforms.
 
-- [ ] **Audio System Integration**
-  - Add audio synchronization with emotion scenes
-  - Create audio feedback for system status and alerts
+## 🤖 About Droid Deck
 
-### Medium Priority
+This control system was designed to provide a comprehensive, user-friendly interface for controlling droid-style robots. The modular architecture ensures extensibility for future enhancements while maintaining reliability and performance for real-time robot control applications.
 
-- [ ] **Enhanced Camera System**
-  - Implement object tracking beyond person detection
-
-
-- [ ] **Advanced Controller Features**
-  - Add support for additional controller types (Xbox, PlayStation)
-  - Implement haptic feedback integration
-  - Create custom control schemes for different operational modes
-  - Add controller battery monitoring and low battery alerts
-
-- [ ] **Telemetry and Monitoring**
-  - Create alerting system for critical thresholds
-
-### Low Priority
-
-- [ ] **User Experience Improvements**
-  - Implement user profiles with different configurations
-  - Create guided setup wizard for initial configuration
-  - Add keyboard shortcuts for common operations
-
-- [ ] **Documentation and Testing**
-  - Add integration tests for WebSocket communication
-  - Create user manual with detailed operation procedures
-  - Add performance benchmarking and optimization guides
-
-
-### Technical Debt and Refactoring
-
-- [ ] **Code Quality Improvements**
-  - Refactor large methods into smaller, focused functions
-  - Implement comprehensive type hinting throughout codebase
-  - Add dataclass usage for configuration structures
-  - Create abstract interfaces for better testability
-
-- [ ] **Performance Optimizations**
-  - Optimize memory usage in long-running threads
-  - Implement connection pooling for HTTP requests
-  - Add caching layers for frequently accessed data
-  - Optimize Qt signal/slot connections for better performance
-
-- [ ] **Architecture Enhancements**
-  - Implement proper dependency injection container
-  - Add event bus for decoupled component communication
-  - Create state machine for system operational modes
-  - Add configuration validation with schema definitions
+For additional support or contributions, please refer to the project documentation or contact the development team.

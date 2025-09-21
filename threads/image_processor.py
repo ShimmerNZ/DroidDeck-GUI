@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Image Processing Thread - Fixed for Camera Proxy MJPEG Stream
-Handles camera stream processing and pose detection in dedicated thread.
-FIXED: Better stream handling and error recovery
+Image Processing Thread - Enhanced Gesture Detection
+Handles camera stream processing and multiple gesture detection types.
+ENHANCED: Added left hand, right hand, and both hands detection
 """
 
 import cv2
@@ -15,13 +15,13 @@ from core.utils import error_boundary
 
 class ProcessedFrameData:
     """Container for processed frame data"""
-    def __init__(self, frame=None, wave_detected=False, pose_landmarks=None):
+    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None):
         self.frame = frame
-        self.wave_detected = wave_detected
+        self.gesture_detected = gesture_detected  # None, "left_wave", "right_wave", or "hands_up"
         self.pose_landmarks = pose_landmarks
 
 class ImageProcessingThread(QThread):
-    """Thread for processing camera stream with pose detection"""
+    """Thread for processing camera stream with enhanced gesture detection"""
     
     frame_processed = pyqtSignal(ProcessedFrameData)
     stats_updated = pyqtSignal(dict)
@@ -72,117 +72,54 @@ class ImageProcessingThread(QThread):
 
     def stop_processing(self):
         """Stop the image processing thread"""
-        if self.running:
-            self.running = False
-            self.should_connect = False
-            self.wait(3000)  # Wait up to 3 seconds for thread to finish
-            self.logger.info("Image processing thread stopped")
-
-    def start_connecting(self):
-        """Signal the thread to start connecting to stream"""
-        self.should_connect = True
-        self.logger.info("Image thread: start connecting requested")
-
-    def stop_connecting(self):
-        """Signal the thread to stop connecting to stream"""
+        self.running = False
         self.should_connect = False
-        self.logger.info("Image thread: stop connecting requested")
+        if self.isRunning():
+            self.quit()
+            self.wait(5000)  # Wait up to 5 seconds
+        self.logger.info("Image processing thread stopped")
 
     def set_tracking_enabled(self, enabled):
-        """Enable/disable pose tracking"""
+        """Enable/disable gesture tracking"""
         self.tracking_enabled = enabled
-        self.logger.info(f"Pose tracking {'enabled' if enabled else 'disabled'}")
+        self.logger.info(f"Gesture tracking {'enabled' if enabled else 'disabled'}")
 
-    @error_boundary
     def run(self):
-        """Main processing loop with improved error handling"""
-        self.logger.info(f"Starting camera stream processing from: {self.camera_url}")
-        
-        last_connection_attempt = 0
-        connection_retry_delay = 2.0
-        max_retry_delay = 30.0
-        consecutive_failures = 0
+        """Main thread loop"""
+        reconnect_delay = 1
+        max_reconnect_delay = 30
         
         while self.running:
-            try:
-                current_time = time.time()
-                
-                if not self.should_connect:
-                    time.sleep(0.1)
-                    continue
-                
-                # Rate limit connection attempts
-                if current_time - last_connection_attempt < connection_retry_delay:
-                    time.sleep(0.1)
-                    continue
-                
-                last_connection_attempt = current_time
-                
-                # FIXED: Check if camera proxy is available first
-                if not self._check_camera_proxy_status():
-                    self.logger.warning("Camera proxy not available, retrying...")
-                    consecutive_failures += 1
-                    connection_retry_delay = min(connection_retry_delay * 1.2, max_retry_delay)
-                    continue
-                
-                # Connect to camera stream
-                if self._connect_to_mjpeg_stream():
-                    # Reset retry delay on successful connection
-                    connection_retry_delay = 2.0
-                    consecutive_failures = 0
+            if self.should_connect:
+                success = self._connect_to_stream()
+                if not success and self.running:
+                    self.logger.warning(f"Reconnecting in {reconnect_delay} seconds...")
+                    time.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
                 else:
-                    consecutive_failures += 1
-                    # Exponential backoff for connection retries
-                    connection_retry_delay = min(connection_retry_delay * 1.5, max_retry_delay)
-                    self.logger.warning(f"Stream connection failed, retrying in {connection_retry_delay:.1f}s")
-                
-                # If too many consecutive failures, wait longer
-                if consecutive_failures > 10:
-                    self.logger.error("Too many consecutive failures, waiting 30 seconds...")
-                    time.sleep(30)
-                    consecutive_failures = 0
-                    connection_retry_delay = 2.0
-                
-            except Exception as e:
-                self.logger.error(f"Image processing error: {e}")
-                time.sleep(1)
-        
-        self.logger.info("Image processing thread finished")
+                    reconnect_delay = 1
+            else:
+                time.sleep(0.1)
 
-    def _check_camera_proxy_status(self):
-        """Check if camera proxy is running and responding"""
-        if not self.camera_url:
-            return False
-            
-        try:
-            # Extract base URL from stream URL
-            base_url = self.camera_url.replace("/stream", "")
-            
-            # Try to get status from camera proxy
-            response = requests.get(f"{base_url}/stream/status", timeout=2)
-            if response.status_code == 200:
-                status = response.json()
-                streaming_enabled = status.get("streaming_enabled", False)
-                stream_active = status.get("stream_active", False)
-                self.logger.debug(f"Proxy status: enabled={streaming_enabled}, active={stream_active}")
-                return streaming_enabled or stream_active
-        except requests.exceptions.RequestException:
-            pass
-        except Exception as e:
-            self.logger.debug(f"Status check error: {e}")
-        
-        return False
+    def start_connecting(self):
+        """Start connection attempts"""
+        self.should_connect = True
 
-    def _connect_to_mjpeg_stream(self):
-        """FIXED: Connect to MJPEG stream using requests (not OpenCV)"""
-        if not self.camera_url:
-            self.logger.error("No camera URL configured")
-            return False
-        
+    def stop_connecting(self):
+        """Stop connection attempts"""
+        self.should_connect = False
+
+    @error_boundary
+    def _connect_to_stream(self):
+        """Connect to camera stream and process frames"""
         try:
-            self.logger.info(f"Connecting to MJPEG stream: {self.camera_url}")
+            if not self.camera_url:
+                self.logger.error("No camera URL configured")
+                return False
+
+            self.logger.info(f"Connecting to camera stream: {self.camera_url}")
             
-            # FIXED: Use requests with stream=True for MJPEG
+            # Use requests with stream=True for MJPEG
             session = requests.Session()
             session.headers.update({
                 'User-Agent': 'WALL-E-ImageProcessor/1.0',
@@ -244,56 +181,52 @@ class ImageProcessingThread(QThread):
                     
                     # Extract JPEG frame
                     jpeg_data = bytes_buffer[start_idx:end_idx + 2]
+                    bytes_buffer = bytes_buffer[end_idx + 2:]
                     
-                    # Remove processed data from buffer
-                    del bytes_buffer[:end_idx + 2]
-                    
-                    # Decode and process frame
-                    current_time = time.time()
-                    
-                    # Limit frame rate to prevent overwhelming (30 FPS max)
-                    if current_time - last_frame_time >= 0.033:
-                        if self._process_jpeg_frame(jpeg_data):
-                            frame_count_local += 1
-                            last_frame_time = current_time
-                    
-                    # Emit stats periodically (every 2 seconds)
-                    if current_time - last_stats_time >= 2.0:
-                        fps = frame_count_local / (current_time - last_stats_time) if (current_time - last_stats_time) > 0 else 0
-                        stats = {
-                            'fps': fps,
-                            'frame_count': self.frame_count,
-                            'pose_detection': self.pose_detection_available,
-                            'tracking_enabled': self.tracking_enabled,
-                            'camera_url': self.camera_url,
-                            'running': self.running
-                        }
-                        self.stats_updated.emit(stats)
-                        self.logger.debug(f"Stats: {fps:.1f} FPS, {self.frame_count} total frames")
-                        last_stats_time = current_time
-                        frame_count_local = 0
+                    # Process JPEG frame
+                    if self._process_jpeg_frame(jpeg_data):
+                        frame_count_local += 1
+                        current_time = time.time()
+                        
+                        # Emit stats every second
+                        if current_time - last_stats_time >= 1.0:
+                            fps = frame_count_local / (current_time - last_stats_time)
+                            self.stats_updated.emit({
+                                'fps': fps,
+                                'frame_count': self.frame_count,
+                                'running': True
+                            })
+                            frame_count_local = 0
+                            last_stats_time = current_time
+                        
+                        # Limit frame rate to ~30 FPS
+                        frame_delay = 1.0 / 30.0
+                        elapsed = current_time - last_frame_time
+                        if elapsed < frame_delay:
+                            time.sleep(frame_delay - elapsed)
+                        last_frame_time = time.time()
             
             return True
             
         except Exception as e:
-            self.logger.error(f"MJPEG processing error: {e}")
+            self.logger.error(f"MJPEG stream processing error: {e}")
             return False
 
+    @error_boundary
     def _process_jpeg_frame(self, jpeg_data):
-        """Process a JPEG frame from bytes"""
+        """Process a single JPEG frame"""
         try:
-            # Decode JPEG to numpy array
+            # Decode JPEG
             nparr = np.frombuffer(jpeg_data, np.uint8)
             frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if frame_bgr is None:
-                self.logger.debug("Failed to decode JPEG frame")
                 return False
             
-            # Convert BGR to RGB for Qt display
+            # Convert BGR to RGB for processing
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             
-            # Process the frame (pose detection, etc.)
+            # Process frame for gestures
             processed_data = self._process_frame(frame_rgb)
             
             # Emit the processed frame
@@ -310,7 +243,7 @@ class ImageProcessingThread(QThread):
 
     @error_boundary
     def _process_frame(self, frame_rgb):
-        """Process a single frame with pose detection"""
+        """Process a single frame with enhanced gesture detection"""
         try:
             if frame_rgb is None:
                 return None
@@ -323,10 +256,10 @@ class ImageProcessingThread(QThread):
                 new_height = int(height * scale)
                 frame_rgb = cv2.resize(frame_rgb, (new_width, new_height))
             
-            wave_detected = False
+            gesture_detected = None
             pose_landmarks = None
             
-            # Pose detection if available and tracking enabled
+            # Gesture detection if available and tracking enabled
             if self.pose_detection_available and self.pose and self.tracking_enabled:
                 try:
                     # MediaPipe expects RGB, and we already have RGB
@@ -344,21 +277,16 @@ class ImageProcessingThread(QThread):
                         )
                         frame_rgb = cv2.cvtColor(frame_bgr_for_drawing, cv2.COLOR_BGR2RGB)
                         
-                        # Simple wave detection (check if right hand is raised)
-                        landmarks = results.pose_landmarks.landmark
-                        right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
-                        right_elbow = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
-                        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                        # Enhanced gesture detection
+                        gesture_detected = self._detect_gestures(results.pose_landmarks.landmark)
                         
-                        # Wave detected if wrist is above elbow and elbow is above shoulder
-                        if (right_wrist.y < right_elbow.y < right_shoulder.y and 
-                            right_wrist.visibility > 0.5):
-                            wave_detected = True
-                            
-                            # Draw wave indicator
+                        # Draw gesture indicator if detected
+                        if gesture_detected:
                             frame_bgr_for_text = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                            cv2.putText(frame_bgr_for_text, "WAVE DETECTED!", (10, 30), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            gesture_text = gesture_detected.replace("_", " ").upper() + " DETECTED!"
+                            color = (0, 255, 0) if gesture_detected != "hands_up" else (255, 165, 0)  # Green for waves, orange for hands up
+                            cv2.putText(frame_bgr_for_text, gesture_text, (10, 30), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                             frame_rgb = cv2.cvtColor(frame_bgr_for_text, cv2.COLOR_BGR2RGB)
                 
                 except Exception as e:
@@ -366,12 +294,60 @@ class ImageProcessingThread(QThread):
             
             return ProcessedFrameData(
                 frame=frame_rgb,
-                wave_detected=wave_detected,
+                gesture_detected=gesture_detected,
                 pose_landmarks=pose_landmarks
             )
             
         except Exception as e:
             self.logger.error(f"Frame processing error: {e}")
+            return None
+
+    def _detect_gestures(self, landmarks):
+        """
+        Enhanced gesture detection for multiple gesture types
+        Returns: None, "left_wave", "right_wave", or "hands_up"
+        """
+        try:
+            # Get all required landmarks
+            left_wrist = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST]
+            left_elbow = landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW]
+            left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+            
+            right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
+            right_elbow = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
+            right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            
+            # Check visibility thresholds
+            visibility_threshold = 0.5
+            
+            # Check if left arm is raised (waving position)
+            left_arm_raised = (
+                left_wrist.y < left_elbow.y < left_shoulder.y and
+                left_wrist.visibility > visibility_threshold and
+                left_elbow.visibility > visibility_threshold and
+                left_shoulder.visibility > visibility_threshold
+            )
+            
+            # Check if right arm is raised (waving position) 
+            right_arm_raised = (
+                right_wrist.y < right_elbow.y < right_shoulder.y and
+                right_wrist.visibility > visibility_threshold and
+                right_elbow.visibility > visibility_threshold and
+                right_shoulder.visibility > visibility_threshold
+            )
+            
+            # Determine gesture type based on arm positions
+            if left_arm_raised and right_arm_raised:
+                return "hands_up"
+            elif left_arm_raised:
+                return "right_wave"
+            elif right_arm_raised:
+                return "left_wave"
+            else:
+                return None
+                
+        except Exception as e:
+            self.logger.debug(f"Gesture detection error: {e}")
             return None
 
     def stop(self):

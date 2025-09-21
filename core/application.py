@@ -505,8 +505,8 @@ class DroidDeckApplication(QMainWindow):
             self.header.cleanup()
         
         # Stop camera thread
-        if hasattr(self.camera_screen, 'image_thread'):
-            self.camera_screen.stop_camera_thread()
+        if hasattr(self.camera_screen, 'cleanup'):
+            self.camera_screen.cleanup()
         
         # Stop servo operations
         if hasattr(self.servo_screen, 'stop_all_operations'):

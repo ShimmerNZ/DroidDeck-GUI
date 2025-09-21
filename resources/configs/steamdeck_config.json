@@ -17,10 +17,10 @@
       "error": "ERROR"
     },
     "wave_detection": {
-      "sample_duration": 3,
+      "sample_duration": 2,
       "sample_rate": 5,
       "confidence_threshold": 0.7,
-      "stand_down_time": 30
+      "stand_down_time": 20
     }
   },
   "defaults": {

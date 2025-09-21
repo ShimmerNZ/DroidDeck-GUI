@@ -24,7 +24,7 @@ from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.logger import get_logger
-
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 class CameraSettingsDebouncer:
     """
@@ -150,6 +150,7 @@ class CameraControlsWidget(QWidget):
     def __init__(self, stream_button: QPushButton, track_button: QPushButton, parent=None):
         super().__init__(parent)
         self.logger = get_logger("camera")
+        self.initializing = True
         wave_config = config_manager.get_wave_config()
         raw_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
         self.proxy_base_url = raw_url.replace("/stream", "")
@@ -171,6 +172,8 @@ class CameraControlsWidget(QWidget):
 
         self.init_ui()
         self.load_current_settings()
+        self.initializing = False
+        self._sync_loaded_settings_to_esp32()
 
     def _update_status_display(self, message: str, color: str):
         """Update status display with color"""
@@ -286,7 +289,7 @@ class CameraControlsWidget(QWidget):
 
         # Connect slider to update value label and send debounced setting
         self.xclk_slider.valueChanged.connect(lambda val: self.xclk_value_label.setText(str(val)))
-        self.xclk_slider.valueChanged.connect(lambda val: self.settings_debouncer.update_setting("xclk_freq", val))
+        self.xclk_slider.valueChanged.connect(lambda val: self._handle_setting_change("xclk_freq", val))
 
         xclk_layout = QHBoxLayout()
         xclk_layout.setSpacing(8)
@@ -368,10 +371,16 @@ class CameraControlsWidget(QWidget):
         esp32_frame.setLayout(esp32_layout)
         return esp32_frame
 
+    def _handle_setting_change(self, setting_name, value):
+        """Handle setting changes, but only if not initializing"""
+        if not self.initializing:
+            self.settings_debouncer.update_setting(setting_name, value)
+
     def _on_resolution_changed(self, index: int):
         """Handle resolution change - send immediately"""
-        self.settings_debouncer.update_setting("resolution", index)
-        self.settings_debouncer.force_send_now()
+        if not self.initializing: 
+            self.settings_debouncer.update_setting("resolution", index)
+            self.settings_debouncer.force_send_now()
 
     def _create_actions_section(self):
         """Create camera actions section"""
@@ -447,8 +456,8 @@ class CameraControlsWidget(QWidget):
 
         # Connect slider to update value label and debounced setting
         slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
-        slider.valueChanged.connect(lambda val: self.settings_debouncer.update_setting(setting_name, val))
-
+        slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val)) 
+        
         layout.addWidget(label)
         layout.addWidget(slider)
         layout.addWidget(value_label)
@@ -610,6 +619,54 @@ class CameraControlsWidget(QWidget):
             self._update_status_display("Failed to load settings", "#FF4444")
             self.logger.error(f"Failed to load camera settings: {e}")
 
+    def _sync_loaded_settings_to_esp32(self):
+        """
+        ADDED: After loading settings from ESP32, send them back to ensure synchronization.
+        This replicates the old behavior where settings were sent on initialization.
+        """
+        if not self.current_settings:
+            self.logger.warning("No current settings to sync to ESP32")
+            return
+        
+        try:
+            self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
+            
+            # Send the current settings back to ESP32 to ensure sync
+            url = f"{self.proxy_base_url}/camera/settings"
+            response = requests.post(
+                url,
+                json=self.current_settings,
+                timeout=5,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                message = result.get("message", "Settings synchronized")
+                self._update_status_display(message, "#00AA00")  # Green
+                self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
+            else:
+                try:
+                    error_data = response.json()
+                    error_message = error_data.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_message = f"HTTP {response.status_code}"
+                
+                self._update_status_display(f"Sync failed: {error_message}", "#FF0000")
+                self.logger.error(f"Settings sync failed: {error_message}")
+        
+        except requests.exceptions.Timeout:
+            self._update_status_display("Sync failed: Timeout", "#FF0000")
+            self.logger.error("Settings sync timeout")
+            
+        except requests.exceptions.ConnectionError:
+            self._update_status_display("Sync failed: Connection error", "#FF0000") 
+            self.logger.error("Settings sync connection error")
+            
+        except Exception as e:
+            self._update_status_display(f"Sync error: {str(e)[:20]}", "#FF0000")
+            self.logger.error(f"Settings sync error: {e}")
+
     @error_boundary
     def reset_to_defaults(self):
         """Reset all settings to default values"""
@@ -674,8 +731,12 @@ class CameraFeedScreen(BaseScreen):
         wave_config = config_manager.get_wave_config()
 
         # Wave detection state
-        self.sample_buffer = deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"])
-        self.last_wave_time = 0
+        self.sample_buffers = {
+            'left_wave': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"]),
+            'right_wave': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"]),
+            'hands_up': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"])
+        }
+        self.last_gesture_time = 0
         self.last_sample_time = 0
 
         self.tracking_enabled = False
@@ -791,6 +852,47 @@ class CameraFeedScreen(BaseScreen):
         }}
         """
         self.tracking_button.setStyleSheet(base_style + checked_style)
+
+    def get_gesture_detection_status(self):
+        """Get current status of gesture detection buffers (for debugging)"""
+        if not hasattr(self, 'sample_buffers'):
+            return "Gesture detection not initialized"
+        
+        status = {}
+        wave_config = config_manager.get_wave_config()
+        current_time = time.time()
+        
+        # Shared stand-down status
+        time_since_last = current_time - self.last_gesture_time
+        in_standdown = time_since_last < wave_config['stand_down_time']
+        standdown_remaining = max(0, wave_config['stand_down_time'] - time_since_last)
+        
+        status['shared_standdown'] = {
+            'active': in_standdown,
+            'time_since_last_gesture': f"{time_since_last:.1f}s",
+            'remaining_time': f"{standdown_remaining:.1f}s" if in_standdown else "Ready",
+            'standdown_period': f"{wave_config['stand_down_time']}s"
+        }
+        
+        # Individual gesture buffer status
+        status['gestures'] = {}
+        for gesture_type, buffer in self.sample_buffers.items():
+            if len(buffer) > 0:
+                confidence = sum(buffer) / len(buffer)
+                status['gestures'][gesture_type] = {
+                    'buffer_length': len(buffer),
+                    'confidence': f"{confidence:.2%}",
+                    'threshold': f"{wave_config['confidence_threshold']:.2%}",
+                    'ready_to_trigger': confidence >= wave_config['confidence_threshold'] and not in_standdown
+                }
+            else:
+                status['gestures'][gesture_type] = {
+                    'buffer_length': 0, 
+                    'confidence': '0%',
+                    'ready_to_trigger': False
+                }
+        
+        return status
 
     def setup_layout(self):
         """Layout with video display left and controls right"""
@@ -923,22 +1025,22 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def update_display(self, processed_data):
-        """FIXED: Update display with processed frame data from image processor"""
+        """ENHANCED: Update display with processed frame data supporting multiple gestures"""
         try:
             if processed_data is None:
                 self.video_label.setText("No frame data")
                 return
 
             frame_rgb = processed_data.frame
-            wave_detected = processed_data.wave_detected
+            gesture_detected = processed_data.gesture_detected
 
             if frame_rgb is None:
                 self.video_label.setText("Camera not available")
                 return
 
-            # Handle wave detection if tracking enabled
-            if self.tracking_enabled and wave_detected:
-                self._handle_wave_detection()
+            # Handle gesture detection if tracking enabled
+            if self.tracking_enabled and gesture_detected:
+                self._handle_gesture_detection(gesture_detected)
 
             # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
@@ -954,6 +1056,7 @@ class CameraFeedScreen(BaseScreen):
         except Exception as e:
             self.logger.error(f"Display update error: {e}")
             self.video_label.setText(f"Display Error:\n{str(e)}")
+
 
     def update_stats(self, stats_dict):
         """FIXED: Update statistics display with better formatting"""
@@ -973,23 +1076,51 @@ class CameraFeedScreen(BaseScreen):
             self.logger.error(f"Stats update error: {e}")
             self.stats_label.setText("Stream Stats: Error")
 
-    def _handle_wave_detection(self):
-        """Handle wave detection with confidence buffering"""
+    def _handle_gesture_detection(self, gesture_type):
+        """
+        ENHANCED: Handle multiple gesture types with confidence buffering
+        Uses SHARED stand-down timer for all gestures to prevent being too busy
+        gesture_type: "left_wave", "right_wave", or "hands_up"
+        """
         wave_config = config_manager.get_wave_config()
         current_time = time.time()
         
-        if current_time - self.last_sample_time >= 1.0 / wave_config["sample_rate"]:
-            self.sample_buffer.append(True)  # Wave detected
-            self.last_sample_time = current_time
-
-        if len(self.sample_buffer) == self.sample_buffer.maxlen:
-            confidence = sum(self.sample_buffer) / len(self.sample_buffer)
+        # Sample rate limiting - FIXED: More strict timing
+        if current_time - self.last_sample_time < 1.0 / wave_config["sample_rate"]:
+            return  # Don't process if we're sampling too fast
+        
+        self.last_sample_time = current_time
+        
+        # Add detection to the appropriate buffer
+        self.sample_buffers[gesture_type].append(True)
+        
+        # Check confidence for the detected gesture ONLY if buffer is full
+        buffer = self.sample_buffers[gesture_type]
+        if len(buffer) == buffer.maxlen:  # Wait for FULL buffer (3 seconds)
+            confidence = sum(buffer) / len(buffer)
+            
+            self.logger.debug(f"{gesture_type} buffer full: {confidence:.2%} confidence (need {wave_config['confidence_threshold']:.2%})")
+            
             if confidence >= wave_config["confidence_threshold"]:
-                if current_time - self.last_wave_time >= wave_config["stand_down_time"]:
-                    self.send_websocket_message("gesture", name="wave")
-                    self.last_wave_time = current_time
-                    self.sample_buffer.clear()
-                    self.logger.info("Wave gesture detected and sent!")
+                # Check SHARED stand-down time for ALL gestures
+                if current_time - self.last_gesture_time >= wave_config["stand_down_time"]:
+                    # Send the appropriate gesture message
+                    self.send_websocket_message("gesture", name=gesture_type)
+                    
+                    # Update the SHARED gesture timer (prevents any gesture for stand-down period)
+                    self.last_gesture_time = current_time
+                    
+                    # Clear ALL buffers to prevent other gestures from triggering immediately
+                    for gesture in self.sample_buffers:
+                        self.sample_buffers[gesture].clear()
+                    
+                    # Log the detection
+                    gesture_name = gesture_type.replace("_", " ").title()
+                    self.logger.info(f"{gesture_name} gesture detected and sent! (Confidence: {confidence:.2%})")
+                else:
+                    # Still in stand-down period
+                    remaining_time = wave_config["stand_down_time"] - (current_time - self.last_gesture_time)
+                    self.logger.debug(f"{gesture_type} detected but in stand-down period ({remaining_time:.1f}s remaining)")
 
     @error_boundary
     def toggle_tracking(self, checked=None):
@@ -1004,11 +1135,11 @@ class CameraFeedScreen(BaseScreen):
             self.image_thread.set_tracking_enabled(self.tracking_enabled)
 
         if self.tracking_enabled:
-            self.tracking_button.setToolTip("Wave Detection: ENABLED (Click to disable)")
-            self.logger.info("Wave detection ENABLED")
+            self.tracking_button.setToolTip("Gesture Detection: ENABLED\n(Left Wave, Right Wave, Hands Up)\nClick to disable")
+            self.logger.info("Multi-gesture detection ENABLED (left wave, right wave, hands up)")
         else:
-            self.tracking_button.setToolTip("Wave Detection: DISABLED (Click to enable)")
-            self.logger.info("Wave detection DISABLED")
+            self.tracking_button.setToolTip("Gesture Detection: DISABLED (Click to enable)")
+            self.logger.info("Multi-gesture detection DISABLED")
 
         self.send_websocket_message("tracking", state=self.tracking_enabled)
 

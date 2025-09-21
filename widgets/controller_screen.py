@@ -322,6 +322,178 @@ class ToggleScenesHandler(BehaviorHandler):
                 self.logger.error(f"Error in toggle scenes handler: {e}")
             return False
 
+class SystemControlHandler(BehaviorHandler):
+    """Handle system control commands - exit app, restart, shutdown"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.app_instance = None
+
+    def set_app_instance(self, app_instance):
+        """Set reference to the main application for direct exit handling"""
+        self.app_instance = app_instance
+
+    def process(self, control_name: str, raw_value: float, config: Dict[str, Any]) -> bool:
+        try:
+            action = config.get('system_action')
+            trigger_timing = config.get('trigger_timing', 'on_press')
+            threshold = 0.5
+            
+            if not action:
+                return False
+            
+            if trigger_timing == 'on_press' and raw_value > threshold:
+                if action == "exit_app":
+                    self._handle_exit_app()
+                    if self.logger:
+                        self.logger.info("Exit app command triggered")
+                elif action == "restart_app":
+                    self._handle_restart_app()
+                    if self.logger:
+                        self.logger.info("Restart app command triggered")
+                elif action == "restart_pi":
+                    self.send_websocket_message("pi_control", action="restart")
+                    if self.logger:
+                        self.logger.info("Restart Pi command sent to backend")
+                elif action == "shutdown_pi":
+                    self.send_websocket_message("pi_control", action="shutdown")
+                    if self.logger:
+                        self.logger.info("Shutdown Pi command sent to backend")
+                
+                return True
+                
+            return False
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in system control handler: {e}")
+            return False
+
+    def _handle_exit_app(self):
+        """Handle exit app directly in frontend"""
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            from PyQt6.QtCore import QTimer
+            from PyQt6.QtGui import QIcon, QPixmap
+            
+            # Get the main application window to use as parent for the dialog
+            app = QApplication.instance()
+            main_window = None
+            for widget in app.topLevelWidgets():
+                if hasattr(widget, 'close_application'):  # Look for the main DroidDeckApplication
+                    main_window = widget
+                    break
+            
+            # Create custom message box
+            msg_box = QMessageBox(main_window)
+            msg_box.setWindowTitle('Exit Application')
+            msg_box.setText('Are you sure you want to exit the WALL-E control application?')
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            # Try to set a custom WALL-E icon
+            try:
+                # Option 1: Use a WALL-E icon from your resources
+                # Replace "wall-e-icon.png" with your actual icon file path
+                icon_path = "resources/icons/exit.png"  # or wherever your WALL-E icon is
+                if os.path.exists(icon_path):
+                    custom_icon = QIcon(icon_path)
+                    msg_box.setIconPixmap(custom_icon.pixmap(64, 64))  # 64x64 pixel icon
+                else:
+                    # Option 2: Use a different built-in icon (no spaceship)
+                    msg_box.setIcon(QMessageBox.Icon.Warning)  # Orange warning triangle
+                    # Or try: QMessageBox.Icon.Information (blue 'i')
+                    # Or: QMessageBox.Icon.Critical (red X)
+            except Exception as e:
+                # Fallback to warning icon if custom icon fails
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                if self.logger:
+                    self.logger.debug(f"Could not load custom icon: {e}")
+            
+            # Style the message box to match your theme
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #2d2d2d;
+                    color: white;
+                    font-size: 14px;
+                }
+                QMessageBox QPushButton {
+                    background-color: #1e90ff;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    min-width: 60px;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #4dabf7;
+                }
+                QMessageBox QPushButton:pressed {
+                    background-color: #0d7ae4;
+                }
+            """)
+            
+            # Show the dialog and get result
+            reply = msg_box.exec()
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                if self.logger:
+                    self.logger.info("User confirmed app exit via controller")
+                
+                # Try multiple exit methods
+                if main_window and hasattr(main_window, 'close_application'):
+                    # Use the main window's close method if available
+                    QTimer.singleShot(100, main_window.close_application)
+                else:
+                    # Fallback to direct quit
+                    QTimer.singleShot(100, app.quit)
+            else:
+                if self.logger:
+                    self.logger.info("User cancelled app exit")
+                    
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling exit app: {e}")
+            # Emergency fallback - force quit
+            try:
+                QApplication.instance().quit()
+            except:
+                import sys
+                sys.exit(0)
+
+    def _handle_restart_app(self):
+        """Handle restart app directly in frontend"""
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            from PyQt6.QtCore import QTimer
+            import sys
+            import os
+            
+            reply = QMessageBox.question(
+                None, 
+                'Restart Application', 
+                'Are you sure you want to restart the WALL-E control application?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                if self.logger:
+                    self.logger.info("User confirmed app restart via controller")
+                
+                def restart_app():
+                    python = sys.executable
+                    os.execl(python, python, *sys.argv)
+                
+                QTimer.singleShot(100, restart_app)
+            else:
+                if self.logger:
+                    self.logger.info("User cancelled app restart")
+                    
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling restart app: {e}")
 
 # ========================================
 # BEHAVIOR REGISTRY
@@ -330,14 +502,19 @@ class ToggleScenesHandler(BehaviorHandler):
 class BehaviorHandlerRegistry:
     """Registry to manage different behavior handlers"""
     
-    def __init__(self, websocket_sender=None, logger=None):
+    def __init__(self, websocket_sender=None, logger=None, app_instance=None):
+        system_handler = SystemControlHandler(websocket_sender, logger)
+        if app_instance:
+            system_handler.set_app_instance(app_instance)
+        
         self.handlers = {
             "direct_servo": DirectServoHandler(websocket_sender, logger),
             "joystick_pair": JoystickPairHandler(websocket_sender, logger),
             "differential_tracks": DifferentialTracksHandler(websocket_sender, logger),
             "scene_trigger": SceneTriggerHandler(websocket_sender, logger),
             "toggle_scenes": ToggleScenesHandler(websocket_sender, logger),
-            "nema_stepper": NemaStepperHandler(websocket_sender, logger)
+            "nema_stepper": NemaStepperHandler(websocket_sender, logger),
+            "system_control": system_handler
         }
         self.active_mappings = {}
         self.logger = logger
@@ -384,7 +561,8 @@ class BehaviorHandlerRegistry:
                 return f"Cannot mix different behaviors on the same joystick."
         
         return None
-    
+
+
     # ========================================
 # MAIN CONTROLLER CONFIGURATION CLASS
 # ========================================
@@ -406,16 +584,38 @@ class ControllerConfigScreen(BaseScreen):
         self.maestro_channel_counts = {1: 0, 2: 0}
         self.maestro_connected = {1: False, 2: False}
         self._config_loaded = False
-        
+
         super().__init__(websocket)
+        theme_manager.register_callback(self.update_theme)
+
+    def _init_ui(self):
+        """Initialize the UI layout with proper padding"""
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(100, 25, 40, 15)
+
+        # Main content - no more separate status frame
+        config_section = self._create_config_section()
+        main_layout.addWidget(config_section, stretch=3)
+        
+        params_section = self._create_parameters_section()  
+        main_layout.addWidget(params_section, stretch=1)
+        
+        # Create overall layout - just the main layout, no status bar
+        self.setLayout(main_layout)
+        QTimer.singleShot(1000, self.request_controller_info)
 
     def _setup_screen(self):
         """Initialize controller configuration screen with maestro detection"""
         self.setFixedWidth(1200)
         
+        # Get app instance for system control
+        from PyQt6.QtWidgets import QApplication
+        app_instance = QApplication.instance()
+        
         self.behavior_registry = BehaviorHandlerRegistry(
             websocket_sender=self.send_websocket_message,
-            logger=self.logger
+            logger=self.logger,
+            app_instance=app_instance  # Pass app instance
         )
         
         self._load_predefined_options()
@@ -427,8 +627,6 @@ class ControllerConfigScreen(BaseScreen):
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_controller_input)
             self.websocket.textMessageReceived.connect(self.handle_websocket_message)
-        
-        theme_manager.register_callback(self.update_theme)
 
     def _detect_maestros(self):
         """Request maestro detection to get available channels"""
@@ -442,8 +640,10 @@ class ControllerConfigScreen(BaseScreen):
             # Use fallback then load existing config
             QTimer.singleShot(2000, self._load_existing_configuration)
 
+    # Add this to your controller_screen.py handle_websocket_message method
+
     def handle_websocket_message(self, message):
-        """Handle WebSocket messages including maestro detection"""
+        """Handle WebSocket messages including maestro detection and system control commands"""
         try:
             msg = json.loads(message)
             msg_type = msg.get("type")
@@ -455,10 +655,46 @@ class ControllerConfigScreen(BaseScreen):
             elif msg_type == "controller_input":
                 # This is already handled by handle_controller_input
                 pass
+            elif msg_type == "system_control_command":  # ADD THIS
+                self._handle_system_control_command(msg)
                 
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error handling WebSocket message: {e}")
+
+    def _handle_system_control_command(self, msg):
+        """Handle system control commands routed from backend"""
+        try:
+            action = msg.get("action")
+            control_name = msg.get("control_name")
+            config = msg.get("config", {})
+            
+            if not action:
+                self.logger.warning("System control command missing action")
+                return
+            
+            self.logger.info(f"Received system control command from backend: {action}")
+            
+            # Create a mock mapping config and process through behavior registry
+            mapping_config = {
+                'behavior': 'system_control',
+                'system_action': action,
+                **config
+            }
+            
+            # Process through the frontend system control handler
+            success = self.behavior_registry.process_input(
+                control_name, 1.0, mapping_config  # Use 1.0 as "button pressed"
+            )
+            
+            if success:
+                self.logger.info(f"System control '{action}' executed successfully")
+            else:
+                self.logger.warning(f"System control '{action}' failed to execute")
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling system control command: {e}")
 
     def _handle_maestro_info(self, data):
         """Handle maestro detection results"""
@@ -522,7 +758,7 @@ class ControllerConfigScreen(BaseScreen):
         
         self.behaviors = [
             "direct_servo", "joystick_pair", "differential_tracks", 
-            "scene_trigger", "toggle_scenes", "nema_stepper"
+            "scene_trigger", "toggle_scenes", "nema_stepper", "system_control"
         ]
         
         # Don't load servo channels here - wait for maestro detection
@@ -543,6 +779,115 @@ class ControllerConfigScreen(BaseScreen):
                 self.scene_names = motion_config.get("emotions", [])
             except Exception:
                 self.scene_names = ["Happy", "Sad", "Curious", "Excited", "Alert"]
+
+# Update the ControllerConfigScreen._setup_screen method to pass app instance:
+
+    def _setup_screen(self):
+        """Initialize controller configuration screen with maestro detection"""
+        self.setFixedWidth(1200)
+        
+        # Get app instance for system control
+        from PyQt6.QtWidgets import QApplication
+        app_instance = QApplication.instance()
+        
+        self.behavior_registry = BehaviorHandlerRegistry(
+            websocket_sender=self.send_websocket_message,
+            logger=self.logger,
+            app_instance=app_instance  # Pass app instance
+        )
+        
+        self._load_predefined_options()
+        self._init_ui()
+        
+        # Request maestro detection before loading config
+        QTimer.singleShot(1000, self._detect_maestros)
+        
+        if self.websocket:
+            self.websocket.textMessageReceived.connect(self.handle_controller_input)
+            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
+
+
+    # Update the parameter creation to show which actions are handled where:
+
+    def _create_system_control_params(self, row_data: Dict):
+        """Create parameters for system control behavior"""
+        # Header without border - direct styling
+        header = QLabel("System Control Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
+        
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            axis_info = QLabel(f"Controls system using {control_name}")
+            grey = theme_manager.get("grey")
+            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+            self.params_layout.addWidget(axis_info)
+        
+        # System Action combo with clean label
+        action_combo = QComboBox()
+        system_actions = ["exit_app", "restart_app", "restart_pi", "shutdown_pi"]
+        action_combo.addItems(["Select Action..."] + system_actions)
+        if 'system_action' in row_data['config']:
+            action_combo.setCurrentText(row_data['config']['system_action'])
+        action_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'system_action', text)
+        )
+        action_combo.setStyleSheet(self._get_combo_style())
+        
+        # Add label and combo manually with clean label styling
+        label1 = QLabel("System Action:")
+        label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label1)
+        self.params_layout.addWidget(action_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Trigger Timing combo with clean label
+        timing_combo = QComboBox()
+        timing_combo.addItems(["on_press", "on_release"])
+        timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
+        timing_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'trigger_timing', text)
+        )
+        timing_combo.setStyleSheet(self._get_combo_style())
+        
+        # Add label and combo manually with clean label styling
+        label2 = QLabel("Trigger Timing:")
+        label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label2)
+        self.params_layout.addWidget(timing_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Action descriptions with location info
+        descriptions = {
+            "exit_app": "Close the frontend application (handled locally)",
+            "restart_app": "Restart the frontend application (handled locally)", 
+            "restart_pi": "Reboot the Raspberry Pi (sent to backend)",
+            "shutdown_pi": "Shutdown the Raspberry Pi (sent to backend)"
+        }
+        
+        current_action = row_data['config'].get('system_action', 'Not configured')
+        if current_action in descriptions:
+            desc_label = QLabel(f"📝 {descriptions[current_action]}")
+            desc_label.setStyleSheet(f"color: #4CAF50; padding: 8px; background-color: rgba(76, 175, 80, 0.1); border-radius: 4px; font-size: 10px; font-style: italic; border: none;")
+            desc_label.setWordWrap(True)
+            self.params_layout.addWidget(desc_label)
+        
+        # Warning for destructive actions
+        if current_action in ["restart_pi", "shutdown_pi"]:
+            warning_label = QLabel("⚠️ WARNING: This will affect the entire Raspberry Pi system!")
+            warning_label.setStyleSheet(f"color: #F44336; padding: 6px; background-color: rgba(244, 67, 54, 0.1); border-radius: 4px; font-size: 10px; font-weight: bold; border: none;")
+            warning_label.setWordWrap(True)
+            self.params_layout.addWidget(warning_label)
+        elif current_action in ["exit_app", "restart_app"]:
+            info_label = QLabel("ℹ️ This action includes a confirmation dialog for safety")
+            info_label.setStyleSheet(f"color: #2196F3; padding: 6px; background-color: rgba(33, 150, 243, 0.1); border-radius: 4px; font-size: 10px; border: none;")
+            info_label.setWordWrap(True)
+            self.params_layout.addWidget(info_label)
+        
+        action = row_data['config'].get('system_action', 'Not configured')
+        row_data['target_label'].setText(f"→ {action}")
 
     def _load_existing_configuration(self):
         """Load existing controller configuration on startup"""
@@ -617,6 +962,7 @@ class ControllerConfigScreen(BaseScreen):
             actions_layout.addWidget(remove_btn)
             actions_widget = QWidget()
             actions_widget.setLayout(actions_layout)
+            actions_widget.setStyleSheet("border:none; padding:0px;")
             
             self.grid_layout.addWidget(input_combo, row, 0)
             self.grid_layout.addWidget(type_combo, row, 1) 
@@ -699,6 +1045,13 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.error(f"Error handling controller info response: {e}")
 
+    def __del__(self):
+        """Clean up theme manager callback on destruction"""
+        try:
+            theme_manager.unregister_callback(self.update_theme)
+        except Exception:
+            pass  # Ignore errors during cleanup
+
     def _get_target_display_text(self, behavior: str, config: Dict[str, Any]) -> str:
         """Get display text for target column based on behavior and config"""
         if behavior == "direct_servo":
@@ -724,6 +1077,9 @@ class ControllerConfigScreen(BaseScreen):
             min_pos = config.get('min_position', '?')
             max_pos = config.get('max_position', '?')
             return f"→ NEMA {mode}: {min_pos}-{max_pos}cm"
+        elif behavior == "system_control":  # ADD THIS
+            action = config.get('system_action', 'Not configured')
+            return f"→ {action}"
         else:
             return "Configure targets →"
 
@@ -784,8 +1140,8 @@ class ControllerConfigScreen(BaseScreen):
         """)
         self.calibration_button.clicked.connect(self.open_calibration_dialog)
         
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setStyleSheet("""
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setStyleSheet("""
             QPushButton {
                 background-color: #666666;
                 color: white;
@@ -797,16 +1153,14 @@ class ControllerConfigScreen(BaseScreen):
             }
             QPushButton:hover { background-color: #777777; }
         """)
-        refresh_btn.clicked.connect(self.request_controller_info)
+        self.refresh_btn.clicked.connect(self.request_controller_info)
         
         status_header_layout.addWidget(self.calibration_button)
-        status_header_layout.addWidget(refresh_btn)
+        status_header_layout.addWidget(self.refresh_btn)
         
         layout.addLayout(status_header_layout)
         
-        # Remove the old header title section
-        # self.header = QLabel("CONTROLLER CONFIGURATION") - REMOVED
-        
+        # Conflict warning
         self.conflict_warning = QLabel("")
         self.conflict_warning.setWordWrap(True)
         self.update_conflict_warning_style()
@@ -839,7 +1193,7 @@ class ControllerConfigScreen(BaseScreen):
         
         layout.addLayout(headers_layout)
         
-        # Rest of the method remains the same...
+        # Scroll area for the grid
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.update_scroll_area_style()
@@ -861,6 +1215,7 @@ class ControllerConfigScreen(BaseScreen):
         self.scroll_area.setWidget(self.grid_widget)
         layout.addWidget(self.scroll_area)
         
+        # Control buttons at bottom
         buttons_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Mapping")
         self.add_btn.clicked.connect(self._add_mapping_row)
@@ -1190,6 +1545,8 @@ class ControllerConfigScreen(BaseScreen):
             self._create_toggle_scenes_params(row_data)
         elif behavior == "nema_stepper":
             self._create_nema_stepper_params(row_data)
+        elif behavior == "system_control":  
+            self._create_system_control_params(row_data)
 
     def _create_direct_servo_params(self, row_data: Dict):
         """Create parameters for direct servo behavior"""
@@ -1678,6 +2035,16 @@ class ControllerConfigScreen(BaseScreen):
             min_pos = row_data['config'].get('min_position', '?')
             max_pos = row_data['config'].get('max_position', '?')
             row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
+        elif behavior == "system_control":  # ADD THIS
+            action = row_data['config'].get('system_action', 'Not configured')
+            row_data['target_label'].setText(f"→ {action}")
+
+            if hasattr(self, 'selected_row_index') and self.selected_row_index is not None:
+                if 0 <= self.selected_row_index < len(self.mapping_rows):
+                    selected_row = self.mapping_rows[self.selected_row_index]
+                    if selected_row == row_data:
+                        self._create_behavior_parameters(row_data)
+
 
     def _clear_parameters_layout(self):
         """Clear all widgets from parameters layout"""
@@ -1831,39 +2198,125 @@ class ControllerConfigScreen(BaseScreen):
     # ========================================
     # THEME UPDATE METHODS
     # ========================================
-    
+ 
+# Replace the update_theme method in controller_screen.py (around line 1190)
+
     def update_theme(self):
-        """Update all UI elements when theme changes"""
-        self.update_config_frame_style()
-        self.update_parameters_panel_style()
-        self.update_header_style()
-        self.update_conflict_warning_style()
-        self.update_scroll_area_style()
-        self.update_params_header_style()
-        
-        # Update column headers
-        if hasattr(self, 'header_labels'):
-            for header_label in self.header_labels:
-                self.update_column_header_style(header_label)
-        
-        # Update buttons
-        if hasattr(self, 'add_btn'):
-            self.update_button_style(self.add_btn)
-        if hasattr(self, 'save_btn'):
-            self.update_button_style(self.save_btn)
+        """Update all UI elements when theme changes - FIXED"""
+        try:
+            # First, get fresh theme colors
+            primary = theme_manager.get("primary_color")
+            panel_bg = theme_manager.get("panel_bg")
             
-        # Update all existing row widgets
-        for row_data in self.mapping_rows:
-            row_data['input_combo'].setStyleSheet(self._get_combo_style())
-            row_data['type_combo'].setStyleSheet(self._get_combo_style())
-            row_data['behavior_combo'].setStyleSheet(self._get_combo_style())
-            row_data['target_label'].setStyleSheet(self._get_target_label_style())
-            row_data['select_btn'].setStyleSheet(self._get_small_button_style())
-            row_data['remove_btn'].setStyleSheet(self._get_remove_button_style())
-        
-        # Update no selection message if visible
-        if hasattr(self, 'no_selection_label'):
-            self.update_no_selection_style()
+            # Log the theme change for debugging
+            self.logger.info(f"Controller screen updating theme to: {theme_manager.get_theme_name()}")
+            
+            # Update frame and panel styles
+            self.update_config_frame_style()
+            self.update_parameters_panel_style()
+            self.update_conflict_warning_style()
+            self.update_scroll_area_style()
+            self.update_params_header_style()
+            
+            # Update column headers
+            if hasattr(self, 'header_labels'):
+                for header_label in self.header_labels:
+                    self.update_column_header_style(header_label)
+            
+            # Update buttons - FIX: Correct attribute names
+            if hasattr(self, 'add_btn'):
+                self.update_button_style(self.add_btn)
+            if hasattr(self, 'save_btn'):
+                self.update_button_style(self.save_btn)
+            if hasattr(self, 'calibration_button'):  # FIXED: correct attribute name
+                self.calibration_button.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #1e90ff;
+                        color: white;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 5px;
+                        font-size: 12px;
+                        font-weight: bold;
+                    }}
+                    QPushButton:hover {{ background-color: #4dabf7; }}
+                    QPushButton:disabled {{ background-color: #555555; }}
+                """)
+            if hasattr(self, 'refresh_btn'):  # FIXED: removed extra 'self.'
+                self.refresh_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #666666;
+                        color: white;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 5px;
+                        font-size: 12px;
+                        margin-left: 10px;
+                    }
+                    QPushButton:hover { background-color: #777777; }
+                """)
+            
+            # FIX: Update controller status label styling
+            if hasattr(self, 'controller_status_label') and self.controller_status_label:
+                try:
+                    # Check if widget still exists
+                    self.controller_status_label.text()
+                    current_text = self.controller_status_label.text()
+                    if "Connected" in current_text:
+                        self.controller_status_label.setStyleSheet("color: #4CAF50;border: none; background: transparent; padding: 0px;")
+                    else:
+                        self.controller_status_label.setStyleSheet("color: #F44336;border: none; background: transparent; padding: 0px;")
+                except RuntimeError:
+                    pass  # Widget has been deleted
+                    
+            # CRITICAL: Update all existing row widgets with fresh styles
+            for row_data in self.mapping_rows:
+                # Force refresh of combo box styles
+                row_data['input_combo'].setStyleSheet(self._get_combo_style())
+                row_data['type_combo'].setStyleSheet(self._get_combo_style())
+                row_data['behavior_combo'].setStyleSheet(self._get_combo_style())
+                row_data['target_label'].setStyleSheet(self._get_target_label_style())
+                row_data['select_btn'].setStyleSheet(self._get_small_button_style())
+                row_data['remove_btn'].setStyleSheet(self._get_remove_button_style())
+            
+            # Update no selection message if visible
+            if hasattr(self, 'no_selection_label') and self.no_selection_label:
+                self.update_no_selection_style()
+                
+            # CRITICAL: Force update of the parameters panel content if a row is selected
+            if hasattr(self, 'selected_row_index') and self.selected_row_index is not None:
+                if 0 <= self.selected_row_index < len(self.mapping_rows):
+                    selected_row = self.mapping_rows[self.selected_row_index]
+                    self._create_behavior_parameters(selected_row) 
+            
+            self.logger.info("Controller screen theme update completed")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update controller screen theme: {e}")
+
+    # Also add this method after the update_theme method:
+
+    def _refresh_parameter_widgets(self):
+        """Force refresh all parameter widgets with current theme"""
+        try:
+            # Clear and rebuild parameters panel if needed
+            if hasattr(self, 'params_layout'):
+                # Get all combo boxes in the parameters panel and refresh their styles
+                for i in range(self.params_layout.count()):
+                    widget = self.params_layout.itemAt(i).widget()
+                    if widget:
+                        if isinstance(widget, QComboBox):
+                            widget.setStyleSheet(self._get_combo_style())
+                        elif isinstance(widget, QLabel):
+                            # Check if it's a header or regular label and style accordingly
+                            font = widget.font()
+                            if font.weight() == QFont.Weight.Bold:
+                                primary = theme_manager.get("primary_color")
+                                widget.setStyleSheet(f"color: {primary}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+                            else:
+                                widget.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        except Exception as e:
+            self.logger.warning(f"Failed to refresh parameter widgets: {e}")
 
     def update_config_frame_style(self):
         """Update main config frame styling"""
@@ -2056,7 +2509,7 @@ class ControllerConfigScreen(BaseScreen):
     def _get_target_label_style(self):
         """Get target label styling"""
         grey = theme_manager.get("grey")
-        return f"color: {grey}; padding: 8px; border: 1px solid #555; border-radius: 4px;"
+        return f"color: {grey}; padding: 0px; border: 1px solid #555; border-radius: 4px;"
     
     def _get_param_widget_style(self):
         """Get parameter widget styling"""
@@ -2069,7 +2522,7 @@ class ControllerConfigScreen(BaseScreen):
                 color: {primary};
                 border: 1px solid #555;
                 border-radius: 3px;
-                padding: 3px;
+                padding: 2px;
                 font-size: 10px;
             }}
             QComboBox {{

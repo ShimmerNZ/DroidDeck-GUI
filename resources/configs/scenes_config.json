@@ -1,108 +1,42 @@
 [
   {
-    "label": "Excited Greeting",
+    "label": "Frustrated Gesture",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Happy",
-      "Idle"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 1,
-    "duration": 2.5,
-    "delay": 0
-  },
-  {
-    "label": "Cheerful Dance",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Happy"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 2,
-    "duration": 3.2,
-    "delay": 500
-  },
-  {
-    "label": "Joy Bounce",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Happy"
+      "Angry"
     ],
     "audio_enabled": false,
     "audio_file": "",
     "script_enabled": true,
-    "script_name": 3,
-    "duration": 1.8,
+    "script_name": 31,
+    "duration": 1.7,
     "delay": 0
   },
   {
-    "label": "Happy Wiggle",
+    "label": "Furious Shake",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Happy"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 4,
-    "duration": 2.1,
-    "delay": 200
-  },
-  {
-    "label": "Celebration",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Happy"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 5,
-    "duration": 4.0,
-    "delay": 0
-  },
-  {
-    "label": "Lonely Sigh",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sad"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 10,
-    "duration": 3.5,
-    "delay": 0
-  },
-  {
-    "label": "Dejected Slump",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sad"
+      "Angry"
     ],
     "audio_enabled": false,
     "audio_file": "",
     "script_enabled": true,
-    "script_name": 11,
+    "script_name": 30,
+    "duration": 2.3,
+    "delay": 0
+  },
+  {
+    "label": "Mad Stomp",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Angry"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 32,
     "duration": 2.8,
-    "delay": 0
-  },
-  {
-    "label": "Melancholy Look",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sad"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 12,
-    "duration": 2.2,
-    "delay": 300
+    "delay": 400
   },
   {
     "label": "Head Tilt Wonder",
@@ -124,7 +58,7 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
     "script_name": 21,
     "duration": 3.0,
@@ -150,192 +84,75 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
     "script_name": 23,
     "duration": 1.8,
     "delay": 0
   },
   {
-    "label": "Furious Shake",
+    "label": "Celebration",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Angry"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 30,
-    "duration": 2.3,
-    "delay": 0
-  },
-  {
-    "label": "Frustrated Gesture",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Angry"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 31,
-    "duration": 1.7,
-    "delay": 0
-  },
-  {
-    "label": "Mad Stomp",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Angry"
+      "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
-    "script_name": 32,
-    "duration": 2.8,
-    "delay": 400
-  },
-  {
-    "label": "Startled Jump",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Surprise"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 40,
-    "duration": 1.2,
+    "script_name": 5,
+    "duration": 4.0,
     "delay": 0
   },
   {
-    "label": "Eyes Wide Open",
+    "label": "Cheerful Dance",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Surprise"
+      "Happy"
     ],
-    "audio_enabled": false,
-    "audio_file": "",
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
     "script_enabled": true,
-    "script_name": 41,
-    "duration": 1.8,
+    "script_name": 2,
+    "duration": 3.2,
+    "delay": 500
+  },
+  {
+    "label": "Excited Greeting",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Happy",
+      "Idle"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 1,
+    "duration": 2.5,
     "delay": 0
   },
   {
-    "label": "Wow Reaction",
+    "label": "Happy Wiggle",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Surprise"
+      "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
-    "script_name": 42,
+    "script_name": 4,
     "duration": 2.1,
     "delay": 200
   },
   {
-    "label": "Heart Eyes",
+    "label": "Joy Bounce",
     "emoji": "\ud83c\udfad",
     "categories": [
-      "Love"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 50,
-    "duration": 3.5,
-    "delay": 0
-  },
-  {
-    "label": "Affectionate Lean",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Love"
+      "Happy"
     ],
     "audio_enabled": false,
     "audio_file": "",
     "script_enabled": true,
-    "script_name": 51,
-    "duration": 2.8,
-    "delay": 0
-  },
-  {
-    "label": "Loving Gaze",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Love"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 52,
-    "duration": 4.2,
-    "delay": 600
-  },
-  {
-    "label": "Beep Sound",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sound Effect"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": false,
-    "script_name": null,
-    "duration": 0.5,
-    "delay": 0
-  },
-  {
-    "label": "Whistle Effect",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sound Effect"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": false,
-    "script_name": null,
-    "duration": 1.2,
-    "delay": 0
-  },
-  {
-    "label": "Alert Chime",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sound Effect"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": false,
-    "script_name": null,
-    "duration": 0.8,
-    "delay": 0
-  },
-  {
-    "label": "Power Down Sound",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sound Effect"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": false,
-    "script_name": null,
-    "duration": 2.0,
-    "delay": 0
-  },
-  {
-    "label": "Sleepy Wave",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Idle",
-      "Sleepy"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 80,
+    "script_name": 3,
     "duration": 1.8,
     "delay": 0
   },
@@ -353,13 +170,27 @@
     "delay": 0
   },
   {
+    "label": "Sleepy Wave",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Idle",
+      "Sleepy"
+    ],
+    "audio_enabled": false,
+    "audio_file": "",
+    "script_enabled": true,
+    "script_name": 80,
+    "duration": 1.8,
+    "delay": 0
+  },
+  {
     "label": "Standby Mode",
     "emoji": "\ud83c\udfad",
     "categories": [
       "Idle"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
     "script_name": 82,
     "duration": 3.0,
@@ -379,17 +210,95 @@
     "delay": 0
   },
   {
-    "label": "Yawn",
+    "label": "Affectionate Lean",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Love"
+    ],
+    "audio_enabled": false,
+    "audio_file": "",
+    "script_enabled": true,
+    "script_name": 51,
+    "duration": 2.8,
+    "delay": 0
+  },
+  {
+    "label": "Heart Eyes",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Love"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 50,
+    "duration": 3.5,
+    "delay": 0
+  },
+  {
+    "label": "Loving Gaze",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Love"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 52,
+    "duration": 4.2,
+    "delay": 600
+  },
+  {
+    "label": "Dejected Slump",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sad"
+    ],
+    "audio_enabled": false,
+    "audio_file": "",
+    "script_enabled": true,
+    "script_name": 11,
+    "duration": 2.8,
+    "delay": 0
+  },
+  {
+    "label": "Lonely Sigh",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sad"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 10,
+    "duration": 3.5,
+    "delay": 0
+  },
+  {
+    "label": "Melancholy Look",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sad"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 12,
+    "duration": 2.2,
+    "delay": 300
+  },
+  {
+    "label": "Almost Sleeping",
     "emoji": "\ud83c\udfad",
     "categories": [
       "Sleepy"
     ],
     "audio_enabled": true,
-    "audio_file": "",
+    "audio_file": "track_008.wav",
     "script_enabled": true,
-    "script_name": 90,
-    "duration": 2.5,
-    "delay": 0
+    "script_name": 92,
+    "duration": 4.5,
+    "delay": 800
   },
   {
     "label": "Drowsy Nod",
@@ -405,19 +314,6 @@
     "delay": 0
   },
   {
-    "label": "Almost Sleeping",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sleepy"
-    ],
-    "audio_enabled": true,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 92,
-    "duration": 4.5,
-    "delay": 800
-  },
-  {
     "label": "Wake Up Stretch",
     "emoji": "\ud83c\udfad",
     "categories": [
@@ -428,6 +324,123 @@
     "script_enabled": true,
     "script_name": 93,
     "duration": 2.8,
+    "delay": 0
+  },
+  {
+    "label": "Yawn",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sleepy"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 90,
+    "duration": 2.5,
+    "delay": 0
+  },
+  {
+    "label": "Alert Chime",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sound Effect"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": false,
+    "script_name": null,
+    "duration": 0.8,
+    "delay": 0
+  },
+  {
+    "label": "Beep Sound",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sound Effect"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": false,
+    "script_name": null,
+    "duration": 0.5,
+    "delay": 0
+  },
+  {
+    "label": "Power Down Sound",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sound Effect"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": false,
+    "script_name": null,
+    "duration": 2.0,
+    "delay": 0
+  },
+  {
+    "label": "Whistle Effect",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Sound Effect"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": false,
+    "script_name": null,
+    "duration": 1.2,
+    "delay": 0
+  },
+  {
+    "label": "Eyes Wide Open",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Surprise"
+    ],
+    "audio_enabled": false,
+    "audio_file": "",
+    "script_enabled": true,
+    "script_name": 41,
+    "duration": 1.8,
+    "delay": 0
+  },
+  {
+    "label": "Startled Jump",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Surprise"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 40,
+    "duration": 1.2,
+    "delay": 0
+  },
+  {
+    "label": "Wow Reaction",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Surprise"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 42,
+    "duration": 2.1,
+    "delay": 200
+  },
+  {
+    "label": "hands up",
+    "emoji": "\ud83c\udfad",
+    "categories": [
+      "Surprise"
+    ],
+    "audio_enabled": true,
+    "audio_file": "track_008.wav",
+    "script_enabled": true,
+    "script_name": 2,
+    "duration": 2.0,
     "delay": 0
   }
 ]

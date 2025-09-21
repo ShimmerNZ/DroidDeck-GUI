@@ -343,8 +343,8 @@ class SettingsScreen(BaseScreen):
         self._update_main_frame_style()
 
         main = QVBoxLayout(self.main_frame)
-        main.setContentsMargins(0, 10, 0, 0)
-        main.setSpacing(10)
+        main.setContentsMargins(0, 5, 0, 0)
+        main.setSpacing(5)
 
         # Add header
         self.header = QLabel("Settings Configuration")
@@ -668,7 +668,7 @@ class SettingsScreen(BaseScreen):
 
         self.confidence_value = QLabel("70%")
         self.confidence_value.setFont(font)
-        self.confidence_value.setMinimumWidth(48)
+        self.confidence_value.setMaximumWidth(60)
         self._update_value_label_style(self.confidence_value)
 
         self.confidence_slider.valueChanged.connect(
@@ -831,11 +831,18 @@ class SettingsScreen(BaseScreen):
         primary = theme_manager.get("primary_color")
         spinbox.setStyleSheet(f"""
         QSpinBox {{
-            background-color: #2d2d2d;
-            border: 1px solid #555;
-            border-radius: 4px;
-            padding: 6px;
-            color: white;
+        background-color: #2d2d2d;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 8px;
+        padding-right: 0px;
+        color: white;
+        min-height: 24px;
+        max-height: 40px;
+        font-size: 14px;
+
         }}
         QSpinBox:focus {{ 
             border-color: {primary}; 
@@ -868,8 +875,32 @@ class SettingsScreen(BaseScreen):
 
     def _update_value_label_style(self, label: QLabel):
         primary = theme_manager.get("primary_color")
-        label.setStyleSheet(f"color: {primary}; padding-left: 4px; background: transparent;")
-
+        label.setStyleSheet(f"""
+        QLabel {{
+            color: {primary}; 
+            padding: 4px 8px;
+            background: transparent;
+            border: 0px solid transparent !important;
+            outline: 0px solid transparent !important;
+            selection-background-color: transparent;
+        }}
+        QLabel:focus {{
+            border: 0px solid transparent !important;
+            outline: 0px solid transparent !important;
+        }}
+        QLabel:hover {{
+            border: 0px solid transparent !important;
+            outline: 0px solid transparent !important;
+        }}
+        """)
+        
+        # Disable all focus and interaction
+        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        
+        # Also try this as a backup - set attribute to prevent focus
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        label.setEnabled(True)  # Keep enabled but non-interactive
     # ---------- Theme change hook ----------
 
     def _on_theme_changed(self):

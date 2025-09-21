@@ -33,5 +33,9 @@
   "right_trigger": {
     "behavior": "direct_servo",
     "target": "m1_ch17"
+  },
+  "button_back": {
+    "behavior": "system_control",
+    "system_action": "exit_app"
   }
 }

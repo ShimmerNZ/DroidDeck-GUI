@@ -551,65 +551,6 @@ class HomeScreen(BaseScreen):
         except Exception as e:
             self.logger.error(f"Failed to play sound effect {sound_file}: {e}")
 
-    def _create_category_bar(self, parent_layout: QVBoxLayout):
-        # Create a widget to contain the grid layout
-        category_widget = QWidget()
-        self.category_grid = QGridLayout(category_widget)
-        self.category_grid.setSpacing(8)
-        self.category_grid.setContentsMargins(0, 0, 0, 0)
-        
-        self.category_buttons = []
-
-        # Load scenes config
-        cfg = config_manager.get_config("resources/configs/scenes_config.json")
-        self.scenes = cfg if isinstance(cfg, list) else []
-
-        # Build category list -> scenes map
-        self.category_to_scenes = {}
-        for scene in self.scenes:
-            cats = scene.get("categories", []) or ["All"]
-            for c in cats:
-                self.category_to_scenes.setdefault(c, []).append(scene)
-
-        # If no categories at all, create an "All" bucket
-        if not self.category_to_scenes:
-            self.category_to_scenes = {"All": self.scenes[:]}
-        self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
-
-        font = QFont("Arial", 18, QFont.Weight.Bold)
-        buttons_per_row = 5
-        
-        for idx, cat in enumerate(self.categories):
-            btn = QPushButton(cat)
-            btn.setCheckable(True)
-            btn.setFont(font)
-            btn.setMinimumSize(130, 40)
-            btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
-            btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
-            
-            # Calculate row and column for grid placement
-            row = idx // buttons_per_row
-            col = idx % buttons_per_row
-            
-            self.category_grid.addWidget(btn, row, col)
-            self.category_buttons.append(btn)
-
-        # Make sure all columns have equal stretch
-        for col in range(buttons_per_row):
-            self.category_grid.setColumnStretch(col, 1)
-
-        # default selection
-        self.selected_category_idx = 0
-        
-        # Add the category widget to the parent layout
-        parent_layout.addWidget(category_widget)
-        if self.category_buttons:
-            self.selected_category_idx = 0
-            self.category_buttons[0].setChecked(True)
-            # Force clear all other buttons
-            for i, btn in enumerate(self.category_buttons[1:], 1):
-                btn.setChecked(False)
-
 
     def _get_category_button_style(self, selected: bool) -> str:
         """Get category button style based on current theme"""
@@ -954,37 +895,94 @@ class HomeScreen(BaseScreen):
                 if item.widget():
                     item.widget().setParent(None)
 
-        # Find the category widget in the right frame layout and remove it
-        right_layout = self.right_frame.layout()
-        for i in range(right_layout.count()):
-            item = right_layout.itemAt(i)
-            if item and item.widget() and hasattr(item.widget(), 'layout') and isinstance(item.widget().layout(), QGridLayout):
-                widget = right_layout.takeAt(i).widget()
-                if widget:
-                    widget.setParent(None)
-                break
+        # Remove the category widget if it exists
+        if hasattr(self, 'category_widget') and self.category_widget:
+            self.category_widget.setParent(None)
+            self.category_widget = None
 
-        # Recreate the category bar at the correct position (after header)
-        header_inserted = False
+        # Get the right layout and find the correct insertion position
+        right_layout = self.right_frame.layout()
+        
+        # Find the header widget to insert after it
+        header_position = -1
         for i in range(right_layout.count()):
             item = right_layout.itemAt(i)
             if item and item.widget() and isinstance(item.widget(), QLabel):
                 if item.widget().text() == "SCENE SELECTION":
-                    # Insert category bar after header
-                    self._create_category_bar(right_layout)
-                    header_inserted = True
+                    header_position = i
                     break
         
-        if not header_inserted:
-            # Fallback: add at position 1 (after header)
-            temp_layout = QVBoxLayout()
-            self._create_category_bar(temp_layout)
-            if temp_layout.count() > 0:
-                widget = temp_layout.itemAt(0).widget()
-                right_layout.insertWidget(1, widget)
+        # Create the new category widget
+        self._create_category_widget_only()  # Create widget without adding to layout
+        
+        # Insert at the correct position (right after header)
+        if header_position >= 0:
+            right_layout.insertWidget(header_position + 1, self.category_widget)
+        else:
+            # Fallback: insert at position 1 (assuming header is at 0)
+            right_layout.insertWidget(1, self.category_widget)
         
         self._update_scene_queue_panel()
         self.logger.info("Categories reloaded from updated scene configuration")
+
+    def _create_category_widget_only(self):
+        """Create the category widget without adding it to any layout"""
+        # Create a widget to contain the grid layout
+        self.category_widget = QWidget()
+        self.category_grid = QGridLayout(self.category_widget)
+        self.category_grid.setSpacing(8)
+        self.category_grid.setContentsMargins(0, 0, 0, 0)
+        
+        self.category_buttons = []
+
+        # Load scenes config
+        cfg = config_manager.get_config("resources/configs/scenes_config.json")
+        self.scenes = cfg if isinstance(cfg, list) else []
+
+        # Build category list -> scenes map
+        self.category_to_scenes = {}
+        for scene in self.scenes:
+            cats = scene.get("categories", []) or ["All"]
+            for c in cats:
+                self.category_to_scenes.setdefault(c, []).append(scene)
+
+        # If no categories at all, create an "All" bucket
+        if not self.category_to_scenes:
+            self.category_to_scenes = {"All": self.scenes[:]}
+        self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
+
+        font = QFont("Arial", 18, QFont.Weight.Bold)
+        buttons_per_row = 5
+        
+        for idx, cat in enumerate(self.categories):
+            btn = QPushButton(cat)
+            btn.setCheckable(True)
+            btn.setFont(font)
+            btn.setMinimumSize(130, 40)
+            btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
+            btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
+            
+            # Calculate row and column for grid placement
+            row = idx // buttons_per_row
+            col = idx % buttons_per_row
+            
+            self.category_grid.addWidget(btn, row, col)
+            self.category_buttons.append(btn)
+
+        # Make sure all columns have equal stretch
+        for col in range(buttons_per_row):
+            self.category_grid.setColumnStretch(col, 1)
+
+        # default selection
+        self.selected_category_idx = 0
+        
+        # Set initial button states
+        if self.category_buttons:
+            self.selected_category_idx = 0
+            self.category_buttons[0].setChecked(True)
+            # Force clear all other buttons
+            for i, btn in enumerate(self.category_buttons[1:], 1):
+                btn.setChecked(False)
 
     def connect_scene_screen_signals(self, scene_screen):
         """Connect signals from SceneScreen to update categories when changed."""
@@ -1009,3 +1007,62 @@ class HomeScreen(BaseScreen):
             theme_manager.unregister_callback(self._on_theme_changed)
         except:
             pass  # Ignore errors during cleanup
+
+    def _create_category_bar(self, parent_layout: QVBoxLayout):
+        # Create a widget to contain the grid layout - store reference for cleanup
+        self.category_widget = QWidget()
+        self.category_grid = QGridLayout(self.category_widget)
+        self.category_grid.setSpacing(8)
+        self.category_grid.setContentsMargins(0, 0, 0, 0)
+        
+        self.category_buttons = []
+
+        # Load scenes config
+        cfg = config_manager.get_config("resources/configs/scenes_config.json")
+        self.scenes = cfg if isinstance(cfg, list) else []
+
+        # Build category list -> scenes map
+        self.category_to_scenes = {}
+        for scene in self.scenes:
+            cats = scene.get("categories", []) or ["All"]
+            for c in cats:
+                self.category_to_scenes.setdefault(c, []).append(scene)
+
+        # If no categories at all, create an "All" bucket
+        if not self.category_to_scenes:
+            self.category_to_scenes = {"All": self.scenes[:]}
+        self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
+
+        font = QFont("Arial", 18, QFont.Weight.Bold)
+        buttons_per_row = 5
+        
+        for idx, cat in enumerate(self.categories):
+            btn = QPushButton(cat)
+            btn.setCheckable(True)
+            btn.setFont(font)
+            btn.setMinimumSize(130, 40)
+            btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
+            btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
+            
+            # Calculate row and column for grid placement
+            row = idx // buttons_per_row
+            col = idx % buttons_per_row
+            
+            self.category_grid.addWidget(btn, row, col)
+            self.category_buttons.append(btn)
+
+        # Make sure all columns have equal stretch
+        for col in range(buttons_per_row):
+            self.category_grid.setColumnStretch(col, 1)
+
+        # default selection
+        self.selected_category_idx = 0
+        
+        # Add the category widget to the parent layout
+        parent_layout.addWidget(self.category_widget)
+        if self.category_buttons:
+            self.selected_category_idx = 0
+            self.category_buttons[0].setChecked(True)
+            # Force clear all other buttons
+            for i, btn in enumerate(self.category_buttons[1:], 1):
+                btn.setChecked(False)
