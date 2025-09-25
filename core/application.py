@@ -22,6 +22,7 @@ from widgets.controller_screen import ControllerConfigScreen
 from widgets.settings_screen import SettingsScreen
 from widgets.scene_screen import SceneScreen
 from widgets.splash_screen import DroidDeckSplashScreen, show_shutdown_splash
+from threads.steamdeck import SteamDeckControllerThread
 
 
 class DroidDeckApplication(QMainWindow):
@@ -257,6 +258,9 @@ class DroidDeckApplication(QMainWindow):
         
         self._setup_layout()
         
+        # Initialize Steam Deck controller thread
+        self._setup_controller_thread()
+
         # Apply initial theme
         self._apply_theme()
         self._center_main_window()
@@ -265,6 +269,45 @@ class DroidDeckApplication(QMainWindow):
         self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
         time.sleep(0.2)
     
+    def _setup_controller_thread(self):
+        """Initialize and start the Steam Deck controller thread"""
+
+        # Create controller thread with WebSocket manager
+        import sys
+        if sys.platform == 'darwin':  # macOS
+            if hasattr(self, 'logger'):
+                self.logger.info("macOS detected - controller thread disabled to prevent crashes")
+            return
+        
+        try:
+            
+            self.controller_thread = SteamDeckControllerThread(websocket_manager=self.websocket)
+            
+            # Connect controller signals to any screens that need them
+            if hasattr(self, 'controller_screen'):
+                self.controller_thread.controller_input.connect(
+                    self.controller_screen.handle_controller_input_signal
+                )
+                self.controller_thread.controller_connected.connect(
+                    lambda name, id: self.controller_screen.update_controller_status(f"Connected: {name}", True)
+                )
+                self.controller_thread.controller_disconnected.connect(
+                    lambda reason: self.controller_screen.update_controller_status(f"Disconnected: {reason}", False)
+                )
+
+        
+            # Start the controller monitoring
+            self.controller_thread.start_monitoring()
+            
+            if hasattr(self, 'logger'):
+                self.logger.info("Steam Deck controller thread initialized and started")
+                
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Failed to initialize controller thread: {e}")
+            # Continue without controller - don't crash the app
+
+
     def _setup_background(self):
         """Set application background using theme manager"""
         background_path = theme_manager.get_image_path("background")
@@ -291,7 +334,7 @@ class DroidDeckApplication(QMainWindow):
         self.memory_timer = QTimer()
         self.memory_timer.timeout.connect(MemoryManager.periodic_cleanup)
         self.memory_timer.start(30000)  # 30 seconds
-    
+ 
     def _setup_navigation(self):
         """Setup navigation bar with screen buttons using themed icons"""
         self.nav_bar = QHBoxLayout()
@@ -309,22 +352,79 @@ class DroidDeckApplication(QMainWindow):
         ]
         
         # Create navigation buttons with themed icons
-        for name, screen, icon_key in navigation_items:
+        for i, (name, screen, icon_key) in enumerate(navigation_items):
             btn = QPushButton()
             btn.clicked.connect(lambda _, s=screen, n=name: self.switch_screen(s, n))
+            
+            # Set button size to match icon size exactly (Steam Deck fix)
+            btn.setFixedSize(64, 64)
+            btn.setIconSize(QSize(64, 64))
+            
+            # Remove default button styling that adds padding/margins
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: transparent;
+                    border: none;
+                    padding: 0px;
+                    margin: 0px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 255, 255, 0.1);
+                    border-radius: 8px;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(255, 255, 255, 0.2);
+                }
+            """)
+            
             self.nav_bar.addWidget(btn)
+            
+            # Add spacing between navigation buttons (but not after the last one)
+            if i < len(navigation_items) - 1:
+                self.nav_bar.addSpacing(5)  # Adjust this value for more/less spacing
+            
             self.nav_buttons[name] = {"button": btn, "icon_key": icon_key}
         
-        # Failsafe button with themed icon
+        # Add more space before the failsafe button
+        self.nav_bar.addSpacing(60)  # Larger space before failsafe
+        
+        # Failsafe button with proper sizing and styling
         self.failsafe_button = QPushButton()
         self.failsafe_button.setCheckable(True)
-        self.failsafe_button.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")
+        
+        # Set failsafe button size to match its icon size (300x70 from your code)
+        # But let's make it more reasonable for navigation bar
+        self.failsafe_button.setFixedSize(300, 60)  # Adjust to fit your design
+        self.failsafe_button.setIconSize(QSize(300, 60))  # Match the button size
+        
+        # Style the failsafe button properly
+        self.failsafe_button.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 2px solid rgba(255, 0, 0, 0.3);
+                border-radius: 8px;
+                padding: 0px;
+                margin: 0px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 0, 0, 0.1);
+                border-color: rgba(255, 0, 0, 0.5);
+            }
+            QPushButton:pressed, QPushButton:checked {
+                background-color: rgba(255, 0, 0, 0.2);
+                border-color: rgba(255, 0, 0, 0.8);
+            }
+            QPushButton:checked {
+                background-color: rgba(255, 0, 0, 0.3);
+            }
+        """)
+        
         self.failsafe_button.clicked.connect(self._toggle_failsafe)
         
-        self.nav_bar.addSpacing(20)
         self.nav_bar.addWidget(self.failsafe_button)
         self.nav_bar.addSpacing(100)
-    
+
+
     def _setup_layout(self):
         """Setup main window layout"""
         # Navigation frame
@@ -335,7 +435,9 @@ class DroidDeckApplication(QMainWindow):
         # Main layout
         layout = QVBoxLayout()
         layout.setSpacing(0)
-        layout.addSpacing(60)
+        
+        # CHANGE: Reduce top spacing to move header down by 5px
+        layout.addSpacing(75)  # Was 60, now 55 (5px less)
         
         # Header container
         header_container = QWidget()
@@ -348,7 +450,9 @@ class DroidDeckApplication(QMainWindow):
         layout.addSpacing(2)
         layout.addWidget(self.stack)
         layout.addWidget(nav_frame)
-        layout.addSpacing(35)
+        
+        # CHANGE: Reduce bottom spacing to move navigation up by 5px
+        layout.addSpacing(45)  # Was 35, now 30 (5px less)
         
         container = QWidget()
         container.setLayout(layout)
@@ -356,7 +460,8 @@ class DroidDeckApplication(QMainWindow):
         
         # Set initial screen
         self.switch_screen(self.home_screen, "Home")
-    
+
+
     def _apply_theme(self):
         """Apply current theme to all UI elements"""
         # Update background
@@ -376,11 +481,12 @@ class DroidDeckApplication(QMainWindow):
                 if hasattr(self, 'logger'):
                     self.logger.warning(f"Icon not found: {normal_icon_path}")
         
-        # Update failsafe button icon
+        # Update failsafe button icon with new size
         failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
         if os.path.exists(failsafe_icon_path):
             self.failsafe_button.setIcon(QIcon(failsafe_icon_path))
-            self.failsafe_button.setIconSize(QSize(300, 70))
+            # Use the new smaller size instead of 300x70
+            self.failsafe_button.setIconSize(QSize(320, 65))
         else:
             if hasattr(self, 'logger'):
                 self.logger.warning(f"Failsafe icon not found: {failsafe_icon_path}")
@@ -390,7 +496,7 @@ class DroidDeckApplication(QMainWindow):
         
         if hasattr(self, 'logger'):
             self.logger.info(f"Applied {theme_manager.get_display_name()} theme to DroidDeck")
-    
+
     @error_boundary
     def switch_screen(self, screen, name: str):
         """Switch to specified screen and update navigation with themed icons"""
@@ -461,6 +567,10 @@ class DroidDeckApplication(QMainWindow):
         
         if hasattr(self, 'logger'):
             self.logger.info("DroidDeck closing - cleaning up resources")
+
+        if hasattr(self, 'controller_thread'):
+            self.controller_thread.stop_monitoring()
+
         
         shutdown_steps = [
             ("Saving configurations...", self._save_configs_on_exit),
@@ -497,27 +607,27 @@ class DroidDeckApplication(QMainWindow):
         """Close WebSocket and network connections"""
         if hasattr(self, 'websocket'):
             self.websocket.close()
-    
+        
     def _stop_background_processes(self):
         """Stop background processes"""
         # Stop network monitoring in header
-        if hasattr(self.header, 'cleanup'):
+        if hasattr(self, 'header') and hasattr(self.header, 'cleanup'):
             self.header.cleanup()
         
-        # Stop camera thread
-        if hasattr(self.camera_screen, 'cleanup'):
+        # Stop camera thread - check if attribute exists first
+        if hasattr(self, 'camera_screen') and hasattr(self.camera_screen, 'cleanup'):
             self.camera_screen.cleanup()
         
         # Stop servo operations
-        if hasattr(self.servo_screen, 'stop_all_operations'):
+        if hasattr(self, 'servo_screen') and hasattr(self.servo_screen, 'stop_all_operations'):
             self.servo_screen.stop_all_operations()
         
         # Stop health screen network monitoring
-        if hasattr(self.health_screen, 'cleanup'):
+        if hasattr(self, 'health_screen') and hasattr(self.health_screen, 'cleanup'):
             self.health_screen.cleanup()
         
         # Cleanup settings screen
-        if hasattr(self.settings_screen, 'cleanup'):
+        if hasattr(self, 'settings_screen') and hasattr(self.settings_screen, 'cleanup'):
             self.settings_screen.cleanup()
     
     def _cleanup_resources(self):

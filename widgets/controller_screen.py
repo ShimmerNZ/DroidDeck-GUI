@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
     QStackedWidget, QProgressBar, QFrame, QGridLayout, QComboBox,
     QSlider, QSpinBox, QGroupBox, QTextEdit, QCheckBox, QLineEdit, 
-    QMessageBox, QScrollArea
+    QMessageBox, QScrollArea, QApplication
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -18,6 +18,7 @@ from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+from widgets.controller_status_splash import show_controller_status_splash
 
 
 # ========================================
@@ -645,6 +646,7 @@ class ControllerConfigScreen(BaseScreen):
     def handle_websocket_message(self, message):
         """Handle WebSocket messages including maestro detection and system control commands"""
         try:
+            self.handle_controller_input_for_status(message)
             msg = json.loads(message)
             msg_type = msg.get("type")
             
@@ -695,6 +697,136 @@ class ControllerConfigScreen(BaseScreen):
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error handling system control command: {e}")
+
+    def open_controller_status(self):
+        """Open controller status display splash"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            
+            self.controller_status_splash = show_controller_status_splash(self)
+            
+            # Get the main application instance to access the controller thread
+            app = QApplication.instance()
+            main_window = None
+            for widget in app.topLevelWidgets():
+                if hasattr(widget, 'controller_thread'):
+                    main_window = widget
+                    break
+            
+            if main_window and hasattr(main_window, 'controller_thread'):
+                controller_thread = main_window.controller_thread
+                
+                # Connect signals for live updates - but don't duplicate existing connections
+                try:
+                    controller_thread.controller_input.disconnect(self.controller_status_splash.update_controller_input)
+                except:
+                    pass  # Connection didn't exist
+                
+                try:
+                    controller_thread.controller_connected.disconnect()
+                except:
+                    pass
+                    
+                try:
+                    controller_thread.controller_disconnected.disconnect()
+                except:
+                    pass
+                
+                # Now connect the signals
+                controller_thread.controller_input.connect(
+                    self.controller_status_splash.update_controller_input
+                )
+                controller_thread.controller_connected.connect(
+                    lambda name, id: self.controller_status_splash.set_controller_info(name, True)
+                )
+                controller_thread.controller_disconnected.connect(
+                    lambda reason: self.controller_status_splash.set_controller_info(f"Disconnected: {reason}", False)
+                )
+                
+                # Set initial controller info
+                controller_info = controller_thread.get_controller_info()
+                self.controller_status_splash.set_controller_info(
+                    controller_info.get("controller_name", "Steam Deck Controller"),
+                    controller_info.get("connected", False)
+                )
+                
+                self.logger.info("Controller status splash connected to controller thread")
+            else:
+                self.logger.warning("No controller thread available for status display")
+                self.controller_status_splash.set_controller_info("No Controller Thread", False)
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to open controller status splash: {e}")
+
+    def handle_controller_input_signal(self, input_data):
+        """Handle controller input from the Qt signal (thread-safe)"""
+        try:
+            # Update controller status to show it's connected and active
+            if hasattr(self, 'controller_status_label'):
+                self.controller_status_label.setText("Connected & Active")
+                self.controller_status_label.setStyleSheet("color: #51cf66; margin-left: 10px; border: none; background: transparent;")
+            
+            # Process the input data through your existing behavior registry
+            if self.behavior_registry:
+                # Convert ControllerInputData to the format expected by behavior registry
+                for axis_name, value in input_data.axes.items():
+                    if abs(value) > 0.1:  # Only process significant movements
+                        self.behavior_registry.process_input(axis_name, value, {})
+                
+                for button_name, pressed in input_data.buttons.items():
+                    if pressed:  # Only process button presses
+                        self.behavior_registry.process_input(button_name, 1.0, {})
+            
+            # Forward to controller status splash if open
+            if hasattr(self, 'controller_status_splash') and self.controller_status_splash and self.controller_status_splash.isVisible():
+                self.controller_status_splash.update_controller_input(input_data)
+                
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Error handling controller input signal: {e}")
+
+    def update_controller_status(self, status_text: str, connected: bool):
+        """Update controller status display (thread-safe)"""
+        try:
+            if hasattr(self, 'controller_status_label'):
+                self.controller_status_label.setText(status_text)
+                if connected:
+                    self.controller_status_label.setStyleSheet("color: #51cf66; margin-left: 10px; border: none; background: transparent;")
+                else:
+                    self.controller_status_label.setStyleSheet("color: #ff6b6b; margin-left: 10px; border: none; background: transparent;")
+                    
+            # Also update the splash if it's open
+            if hasattr(self, 'controller_status_splash') and self.controller_status_splash and self.controller_status_splash.isVisible():
+                controller_name = status_text.replace("Connected: ", "").replace("Disconnected: ", "")
+                self.controller_status_splash.set_controller_info(controller_name, connected)
+                
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Error updating controller status: {e}")
+
+
+    def handle_controller_input_for_status(self, message: str):
+        """Handle WebSocket controller input for status display"""
+        try:
+            if hasattr(self, 'controller_status_splash') and self.controller_status_splash.isVisible():
+                msg = json.loads(message)
+                
+                if msg.get("type") == "steamdeck_controller":
+                    # Create ControllerInputData from WebSocket message
+                    from threads.steamdeck_controller import ControllerInputData
+                    
+                    input_data = ControllerInputData(
+                        axes=msg.get("axes", {}),
+                        buttons=msg.get("buttons", {}),
+                        timestamp=msg.get("timestamp", time.time()),
+                        sequence=msg.get("sequence", 0)
+                    )
+                    
+                    self.controller_status_splash.update_controller_input(input_data)
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling controller input for status: {e}")
+        
 
     def _handle_maestro_info(self, data):
         """Handle maestro detection results"""
@@ -1139,7 +1271,25 @@ class ControllerConfigScreen(BaseScreen):
             QPushButton:disabled { background-color: #555555; }
         """)
         self.calibration_button.clicked.connect(self.open_calibration_dialog)
-        
+                
+        # Add the Controller Status button
+        self.status_button = QPushButton("Controller Status")
+        self.status_button.setStyleSheet("""
+            QPushButton {
+                background-color: #51cf66;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+                margin-left: 10px;
+            }
+            QPushButton:hover { background-color: #69db7c; }
+            QPushButton:disabled { background-color: #555555; }
+        """)
+        self.status_button.clicked.connect(self.open_controller_status)
+
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.setStyleSheet("""
             QPushButton {
@@ -1156,6 +1306,7 @@ class ControllerConfigScreen(BaseScreen):
         self.refresh_btn.clicked.connect(self.request_controller_info)
         
         status_header_layout.addWidget(self.calibration_button)
+        status_header_layout.addWidget(self.status_button)  
         status_header_layout.addWidget(self.refresh_btn)
         
         layout.addLayout(status_header_layout)

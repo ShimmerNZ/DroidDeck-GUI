@@ -1,0 +1,86 @@
+{
+  "steam_deck": {
+    "button_map": {
+      "0": "button_b",
+      "1": "button_a",
+      "2": "button_x", 
+      "3": "button_y",
+      "4": "button_menu",
+      "5": "shoulder_left",
+      "6": "shoulder_right",
+      "7": "trigger_left_click",
+      "8": "trigger_right_click",
+      "9": "button_view",
+      "10": "button_steam",
+      "11": "stick_left_click",
+      "12": "stick_right_click",
+      "13": "dpad_up",
+      "14": "dpad_down", 
+      "15": "dpad_left",
+      "16": "dpad_right",
+      "17": "paddle_left_upper",
+      "18": "paddle_left_lower",
+      "19": "paddle_right_upper",
+      "20": "paddle_right_lower"
+    },
+    "axis_map": {
+      "0": "left_stick_x",
+      "1": "left_stick_y",
+      "2": "right_stick_x",
+      "3": "right_stick_y", 
+      "4": "left_trigger",
+      "5": "right_trigger"
+    },
+    "deadzone": 0.05,
+    "description": "Steam Deck built-in controller mappings"
+  },
+  "generic_gamepad": {
+    "button_map": {
+      "0": "button_a",
+      "1": "button_b",
+      "2": "button_x",
+      "3": "button_y",
+      "4": "shoulder_left",
+      "5": "shoulder_right",
+      "6": "button_back",
+      "7": "button_start",
+      "8": "stick_left_click",
+      "9": "stick_right_click"
+    },
+    "axis_map": {
+      "0": "left_stick_x",
+      "1": "left_stick_y", 
+      "2": "left_trigger",
+      "3": "right_stick_x",
+      "4": "right_stick_y",
+      "5": "right_trigger"
+    },
+    "deadzone": 0.1,
+    "description": "Generic gamepad controller mappings"
+  },
+  "xbox_controller": {
+    "button_map": {
+      "0": "button_a",
+      "1": "button_b", 
+      "2": "button_x",
+      "3": "button_y",
+      "4": "shoulder_left",
+      "5": "shoulder_right",
+      "6": "button_back",
+      "7": "button_start",
+      "8": "stick_left_click",
+      "9": "stick_right_click",
+      "10": "button_guide"
+    },
+    "axis_map": {
+      "0": "left_stick_x",
+      "1": "left_stick_y",
+      "2": "left_trigger", 
+      "3": "right_stick_x",
+      "4": "right_stick_y",
+      "5": "right_trigger"
+    },
+    "deadzone": 0.08,
+    "description": "Xbox controller mappings"
+  }
+}
