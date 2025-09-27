@@ -270,7 +270,7 @@ class DroidDeckApplication(QMainWindow):
         time.sleep(0.2)
     
     def _setup_controller_thread(self):
-        """Initialize and start the Steam Deck controller thread"""
+        """Initialize and start the Steam Deck controller thread with thread-safe WebSocket"""
 
         # Create controller thread with WebSocket manager
         import sys
@@ -295,18 +295,35 @@ class DroidDeckApplication(QMainWindow):
                     lambda reason: self.controller_screen.update_controller_status(f"Disconnected: {reason}", False)
                 )
 
+            # IMPORTANT: Connect the WebSocket message signal to main thread handler
+            self.controller_thread.send_websocket_message.connect(self._send_controller_message_main_thread)
         
             # Start the controller monitoring
             self.controller_thread.start_monitoring()
             
             if hasattr(self, 'logger'):
-                self.logger.info("Steam Deck controller thread initialized and started")
+                self.logger.info("Steam Deck controller thread initialized with thread-safe WebSocket")
                 
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Failed to initialize controller thread: {e}")
             # Continue without controller - don't crash the app
 
+    def _send_controller_message_main_thread(self, message: dict):
+        """
+        Handle controller WebSocket messages in the main GUI thread.
+        This is called via Qt signal from the controller thread.
+        """
+        
+        try:
+            if self.websocket and self.websocket.is_connected():
+                success = self.websocket.send_safe(message)
+                if not success:
+                    self.logger.warning("Failed to send controller message")
+            else:
+                self.logger.warning("WebSocket not connected, skipping controller message")
+        except Exception as e:
+            self.logger.error(f"Error sending controller message from main thread: {e}", exc_info=True)
 
     def _setup_background(self):
         """Set application background using theme manager"""
@@ -594,10 +611,35 @@ class DroidDeckApplication(QMainWindow):
         # Final step
         self.shutdown_splash.update_shutdown_progress(len(shutdown_steps))
         time.sleep(0.8)
-        
+        if hasattr(self, 'shutdown_splash'):
+            self._wait_for_audio_completion()
+
         self.shutdown_splash.close()
         event.accept()
-    
+    def _wait_for_audio_completion(self):
+        """Wait for shutdown audio to finish playing before closing"""
+        try:
+            import pygame
+            if pygame.mixer.get_init():
+                # Wait for audio to finish, with a maximum timeout of 10 seconds
+                max_wait_time = 10.0
+                check_interval = 0.1
+                elapsed_time = 0.0
+                
+                while pygame.mixer.music.get_busy() and elapsed_time < max_wait_time:
+                    time.sleep(check_interval)
+                    elapsed_time += check_interval
+                    QApplication.processEvents()
+                
+                if hasattr(self, 'logger'):
+                    if elapsed_time >= max_wait_time:
+                        self.logger.warning("Audio playback timeout reached during shutdown")
+                    else:
+                        self.logger.info(f"Shutdown audio completed after {elapsed_time:.1f} seconds")
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"Error waiting for audio completion: {e}")
+
     def _save_configs_on_exit(self):
         """Save any pending configurations"""
         # Add any config saving logic here if needed

@@ -149,8 +149,7 @@ class ConfigManager:
         try:
             config = self.get_config("resources/configs/movement_controls.json")
             return (
-                config.get("steam_controls", []),
-                config.get("nema_movements", [])
+                config.get("steam_controls", [])
             )
         except Exception as e:
             self.logger.error(f"Failed to load movement controls: {e}")

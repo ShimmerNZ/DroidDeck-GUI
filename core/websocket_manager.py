@@ -71,13 +71,19 @@ class WebSocketManager(QWebSocket):
     
     def send_safe(self, message: str) -> bool:
         """Safe message sending with connection check"""
+
         if self.state() == QAbstractSocket.SocketState.ConnectedState:
             if isinstance(message, dict):
                 message = json.dumps(message)
-            self.sendTextMessage(message)
-            return True
+            
+            try:
+                self.sendTextMessage(message)
+                return True
+            except Exception as e:
+                self.logger.error(f"sendTextMessage failed: {e}")
+                return False
         else:
-            self.logger.warning("WebSocket not connected, message not sent")
+            self.logger.warning(f"NOT CONNECTED - state is {self.state()}, not sending")
             return False
     
     def send_command(self, command_type: str, **kwargs) -> bool:

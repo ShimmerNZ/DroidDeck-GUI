@@ -174,6 +174,16 @@ sudo apt install -y --no-install-recommends \
     python3 python3-pip python3-venv python3-dev \
     build-essential pkg-config curl wget git
 
+# Install audio libraries for Steam Deck
+echo "Installing PulseAudio and ALSA libraries..."
+sudo apt install -y --no-install-recommends \
+    libpulse0 \
+    libpulse-dev \
+    pulseaudio-utils \
+    libasound2 \
+    libasound2-dev \
+    libasound2-plugins
+
 # Install comprehensive X11 and XCB libraries for PyQt6
 echo "Installing comprehensive X11 and XCB libraries..."
 sudo apt install -y --no-install-recommends \
@@ -237,8 +247,7 @@ sudo apt install -y --no-install-recommends \
     libfontconfig1 libfontconfig1-dev \
     libfreetype6 libfreetype6-dev \
     libxkbcommon0 libxkbcommon-dev \
-    libxkbcommon-x11-0 libxkbcommon-x11-dev \
-    libasound2 libasound2-dev
+    libxkbcommon-x11-0 libxkbcommon-x11-dev
 
 # Create Python virtual environment
 echo "Creating Python virtual environment..."
@@ -350,7 +359,7 @@ print('✅ Testing complete')
 
 echo "🎉 Container setup complete!"
 echo "Python environment: /home/deck/droiddeck_env"
-echo "All GUI libraries installed for Steam Deck compatibility"
+echo "All GUI and audio libraries installed for Steam Deck compatibility"
 EOF
 
     chmod +x /tmp/droiddecksetup.sh
@@ -388,14 +397,12 @@ setup_project_structure() {
 create_launcher() {
     print_step "Creating launch script..."
     
-    cat > "$PROJECT_DIR/launch.sh" << EOF
+    cat > "$PROJECT_DIR/launch.sh" << 'EOF'
 #!/bin/bash
-# DroidDeck Launcher for Steam Deck - Optimized Settings with Audio
+# DroidDeck Launcher for Steam Deck - Fixed Audio
 
-# Check if main.py exists
 if [[ ! -f "$HOME/DroidDeck/main.py" ]]; then
     echo "❌ main.py not found in $HOME/DroidDeck/"
-    echo "Please copy your DroidDeck source files to $HOME/DroidDeck/"
     exit 1
 fi
 
@@ -409,65 +416,49 @@ export QT_FONT_DPI=64
 export QT_SCALE_FACTOR_ROUNDING_POLICY=RoundPreferFloor
 export QT_USE_PHYSICAL_DPI=0
 export QT_DEVICE_PIXEL_RATIO=1
-export DISPLAY=${DISPLAY:-:0}
+export DISPLAY=:0
 
 echo "🤖 DroidDeck Launcher (Steam Deck Optimized)"
 echo "📁 Project: $HOME/DroidDeck"
 
-echo "🚀 Starting DroidDeck with optimized scaling and audio support..."
-
-# Get user ID for PulseAudio paths
-USER_ID=$(id -u)
-
-# Launch in distrobox container with audio and display settings
-distrobox enter droiddeckapp -- bash -c "
+distrobox enter droiddeckapp -- bash -c '
     cd /home/deck/DroidDeck
     source /home/deck/droiddeck_env/bin/activate
     
-    # Set SteamDeck-specific audio environment variables
-    export SDL_AUDIODRIVER=pulse
-    export PULSE_RUNTIME_PATH=/run/user/$USER_ID/pulse
-    export PULSE_SERVER=unix:/run/user/$USER_ID/pulse/native
+    # Use PipeWire via PulseAudio compatibility
+    export SDL_AUDIODRIVER=pulseaudio
+    export PULSE_RUNTIME_PATH=/run/user/1000/pulse
+    export PULSE_SERVER=unix:/run/user/1000/pulse/native
     
-    # SteamDeck ALSA configuration (fallback)
-    export ALSA_PCM_CARD=1
-    export ALSA_PCM_DEVICE=1
-    export AUDIODEV=/dev/dsp1
-    
-    # Create ALSA config if it doesn't exist
-    if [[ ! -f ~/.asoundrc ]]; then
-        cat > ~/.asoundrc << 'ALSA_EOF'
+    # Set default ALSA device to Steam Deck speakers (card 1, device 1)
+    cat > ~/.asoundrc << "ALSA_EOF"
+defaults.pcm.card 1
+defaults.pcm.device 1
+defaults.ctl.card 1
+
 pcm.!default {
     type pulse
-}
-ctl.!default {
-    type pulse
+    fallback "steamdeck"
 }
 
-# SteamDeck hardware fallback
+ctl.!default {
+    type pulse
+    fallback "steamdeck"
+}
+
 pcm.steamdeck {
     type hw
     card 1
     device 1
 }
+
 ctl.steamdeck {
     type hw
     card 1
 }
 ALSA_EOF
-        echo '🔧 Created ALSA configuration for SteamDeck'
-    fi
     
-    # Test audio availability
-    if [[ -S /run/user/$USER_ID/pulse/native ]]; then
-        echo '🔊 PipeWire/PulseAudio socket found - audio enabled'
-    else
-        echo '⚠️  PulseAudio socket not found, trying ALSA direct'
-        # Try to use ALSA directly for SteamDeck speakers
-        export SDL_AUDIODRIVER=alsa
-        export ALSA_CARD=acp5x
-        export QT_LOGGING_RULES='qt.multimedia.warning=false'
-    fi
+    echo "🔊 Audio configured for Steam Deck speakers (card 1, device 1)"
     
     # Set optimized display environment variables in container
     export QT_QPA_PLATFORM=xcb
@@ -479,14 +470,11 @@ ALSA_EOF
     export QT_SCALE_FACTOR_ROUNDING_POLICY=RoundPreferFloor
     export QT_USE_PHYSICAL_DPI=0
     export QT_DEVICE_PIXEL_RATIO=1
-    export DISPLAY=$DISPLAY
+    export DISPLAY=:0
     
-    # Additional pygame/SDL audio settings for SteamDeck
-    export SDL_AUDIODRIVER=pulse
-    
-    echo '🎮 Starting DroidDeck with SteamDeck audio configuration...'
-    python main.py \"$@\"
-"
+    echo "🎮 Starting DroidDeck with SteamDeck audio configuration..."
+    python main.py
+'
 EOF
     
     chmod +x "$PROJECT_DIR/launch.sh"
@@ -527,7 +515,7 @@ EOF
             print_info "Found Steam User ID: $STEAM_USER_ID"
             
             # Create Steam shortcut helper script for manual steps
-            cat > "$PROJECT_DIR/complete_steam_setup.sh" << 'EOF'
+            cat > "$PROJECT_DIR/complete_steam_setup.sh" << 'STEAM_EOF'
 #!/bin/bash
 # Complete Steam integration for DroidDeck
 
@@ -549,7 +537,7 @@ echo "✅ After these steps, DroidDeck will be available in Gaming Mode!"
 echo ""
 echo "🎯 Quick test: Run this in Desktop Mode first:"
 echo "   $HOME/DroidDeck/launch.sh"
-EOF
+STEAM_EOF
             
             chmod +x "$PROJECT_DIR/complete_steam_setup.sh"
             
@@ -698,7 +686,7 @@ main() {
     print_success "🎉 DroidDeck Installation Complete!"
     echo ""
     print_info "📁 Project Directory: $PROJECT_DIR"
-    print_info "🐧 Container Name: $CONTAINER_NAME"
+    print_info "🧊 Container Name: $CONTAINER_NAME"
     print_info "🐍 Python Environment: /home/deck/droiddeck_env (in container)"
     echo ""
     print_warning "📋 Next Steps:"

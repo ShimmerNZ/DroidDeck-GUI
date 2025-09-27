@@ -870,17 +870,18 @@ class ControllerConfigScreen(BaseScreen):
         """Load predefined dropdown options from configs - now supports multiple controller types"""
         # Steam Deck inputs (default)
         self.steam_inputs = [
-            "left_stick", "right_stick",
-            "left_stick_x", "left_stick_y", "right_stick_x", "right_stick_y",
-            "left_trigger", "right_trigger", "button_a", "button_b", "button_x", "button_y",
-            "shoulder_left", "shoulder_right", "dpad_up", "dpad_down", "dpad_left", "dpad_right"
-        ]
-        
-        # Wii Remote + Nunchuk inputs
-        self.wii_inputs = [
-            "button_a", "button_b", "button_1", "button_2", "button_plus", "button_minus", "button_home",
-            "nunchuk_c", "nunchuk_z", "wiimote_tilt_x", "wiimote_tilt_y", 
-            "nunchuk_stick_x", "nunchuk_stick_y", "dpad_up", "dpad_down", "dpad_left", "dpad_right"
+            # Axes
+            "left_stick_x", "left_stick_y", 
+            "left_trigger",
+            "right_stick_x", "right_stick_y",
+            "right_trigger",
+            # Buttons
+            "button_a", "button_b", "button_x", "button_y",
+            "shoulder_left", "shoulder_right",
+            "button_menu",
+            "trigger_left_click", "trigger_right_click",
+            "stick_left_click", "stick_right_click",
+            "dpad_up", "dpad_down", "dpad_left", "dpad_right"
         ]
         
         # Start with Steam Deck as default - will be updated when controller connects
@@ -959,7 +960,7 @@ class ControllerConfigScreen(BaseScreen):
         
         # System Action combo with clean label
         action_combo = QComboBox()
-        system_actions = ["exit_app", "restart_app", "restart_pi", "shutdown_pi"]
+        system_actions = ["up", "down", "left", "right", "select", "exit", "exit_app", "restart_app", "restart_pi", "shutdown_pi"]
         action_combo.addItems(["Select Action..."] + system_actions)
         if 'system_action' in row_data['config']:
             action_combo.setCurrentText(row_data['config']['system_action'])
@@ -993,10 +994,14 @@ class ControllerConfigScreen(BaseScreen):
         
         # Action descriptions with location info
         descriptions = {
-            "exit_app": "Close the frontend application (handled locally)",
-            "restart_app": "Restart the frontend application (handled locally)", 
-            "restart_pi": "Reboot the Raspberry Pi (sent to backend)",
-            "shutdown_pi": "Shutdown the Raspberry Pi (sent to backend)"
+            "up": "Navigate up in menus",
+            "down": "Navigate down in menus",
+            "left": "Navigate left in menus",
+            "right": "Navigate right in menus",
+            "select": "Select/confirm in menus",
+            "exit_app": "Close app", 
+            "restart_pi": "Reboot the Raspberry Pi",
+            "shutdown_pi": "Shutdown the Raspberry Pi"
         }
         
         current_action = row_data['config'].get('system_action', 'Not configured')

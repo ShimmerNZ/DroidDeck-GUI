@@ -31,10 +31,11 @@ class SteamDeckControllerThread(QThread):
     
     # Qt signals for thread-safe communication
     controller_input = pyqtSignal(ControllerInputData)
-    controller_connected = pyqtSignal(str, str)  # controller_name, controller_id
-    controller_disconnected = pyqtSignal(str)     # reason
-    heartbeat_signal = pyqtSignal(float)          # timestamp
-    stats_updated = pyqtSignal(dict)              # statistics
+    controller_connected = pyqtSignal(str, str)
+    controller_disconnected = pyqtSignal(str)
+    heartbeat_signal = pyqtSignal(float)
+    stats_updated = pyqtSignal(dict)
+    send_websocket_message = pyqtSignal(dict)
     
     def __init__(self, websocket_manager=None):
         super().__init__()
@@ -53,14 +54,14 @@ class SteamDeckControllerThread(QThread):
         self.sequence_number = 0
         
         # Timing control
-        self.poll_rate_hz = 60  # 60Hz for responsive control
+        self.poll_rate_hz = 10
         self.poll_interval = 1.0 / self.poll_rate_hz
-        self.heartbeat_interval = 0.5  # 500ms heartbeat
+        self.heartbeat_interval = 0.5
         self.last_heartbeat = 0
         
         # Safety monitoring
         self.safety_enabled = True
-        self.max_missed_heartbeats = 3  # Stop after 1.5 seconds
+        self.max_missed_heartbeats = 3
         self.last_input_sent = 0
         
         # Statistics
@@ -73,7 +74,7 @@ class SteamDeckControllerThread(QThread):
             "last_input_time": 0
         }
         
-        # Load controller mappings from config
+        # Load controller mappings
         self.button_mappings = {}
         self.axis_mappings = {}
         self._load_controller_mappings()
@@ -83,7 +84,6 @@ class SteamDeckControllerThread(QThread):
     def _load_controller_mappings(self):
         """Load controller button/axis mappings from configuration"""
         try:
-            # Use existing get_config method instead of non-existent get_controller_mappings
             mappings_config = config_manager.get_config("resources/configs/controller_mappings.json")
             
             if not mappings_config:
@@ -100,9 +100,8 @@ class SteamDeckControllerThread(QThread):
             self.button_mappings = steam_deck_config.get("button_map", {})
             self.axis_mappings = steam_deck_config.get("axis_map", {})
             
-            self.logger.info(f"Loaded SteamDeck mappings: {len(self.button_mappings)} buttons, {len(self.axis_mappings)} axes")
+            #self.logger.info(f"Loaded SteamDeck mappings: {len(self.button_mappings)} buttons, {len(self.axis_mappings)} axes")
             
-            # Fallback to defaults if mappings are empty
             if not self.button_mappings and not self.axis_mappings:
                 self.logger.warning("Empty controller mappings loaded, using defaults")
                 self._set_default_mappings()
@@ -135,6 +134,64 @@ class SteamDeckControllerThread(QThread):
         }
         
         self.logger.info("Using default SteamDeck controller mappings")
+    
+    def _connect_websocket(self):
+        """Connect to WebSocket server using websocket-client library"""
+        try:
+            self.logger.info(f"Connecting to WebSocket: {self.websocket_url}")
+            
+            # Create WebSocket with callbacks
+            self.ws = websocket.WebSocketApp(
+                self.websocket_url,
+                on_open=self._on_ws_open,
+                on_message=self._on_ws_message,
+                on_error=self._on_ws_error,
+                on_close=self._on_ws_close
+            )
+            
+            # Run WebSocket in separate thread
+            self.ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+            self.ws_thread.start()
+            
+            # Wait for connection with timeout
+            timeout = 5
+            start = time.time()
+            while not self.ws_connected and time.time() - start < timeout:
+                time.sleep(0.1)
+            
+            if self.ws_connected:
+                self.logger.info("WebSocket connected successfully")
+                return True
+            else:
+                self.logger.warning("WebSocket connection timeout")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"WebSocket connection error: {e}")
+            return False
+    
+    def _on_ws_open(self, ws):
+        """WebSocket opened callback"""
+        self.ws_connected = True
+        self.logger.info("WebSocket connection opened")
+    
+    def _on_ws_message(self, ws, message):
+        """WebSocket message received callback"""
+        try:
+            data = json.loads(message)
+            self.logger.debug(f"WebSocket message received: {data.get('type')}")
+        except Exception as e:
+            self.logger.error(f"Error processing WebSocket message: {e}")
+    
+    def _on_ws_error(self, ws, error):
+        """WebSocket error callback"""
+        self.logger.error(f"WebSocket error: {error}")
+        self.ws_connected = False
+    
+    def _on_ws_close(self, ws, close_status_code, close_msg):
+        """WebSocket closed callback"""
+        self.ws_connected = False
+        self.logger.warning(f"WebSocket closed: {close_status_code} - {close_msg}")
     
     def start_monitoring(self):
         """Start the controller monitoring thread"""
@@ -172,11 +229,6 @@ class SteamDeckControllerThread(QThread):
                 if self.controller_active and self.joystick:
                     self._process_controller_input(current_time)
                 
-                # Send heartbeat if needed
-                if current_time - self.last_heartbeat >= self.heartbeat_interval:
-                    self._send_heartbeat(current_time)
-                    self.last_heartbeat = current_time
-                
                 # Update statistics periodically
                 if int(current_time) % 5 == 0:  # Every 5 seconds
                     self._update_stats()
@@ -187,7 +239,7 @@ class SteamDeckControllerThread(QThread):
             except Exception as e:
                 self.logger.error(f"Controller thread error: {e}")
                 time.sleep(1.0)  # Prevent rapid error loops
-            
+    
     def _init_pygame(self):
         """Initialize pygame for joystick input"""
         try:
@@ -197,7 +249,6 @@ class SteamDeckControllerThread(QThread):
             joystick_count = pygame.joystick.get_count()
             self.logger.info(f"Pygame initialized - {joystick_count} joysticks detected")
             
-            # DEBUG: List all detected joysticks
             for i in range(joystick_count):
                 joystick = pygame.joystick.Joystick(i)
                 joystick.init()
@@ -222,26 +273,20 @@ class SteamDeckControllerThread(QThread):
         except Exception as e:
             self.logger.error(f"Error cleaning up pygame: {e}")
     
-
     def _check_controller_connection(self):
-        """Check for controller connection/disconnection events with safety checks"""
+        """Check for controller connection/disconnection events"""
         try:
-            # Ensure joystick subsystem is still initialized
             if not pygame.joystick.get_init():
-                self.logger.warning("Joystick subsystem not initialized, reinitializing...")
                 pygame.joystick.init()
                 return
             
             joystick_count = pygame.joystick.get_count()
             
-            # Controller connected
             if not self.controller_active and joystick_count > 0:
                 try:
-                    # Create joystick instance with safety checks
-                    self.joystick = pygame.joystick.Joystick(0)  # Use first controller
+                    self.joystick = pygame.joystick.Joystick(0)
                     self.joystick.init()
                     
-                    # Verify joystick is properly initialized before accessing properties
                     if self.joystick.get_init():
                         self.controller_name = self.joystick.get_name()
                         self.controller_id = f"joy_{self.joystick.get_instance_id()}"
@@ -251,7 +296,6 @@ class SteamDeckControllerThread(QThread):
                         self.logger.info(f"Controller connected: {self.controller_name}")
                         self.controller_connected.emit(self.controller_name, self.controller_id)
                     else:
-                        self.logger.error("Failed to initialize joystick instance")
                         if self.joystick:
                             try:
                                 self.joystick.quit()
@@ -259,16 +303,15 @@ class SteamDeckControllerThread(QThread):
                                 pass
                             self.joystick = None
                             
-                except Exception as init_error:
-                    self.logger.error(f"Controller initialization error: {init_error}")
-                    if hasattr(self, 'joystick') and self.joystick:
+                except Exception as e:
+                    self.logger.error(f"Controller initialization error: {e}")
+                    if self.joystick:
                         try:
                             self.joystick.quit()
                         except:
                             pass
                         self.joystick = None
             
-            # Controller disconnected  
             elif self.controller_active and joystick_count == 0:
                 self._handle_controller_disconnect("Controller physically disconnected")
                 
@@ -276,8 +319,7 @@ class SteamDeckControllerThread(QThread):
             self.logger.error(f"Controller connection check failed: {e}")
             if self.controller_active:
                 self._handle_controller_disconnect(f"Connection error: {e}")
-
-
+    
     def _handle_controller_disconnect(self, reason: str):
         """Handle controller disconnection"""
         self.controller_active = False
@@ -292,26 +334,32 @@ class SteamDeckControllerThread(QThread):
         
         self.logger.warning(f"Controller disconnected: {reason}")
         self.controller_disconnected.emit(reason)
-        
-        # Send emergency stop via WebSocket
-        self._send_emergency_stop(reason)
-        
+    
     def _process_controller_input(self, current_time: float):
-        """Process current controller input and send via WebSocket with safety checks"""
+        """Process current controller input and send via WebSocket"""
         try:
             if not self.joystick or not self.joystick.get_init():
                 return
-                
-            # Verify joystick is still valid before accessing
+            
             try:
-                # Test if joystick is still accessible
                 self.joystick.get_numaxes()
             except pygame.error:
                 self.logger.warning("Joystick became invalid, reconnecting...")
                 self._handle_controller_disconnect("Joystick became invalid")
                 return
                 
-            # Read analog axes with bounds checking
+
+            # ADD THIS DIAGNOSTIC BLOCK
+            # Log controller info once
+            if not hasattr(self, '_logged_controller_info'):
+                self.logger.debug(f"=== CONTROLLER DIAGNOSTIC INFO ===")
+                self.logger.debug(f"Controller name: {self.joystick.get_name()}")
+                self.logger.debug(f"Number of axes: {self.joystick.get_numaxes()}")
+                self.logger.debug(f"Number of buttons: {self.joystick.get_numbuttons()}")
+                self.logger.debug(f"Number of hats: {self.joystick.get_numhats()}")
+                self._logged_controller_info = True
+
+            # Read axes
             axes = {}
             num_axes = self.joystick.get_numaxes()
             for axis_id, axis_name in self.axis_mappings.items():
@@ -319,25 +367,34 @@ class SteamDeckControllerThread(QThread):
                 if axis_index < num_axes:
                     try:
                         raw_value = self.joystick.get_axis(axis_index)
-                        # Apply deadzone
+                        # DIAGNOSTIC: Log significant axis movements
+                        if abs(raw_value) > 0.3:
+                            self.logger.debug(f"DIAG: Axis {axis_index} = {raw_value:.2f} (mapped to: {axis_name})")
+                        
+
                         if abs(raw_value) < 0.05:
                             raw_value = 0.0
                         axes[axis_name] = raw_value
-                    except pygame.error as axis_error:
-                        self.logger.debug(f"Error reading axis {axis_index}: {axis_error}")
+                    except pygame.error:
+                        pass
             
-            # Read buttons with bounds checking
+            # Read buttons
             buttons = {}
             num_buttons = self.joystick.get_numbuttons()
             for button_id, button_name in self.button_mappings.items():
                 button_index = int(button_id)
                 if button_index < num_buttons:
                     try:
-                        buttons[button_name] = bool(self.joystick.get_button(button_index))
-                    except pygame.error as button_error:
-                        self.logger.debug(f"Error reading button {button_index}: {button_error}")
+                        button_state = bool(self.joystick.get_button(button_index))    
+                        # DIAGNOSTIC: Log button presses
+                        if button_state:
+                            self.logger.debug(f"DIAG: Button {button_index} pressed (mapped to: {button_name})")
+                        
+                        buttons[button_name] = button_state
+                    except pygame.error:
+                        pass
             
-            # Read D-pad (hat) with bounds checking
+            # Read D-pad
             if self.joystick.get_numhats() > 0:
                 try:
                     hat_x, hat_y = self.joystick.get_hat(0)
@@ -347,10 +404,9 @@ class SteamDeckControllerThread(QThread):
                         "dpad_left": hat_x < 0,
                         "dpad_right": hat_x > 0
                     })
-                except pygame.error as hat_error:
-                    self.logger.debug(f"Error reading hat: {hat_error}")
+                except pygame.error:
+                    pass
             
-            # Only create input data if we have some input
             if axes or buttons:
                 input_data = ControllerInputData(
                     axes=axes,
@@ -360,10 +416,10 @@ class SteamDeckControllerThread(QThread):
                 )
                 self.sequence_number += 1
                 
-                # Send via Qt signal (thread-safe)
+                # Emit Qt signal
                 self.controller_input.emit(input_data)
                 
-                # Send via WebSocket if available
+                # Send via WebSocket
                 self._send_controller_websocket(input_data)
                 
                 # Update statistics
@@ -373,15 +429,9 @@ class SteamDeckControllerThread(QThread):
                 
         except Exception as e:
             self.logger.error(f"Controller input processing error: {e}")
-            # Don't crash the thread on input errors
             
     def _send_controller_websocket(self, input_data: ControllerInputData):
-        """Send controller data via WebSocket"""
-        # FIX 1: Check for correct method name 'send_safe' not 'send_message'
-        if not self.websocket_manager or not hasattr(self.websocket_manager, 'send_safe'):
-            self.logger.warning("WebSocket manager not available or missing send_safe method")
-            return
-            
+        """Send controller data via WebSocket using thread-safe Qt signal"""
         try:
             message = {
                 "type": "steamdeck_controller",
@@ -392,53 +442,19 @@ class SteamDeckControllerThread(QThread):
                 "source": "steamdeck"
             }
             
-            # FIX 2: Don't double-encode JSON - send_safe handles dict conversion
-            success = self.websocket_manager.send_safe(message)
-            if success:
-                self.stats["inputs_sent"] += 1
-            else:
-                self.logger.debug("Failed to send controller data - WebSocket not connected")
+            # Emit signal instead of directly calling websocket_manager
+            # This will be handled in the main GUI thread
+            self.send_websocket_message.emit(message)
+            self.stats["inputs_sent"] += 1
             
+            if self.stats["inputs_sent"] == 1:
+                self.logger.info("First controller message queued for sending!")
+            elif self.stats["inputs_sent"] % 100 == 0:
+                self.logger.debug(f"Queued {self.stats['inputs_sent']} controller messages")
+                
         except Exception as e:
-            self.logger.error(f"Failed to send controller data via WebSocket: {e}")
-
-    def _send_heartbeat(self, timestamp: float):
-        """Send heartbeat signal"""
-        self.heartbeat_signal.emit(timestamp)
-        
-        # Also send via WebSocket
-        if self.websocket_manager and hasattr(self.websocket_manager, 'send_safe'):
-            try:
-                heartbeat_msg = {
-                    "type": "controller_heartbeat", 
-                    "timestamp": timestamp,
-                    "alive": True,
-                    "source": "steamdeck"
-                }
-                success = self.websocket_manager.send_safe(heartbeat_msg)
-                if not success:
-                    self.logger.debug("Failed to send heartbeat - WebSocket not connected")
-            except Exception as e:
-                self.logger.error(f"Failed to send heartbeat: {e}")
-
-    def _send_emergency_stop(self, reason: str):
-        """Send emergency stop command"""
-        if self.websocket_manager and hasattr(self.websocket_manager, 'send_safe'):
-            try:
-                stop_msg = {
-                    "type": "emergency_stop",
-                    "reason": f"controller_disconnect: {reason}",
-                    "timestamp": time.time(),
-                    "source": "steamdeck_controller"
-                }
-                success = self.websocket_manager.send_safe(stop_msg)
-                if success:
-                    self.logger.critical(f"🚨 Emergency stop sent: {reason}")
-                else:
-                    self.logger.error(f"Failed to send emergency stop - WebSocket not connected: {reason}")
-            except Exception as e:
-                self.logger.error(f"Failed to send emergency stop: {e}")
-
+            self.logger.error(f"Failed to queue controller data: {e}", exc_info=True)
+ 
     def _update_stats(self):
         """Update and emit statistics"""
         current_time = time.time()
@@ -471,7 +487,7 @@ class SteamDeckControllerThread(QThread):
     
     def set_poll_rate(self, hz: int):
         """Set controller polling rate"""
-        if 10 <= hz <= 120:  # Reasonable bounds
+        if 10 <= hz <= 120:
             self.poll_rate_hz = hz
             self.poll_interval = 1.0 / hz
             self.logger.info(f"Controller poll rate set to {hz}Hz")

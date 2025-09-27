@@ -34,7 +34,27 @@
     "behavior": "direct_servo",
     "target": "m1_ch17"
   },
-  "button_back": {
+  "dpad_up": {
+    "behavior": "system_control",
+    "system_action": "up"
+  },
+  "dpad_down": {
+    "behavior": "system_control",
+    "system_action": "down"
+  },
+  "dpad_left": {
+    "behavior": "system_control",
+    "system_action": "left"
+  },
+  "dpad_right": {
+    "behavior": "system_control",
+    "system_action": "right"
+  },
+  "button_a": {
+    "behavior": "system_control",
+    "system_action": "select"
+  },
+  "button_menu": {
     "behavior": "system_control",
     "system_action": "exit_app"
   }

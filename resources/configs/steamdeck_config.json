@@ -8,12 +8,12 @@
       "camera": "ERROR",
       "servo": "ERROR",
       "network": "ERROR",
-      "websocket": "WARNING",
-      "telemetry": "INFO",
+      "websocket": "ERROR",
+      "telemetry": "ERROR",
       "ui": "INFO",
       "config": "WARNING",
       "main": "INFO",
-      "controller": "DEBUG",
+      "controller": "ERRO",
       "error": "ERROR"
     },
     "wave_detection": {
