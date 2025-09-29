@@ -378,7 +378,7 @@ class WelcomePage(CalibrationWizardPage):
         """Update controller connection status"""
         if connected:
             self.status_label.setText(f"Controller Status: Connected - {controller_name}")
-            self.status_label.setStyleSheet("color: #44ff44; margin: 20px 0; font-weight: bold;")
+            self.status_label.setStyleSheet("color: #c; margin: 20px 0; font-weight: bold;")
         else:
             self.status_label.setText("Controller Status: Not Connected")
             self.status_label.setStyleSheet("color: #ff4444; margin: 20px 0; font-weight: bold;")

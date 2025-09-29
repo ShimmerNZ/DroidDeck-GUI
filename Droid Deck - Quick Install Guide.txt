@@ -24,22 +24,17 @@ Once in Desktop Mode:
 
 ## Step 3: Download and Run Installer
 
-Copy and paste these commands one at a time:
-
-# Copy across the installer
+# Copy across the installer to Home directory
 Dolphin explorer, USB or other method
 
 # Make it executable
 chmod +x DD_install.sh
 
-# you will need sudo account, if none exists set one (enter twice and confirm)
-passwd 
-
 # Run the installer
 ./DD_install.sh
 ```
 
-**⏱️ Installation Time:** 15-20 minutes (downloads Python 3.9.13, pacakges and updates pacman keys - we have to install a lot of developer tools so expect this part to take a while)
+**⏱️ Installation Time:** 10-15 minutes (leverages distrobox to create an environment that can install all the dependancies/libraries)
 
 ---
 
@@ -65,31 +60,10 @@ cd ~/DroidDeck
 git clone YOUR_REPOSITORY_URL .
 ```
 
----
-
-## Step 5: Configure Robot IP
-
-Edit the configuration file:
-```bash
-nano ~/DroidDeck/resources/configs/steamdeck_config.json
-```
-
-**Change these IPs to your robot's IP:**
-```json
-{
-  "current": {
-    "esp32_cam_url": "http://YOUR_ROBOT_IP:81/stream",
-    "camera_proxy_url": "http://YOUR_ROBOT_IP:8081/stream",
-    "control_websocket_url": "ws://YOUR_ROBOT_IP:8766"
-  }
-}
-```
-
-**Save:** `Ctrl+X` → `Y` → `Enter`
 
 ---
 
-## Step 6: Test Installation
+## Step 4: Test Installation
 
 ```bash
 # Run the test
