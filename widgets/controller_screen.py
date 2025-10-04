@@ -1072,11 +1072,7 @@ class ControllerConfigScreen(BaseScreen):
             input_combo.setCurrentText(control_name)
             input_combo.setStyleSheet(self._get_combo_style())
             
-            behavior = control_config.get('behavior', 'direct_servo')
-            type_combo = QComboBox()
-            type_combo.addItems(["Select Type..."] + self.input_types)
-            type_combo.setStyleSheet(self._get_combo_style())
-            
+            behavior = control_config.get('behavior', 'direct_servo')            
             behavior_combo = QComboBox()
             behavior_combo.addItems(["Select Behavior..."] + self.behaviors)
             behavior_combo.setCurrentText(behavior)
@@ -1102,14 +1098,12 @@ class ControllerConfigScreen(BaseScreen):
             actions_widget.setStyleSheet("border:none; padding:0px;")
             
             self.grid_layout.addWidget(input_combo, row, 0)
-            self.grid_layout.addWidget(type_combo, row, 1) 
-            self.grid_layout.addWidget(behavior_combo, row, 2)
-            self.grid_layout.addWidget(target_label, row, 3)
-            self.grid_layout.addWidget(actions_widget, row, 4)
+            self.grid_layout.addWidget(behavior_combo, row, 1)
+            self.grid_layout.addWidget(target_label, row, 2)
+            self.grid_layout.addWidget(actions_widget, row, 3)
             
             row_data = {
                 'input_combo': input_combo,
-                'type_combo': type_combo,
                 'behavior_combo': behavior_combo,
                 'target_label': target_label,
                 'select_btn': select_btn,
@@ -1329,12 +1323,12 @@ class ControllerConfigScreen(BaseScreen):
         headers_layout.setVerticalSpacing(10)
         headers_layout.setContentsMargins(0, 0, 0, 0)
         
-        headers = ["Input", "Type", "Behavior", "Target(s)", "Actions"]
+        headers = ["Input", "Behavior", "Target(s)", "Actions"]
         
         self.header_labels = []
         for i, header_text in enumerate(headers):
             header_label = QLabel(header_text)
-            header_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+            header_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
             self.update_column_header_style(header_label)
             header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             headers_layout.addWidget(header_label, 0, i)
@@ -1342,10 +1336,9 @@ class ControllerConfigScreen(BaseScreen):
         
         # Set column stretch factors
         headers_layout.setColumnStretch(0, 2)
-        headers_layout.setColumnStretch(1, 1)
-        headers_layout.setColumnStretch(2, 2)
-        headers_layout.setColumnStretch(3, 3)
-        headers_layout.setColumnStretch(4, 1)
+        headers_layout.setColumnStretch(1, 3)
+        headers_layout.setColumnStretch(2, 4)
+        headers_layout.setColumnStretch(3, 1)
         
         layout.addLayout(headers_layout)
         
@@ -1363,10 +1356,9 @@ class ControllerConfigScreen(BaseScreen):
         
         # Apply same column stretch factors
         self.grid_layout.setColumnStretch(0, 2)
-        self.grid_layout.setColumnStretch(1, 1)
-        self.grid_layout.setColumnStretch(2, 2)
-        self.grid_layout.setColumnStretch(3, 3)
-        self.grid_layout.setColumnStretch(4, 1)
+        self.grid_layout.setColumnStretch(1, 3)
+        self.grid_layout.setColumnStretch(2, 4)
+        self.grid_layout.setColumnStretch(3, 1)
         
         self.scroll_area.setWidget(self.grid_widget)
         layout.addWidget(self.scroll_area)
@@ -1570,10 +1562,6 @@ class ControllerConfigScreen(BaseScreen):
         input_combo.addItems(["Select Input..."] + self.current_inputs)
         input_combo.setStyleSheet(self._get_combo_style())
         
-        type_combo = QComboBox()
-        type_combo.addItems(["Select Type..."] + self.input_types)
-        type_combo.setStyleSheet(self._get_combo_style())
-        
         behavior_combo = QComboBox()
         behavior_combo.addItems(["Select Behavior..."] + self.behaviors)
         behavior_combo.setStyleSheet(self._get_combo_style())
@@ -1596,14 +1584,12 @@ class ControllerConfigScreen(BaseScreen):
         actions_widget.setLayout(actions_layout)
         
         self.grid_layout.addWidget(input_combo, row, 0)
-        self.grid_layout.addWidget(type_combo, row, 1) 
-        self.grid_layout.addWidget(behavior_combo, row, 2)
-        self.grid_layout.addWidget(target_label, row, 3)
-        self.grid_layout.addWidget(actions_widget, row, 4)
+        self.grid_layout.addWidget(behavior_combo, row, 1)
+        self.grid_layout.addWidget(target_label, row, 2)
+        self.grid_layout.addWidget(actions_widget, row, 3)
         
         row_data = {
             'input_combo': input_combo,
-            'type_combo': type_combo,
             'behavior_combo': behavior_combo,
             'target_label': target_label,
             'select_btn': select_btn,
@@ -2121,6 +2107,7 @@ class ControllerConfigScreen(BaseScreen):
             QComboBox QAbstractItemView {{
                 background-color: {panel_bg};
                 color: {primary};
+                padding: 8px;
                 border: 1px solid {primary};
                 selection-background-color: {primary};
                 selection-color: black;
@@ -2217,7 +2204,7 @@ class ControllerConfigScreen(BaseScreen):
             if control_name != "Select Input...":
                 self.behavior_registry.unregister_mapping(control_name)
             
-            for key in ['input_combo', 'type_combo', 'behavior_combo', 'target_label']:
+            for key in ['input_combo', 'behavior_combo', 'target_label']:
                 widget = row_data[key]
                 self.grid_layout.removeWidget(widget)
                 widget.deleteLater()
@@ -2247,16 +2234,14 @@ class ControllerConfigScreen(BaseScreen):
         
         # Reapply column stretch factors
         self.grid_layout.setColumnStretch(0, 2)
-        self.grid_layout.setColumnStretch(1, 1)
-        self.grid_layout.setColumnStretch(2, 2)
-        self.grid_layout.setColumnStretch(3, 3)
-        self.grid_layout.setColumnStretch(4, 1)
+        self.grid_layout.setColumnStretch(1, 3)
+        self.grid_layout.setColumnStretch(2, 4)
+        self.grid_layout.setColumnStretch(3, 1)
             
         for row, row_data in enumerate(self.mapping_rows):
             self.grid_layout.addWidget(row_data['input_combo'], row, 0)
-            self.grid_layout.addWidget(row_data['type_combo'], row, 1)
-            self.grid_layout.addWidget(row_data['behavior_combo'], row, 2)
-            self.grid_layout.addWidget(row_data['target_label'], row, 3)
+            self.grid_layout.addWidget(row_data['behavior_combo'], row, 1)
+            self.grid_layout.addWidget(row_data['target_label'], row, 2)
             
             # Create actions widget for this row
             actions_widget = QWidget()
@@ -2267,7 +2252,7 @@ class ControllerConfigScreen(BaseScreen):
             actions_layout.addWidget(row_data['select_btn'])
             actions_layout.addWidget(row_data['remove_btn'])
             
-            self.grid_layout.addWidget(actions_widget, row, 4)
+            self.grid_layout.addWidget(actions_widget, row, 3)
 
     def _save_all_mappings(self):
         """Save all controller mappings to configuration"""
@@ -2429,7 +2414,6 @@ class ControllerConfigScreen(BaseScreen):
             for row_data in self.mapping_rows:
                 # Force refresh of combo box styles
                 row_data['input_combo'].setStyleSheet(self._get_combo_style())
-                row_data['type_combo'].setStyleSheet(self._get_combo_style())
                 row_data['behavior_combo'].setStyleSheet(self._get_combo_style())
                 row_data['target_label'].setStyleSheet(self._get_target_label_style())
                 row_data['select_btn'].setStyleSheet(self._get_small_button_style())
@@ -2584,7 +2568,7 @@ class ControllerConfigScreen(BaseScreen):
                     border: 2px solid {primary};
                     border-radius: 4px;
                     padding: 4px 8px;
-                    font-size: 10px;
+                    font-size: 11px;
                     font-weight: bold;
                 }}
                 QPushButton:hover {{
@@ -2599,7 +2583,7 @@ class ControllerConfigScreen(BaseScreen):
                     border: 1px solid {primary};
                     border-radius: 4px;
                     padding: 4px 8px;
-                    font-size: 10px;
+                    font-size: 11px;
                 }}
                 QPushButton:hover {{
                     background-color: {primary};
@@ -2640,7 +2624,7 @@ class ControllerConfigScreen(BaseScreen):
                 border: 1px solid {border_color};
                 border-radius: 3px;
                 padding: 4px;
-                font-size: 10px;
+                font-size: 14px;
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -2657,8 +2641,10 @@ class ControllerConfigScreen(BaseScreen):
                 background-color: {panel_bg};
                 color: {primary};
                 border: 1px solid {primary};
+                padding: 8px;
                 selection-background-color: {primary};
                 selection-color: black;
+                font-size: 14px;
             }}
         """
 

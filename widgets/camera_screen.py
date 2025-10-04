@@ -258,7 +258,7 @@ class CameraControlsWidget(QWidget):
         esp32_frame.setObjectName("esp32Frame")
         self._update_section_frame_style(esp32_frame)
         esp32_layout = QVBoxLayout()
-        esp32_layout.setContentsMargins(12, 8, 12, 12)
+        esp32_layout.setContentsMargins(12, 8, 12, 22)
         esp32_layout.setSpacing(8)
 
         # Section header
