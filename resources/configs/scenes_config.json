@@ -1,25 +1,25 @@
 [
   {
-    "label": "Frustrated Gesture",
+    "label": "Frustrated Growl",
     "emoji": "\ud83c\udfad",
     "categories": [
       "Angry"
     ],
-    "audio_enabled": false,
-    "audio_file": "",
+    "audio_enabled": true,
+    "audio_file": "playful-growl.mp3",
     "script_enabled": true,
     "script_name": 31,
     "duration": 1.7,
     "delay": 0
   },
   {
-    "label": "Furious Shake",
+    "label": "Furious Burst",
     "emoji": "\ud83c\udfad",
     "categories": [
       "Angry"
     ],
-    "audio_enabled": false,
-    "audio_file": "",
+    "audio_enabled": true,
+    "audio_file": "frustrated-yell.mp3",
     "script_enabled": true,
     "script_name": 30,
     "duration": 2.3,
@@ -32,24 +32,11 @@
       "Angry"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "cheering-hmpf.mp3",
     "script_enabled": true,
     "script_name": 32,
     "duration": 2.8,
     "delay": 400
-  },
-  {
-    "label": "Head Tilt Wonder",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Curious"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 20,
-    "duration": 1.5,
-    "delay": 0
   },
   {
     "label": "Investigating",
@@ -58,24 +45,11 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "inquisitive-query.mp3",
     "script_enabled": true,
     "script_name": 21,
     "duration": 3.0,
     "delay": 100
-  },
-  {
-    "label": "Scanning Around",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Curious"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 22,
-    "duration": 2.5,
-    "delay": 0
   },
   {
     "label": "What's That?",
@@ -84,7 +58,7 @@
       "Curious"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "puzzled-chant.mp3",
     "script_enabled": true,
     "script_name": 23,
     "duration": 1.8,
@@ -97,7 +71,7 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-cheer_1.mp3",
     "script_enabled": true,
     "script_name": 5,
     "duration": 4.0,
@@ -110,7 +84,7 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-laughs.mp3",
     "script_enabled": true,
     "script_name": 2,
     "duration": 3.2,
@@ -124,7 +98,7 @@
       "Idle"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-exclamation.mp3",
     "script_enabled": true,
     "script_name": 1,
     "duration": 2.5,
@@ -137,51 +111,11 @@
       "Happy"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-laugh.mp3",
     "script_enabled": true,
     "script_name": 4,
     "duration": 2.1,
     "delay": 200
-  },
-  {
-    "label": "Joy Bounce",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Happy"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 3,
-    "duration": 1.8,
-    "delay": 0
-  },
-  {
-    "label": "Casual Look Around",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Idle"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 81,
-    "duration": 2.2,
-    "delay": 0
-  },
-  {
-    "label": "Sleepy Wave",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Idle",
-      "Sleepy"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 80,
-    "duration": 1.8,
-    "delay": 0
   },
   {
     "label": "Standby Mode",
@@ -190,36 +124,10 @@
       "Idle"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "reflective-murmur.mp3",
     "script_enabled": true,
     "script_name": 82,
     "duration": 3.0,
-    "delay": 0
-  },
-  {
-    "label": "Waiting Animation",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Idle"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 83,
-    "duration": 4.0,
-    "delay": 0
-  },
-  {
-    "label": "Affectionate Lean",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Love"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 51,
-    "duration": 2.8,
     "delay": 0
   },
   {
@@ -229,7 +137,7 @@
       "Love"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "possessive-whisper.mp3",
     "script_enabled": true,
     "script_name": 50,
     "duration": 3.5,
@@ -242,7 +150,7 @@
       "Love"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "nostalgic-melody.mp3",
     "script_enabled": true,
     "script_name": 52,
     "duration": 4.2,
@@ -254,8 +162,8 @@
     "categories": [
       "Sad"
     ],
-    "audio_enabled": false,
-    "audio_file": "",
+    "audio_enabled": true,
+    "audio_file": "sad-sigh.mp3",
     "script_enabled": true,
     "script_name": 11,
     "duration": 2.8,
@@ -268,7 +176,7 @@
       "Sad"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "confused-oh.mp3",
     "script_enabled": true,
     "script_name": 10,
     "duration": 3.5,
@@ -281,7 +189,7 @@
       "Sad"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "confused-warble_1.mp3",
     "script_enabled": true,
     "script_name": 12,
     "duration": 2.2,
@@ -294,37 +202,11 @@
       "Sleepy"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "thoughtful-hum.mp3",
     "script_enabled": true,
     "script_name": 92,
     "duration": 4.5,
     "delay": 800
-  },
-  {
-    "label": "Drowsy Nod",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sleepy"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 91,
-    "duration": 3.2,
-    "delay": 0
-  },
-  {
-    "label": "Wake Up Stretch",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Sleepy"
-    ],
-    "audio_enabled": false,
-    "audio_file": "",
-    "script_enabled": true,
-    "script_name": 93,
-    "duration": 2.8,
-    "delay": 0
   },
   {
     "label": "Yawn",
@@ -333,7 +215,7 @@
       "Sleepy"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "thoughtful-hum_1.mp3",
     "script_enabled": true,
     "script_name": 90,
     "duration": 2.5,
@@ -346,7 +228,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-beep.mp3",
     "script_enabled": false,
     "script_name": null,
     "duration": 0.8,
@@ -359,7 +241,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-beep.mp3",
     "script_enabled": false,
     "script_name": null,
     "duration": 0.5,
@@ -372,7 +254,7 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "reflective-murmur.mp3",
     "script_enabled": false,
     "script_name": null,
     "duration": 2.0,
@@ -385,23 +267,23 @@
       "Sound Effect"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "playful-vocalization.mp3",
     "script_enabled": false,
     "script_name": null,
     "duration": 1.2,
     "delay": 0
   },
   {
-    "label": "Eyes Wide Open",
+    "label": "Hands Up",
     "emoji": "\ud83c\udfad",
     "categories": [
       "Surprise"
     ],
-    "audio_enabled": false,
-    "audio_file": "",
+    "audio_enabled": true,
+    "audio_file": "joyful-laugh_1.mp3",
     "script_enabled": true,
-    "script_name": 41,
-    "duration": 1.8,
+    "script_name": 2,
+    "duration": 2.0,
     "delay": 0
   },
   {
@@ -411,7 +293,7 @@
       "Surprise"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "playful-oh.mp3",
     "script_enabled": true,
     "script_name": 40,
     "duration": 1.2,
@@ -424,23 +306,10 @@
       "Surprise"
     ],
     "audio_enabled": true,
-    "audio_file": "track_008.wav",
+    "audio_file": "joyful-exclamation.mp3",
     "script_enabled": true,
     "script_name": 42,
     "duration": 2.1,
     "delay": 200
-  },
-  {
-    "label": "hands up",
-    "emoji": "\ud83c\udfad",
-    "categories": [
-      "Surprise"
-    ],
-    "audio_enabled": true,
-    "audio_file": "track_008.wav",
-    "script_enabled": true,
-    "script_name": 2,
-    "duration": 2.0,
-    "delay": 0
   }
 ]

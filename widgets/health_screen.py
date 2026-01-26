@@ -306,6 +306,7 @@ class HealthScreen(BaseScreen):
             ("mem", "Memory: 0%"),
             ("temp", "Temp: 0°C"),
             ("battery", "Battery: 0.0V"),
+            ("current_total", "Total Current: 0.0A"),
             ("ping", "Ping: -- ms"),
             ("adc_info", "ADC: 4-Channel Mode"),
             ("dfplayer", "Audio: Disconnected"),
@@ -315,7 +316,7 @@ class HealthScreen(BaseScreen):
         
         for key, text in label_configs:
             label = QLabel(text)
-            label.setFont(QFont("Arial", 14))
+            label.setFont(QFont("Arial", 15))
             self._update_status_label_style(label)
             label.setWordWrap(True)
             self.status_labels[key] = label
@@ -362,7 +363,7 @@ class HealthScreen(BaseScreen):
         system_layout.addWidget(self.system_header)
         
         # Bandwidth test button with themed styling
-        self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
+        self.bandwidth_btn = QPushButton("ðŸŒ BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
         self._update_bandwidth_button_style()
@@ -542,7 +543,7 @@ class HealthScreen(BaseScreen):
         
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
-        self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
+        self.bandwidth_btn.setText("ðŸŒ BANDWIDTH TEST")
         
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
@@ -617,7 +618,7 @@ class HealthScreen(BaseScreen):
             
             current_a0 = data.get("current_left_track",0.0)
             current_a1 = data.get("current_right_track",0.0)
-            current_a2 = data.get("current_electronics",0.0)
+            current_a2 = data.get("current_total",0.0)
              
             relative_time = current_time - self.start_time
             
@@ -668,6 +669,10 @@ class HealthScreen(BaseScreen):
         updates["cpu"] = f"CPU: {cpu}%"
         updates["mem"] = f"Memory: {mem}%"
         updates["temp"] = f"Temp: {temp}°C"
+        
+        # Total current from A2 sensor
+        current_total = data.get("current_total", 0.0)
+        updates["current_total"] = f"Total Current: {current_total:.1f}A"
         
         # Audio system
         audio = data.get("audio_system", {})

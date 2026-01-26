@@ -287,11 +287,11 @@ class ServoConfigScreen(BaseScreen):
             # Update UI if NEMA is currently selected
             if self.current_controller == 2 and hasattr(self, 'test_sweep_btn'):
                 if sweeping:
-                    self.test_sweep_btn.setText("⏹️ STOP SWEEP")
+                    self.test_sweep_btn.setText("⏸ STOP SWEEP")
                     self.test_sweep_btn.setChecked(True)
-                    self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} ↔ {self.nema_config['max_position']:.1f} cm")
+                    self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} → {self.nema_config['max_position']:.1f} cm")
                 else:
-                    self.test_sweep_btn.setText("▶️ TEST SWEEP")
+                    self.test_sweep_btn.setText("▶ TEST SWEEP")
                     self.test_sweep_btn.setChecked(False)
                     self.update_status("NEMA sweep stopped")
                     
@@ -468,7 +468,7 @@ class ServoConfigScreen(BaseScreen):
             if hasattr(self, 'nema_test_sweeping') and self.nema_test_sweeping:
                 self.nema_test_sweeping = False
                 if hasattr(self, 'test_sweep_btn'):
-                    self.test_sweep_btn.setText("▶️ TEST SWEEP")
+                    self.test_sweep_btn.setText("▶ TEST SWEEP")
                     self.test_sweep_btn.setChecked(False)
                     
         except Exception as e:
@@ -687,7 +687,7 @@ class ServoConfigScreen(BaseScreen):
     def update_nema_acceleration(self, value):
         """Update acceleration slider"""
         self.nema_config["acceleration"] = value
-        self.accel_value_label.setText(f"{value} steps/s²")
+        self.accel_value_label.setText(f"{value} steps/sÂ²")
         self.save_nema_config()
 
     def init_nema_connection(self):
@@ -1068,10 +1068,10 @@ class ServoConfigScreen(BaseScreen):
         
         # Create operation buttons
         button_configs = [
-            ("🔄 REFRESH", self.refresh_current_maestro, "Refresh Maestro connection"),
-            ("🏠 SET HOME", self.set_home_positions, "Set current positions as home"),
-            ("↩️ GO HOME", self.go_home_positions, "Move all servos to home positions"),
-            ("📖 READ POS", self.read_all_positions_now, "Read current servo positions"),
+            ("↻ REFRESH", self.refresh_current_maestro, "Refresh Maestro connection"),
+            ("⌂ SET HOME", self.set_home_positions, "Set current positions as home"),
+            ("↩ GO HOME", self.go_home_positions, "Move all servos to home positions"),
+            ("◉ READ POS", self.read_all_positions_now, "Read current servo positions"),
             ("⚡ TOGGLE LIVE", self.toggle_all_live_checkboxes, "Toggle all live updates")
         ]
         
@@ -1225,7 +1225,7 @@ class ServoConfigScreen(BaseScreen):
         accel_label.setStyleSheet("color: white; background: transparent;")
         form_layout.addWidget(accel_label, 4, 0)
         
-        self.accel_value_label = QLabel(f"{self.nema_config['acceleration']} steps/s²")
+        self.accel_value_label = QLabel(f"{self.nema_config['acceleration']} steps/sÂ²")
         self.accel_value_label.setStyleSheet("color: white; background: transparent;")
         form_layout.addWidget(self.accel_value_label, 4, 1)
         
@@ -1359,7 +1359,7 @@ class ServoConfigScreen(BaseScreen):
         control_layout.addLayout(slider_layout)
 
         # Test sweep button
-        self.test_sweep_btn = QPushButton("▶️ TEST SWEEP")
+        self.test_sweep_btn = QPushButton("▶ TEST SWEEP")
         self.test_sweep_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.test_sweep_btn.setCheckable(True)
         self.test_sweep_btn.setFixedHeight(40)
@@ -1972,7 +1972,7 @@ class ServoConfigScreen(BaseScreen):
             self.grid_layout.addWidget(live_checkbox, row, 8)
             
             # Play/sweep button with themed styling
-            play_btn = QPushButton("▶️")
+            play_btn = QPushButton("▶")
             play_btn.setFont(QFont("Arial", 12))
             play_btn.setCheckable(True)
             play_btn.setFixedSize(30, 30)
@@ -2105,7 +2105,7 @@ class ServoConfigScreen(BaseScreen):
         self.logger.debug(f"Servo command: {channel_key} -> {value} (speed: {speed}, accel: {accel})")
         
     def set_home_positions(self):
-        """Set current slider positions as home positions for all servos"""
+        """Set current slider positions as home positions for enabled servos"""
         maestro_num = self.current_maestro + 1
         
         if not self.maestro_connected.get(maestro_num, False):
@@ -2118,6 +2118,12 @@ class ServoConfigScreen(BaseScreen):
         
         for channel_key, widgets in self.servo_widgets.items():
             if channel_key.startswith(f"m{maestro_num}_"):
+                # Check if live checkbox is enabled (index 3 in widgets tuple)
+                if len(widgets) > 3:
+                    live_checkbox = widgets[3]
+                    if not live_checkbox.isChecked():
+                        continue  # Skip this servo if checkbox is not enabled
+                
                 slider = widgets[0]  # Get slider widget
                 current_pos = slider.value()  # Get current slider position
                 
@@ -2132,10 +2138,16 @@ class ServoConfigScreen(BaseScreen):
                 
                 home_count += 1
         
+        if home_count == 0:
+            self.update_status("No servos enabled - check the Live Update boxes", warning=True)
+            return
+        
         # Save and notify
         success = config_manager.save_config("resources/configs/servo_config.json", self.servo_config)
         if success:
             self.update_status(f"Set {home_count} home positions")
+            
+            # Send to backend - backend will update its controller_config.json
             self.send_websocket_message("servo_home_positions", 
                                     maestro=maestro_num, 
                                     home_positions=home_positions)
@@ -2205,7 +2217,7 @@ class ServoConfigScreen(BaseScreen):
             # Stop existing sweep
             self.active_sweeps[channel_key].stop()
             del self.active_sweeps[channel_key]
-            button.setText("▶️")
+            button.setText("▶")
             button.setChecked(False)
             self.logger.info(f"Stopped sweep for {channel_key}")
             return
@@ -2221,7 +2233,7 @@ class ServoConfigScreen(BaseScreen):
         # Create new sweep
         sweep = MinMaxSweep(self, channel_key, pos_label, button, actual_min, actual_max, actual_speed)
         self.active_sweeps[channel_key] = sweep
-        button.setText("⸏")
+        button.setText("⏸")
         self.logger.info(f"Started sweep for {channel_key}")
     
     def toggle_all_live_checkboxes(self):
@@ -2450,8 +2462,7 @@ class MinMaxSweep:
         # Update UI
         self.label.setText(f"C:{center_pos}")
         self.label.setStyleSheet("color: #AAAAAA; background: transparent;")
-        self.btn.setText("▶️")
+        self.btn.setText("▶")
         self.btn.setChecked(False)
         
         self.logger.info(f"Min/Max sweep stopped: {self.channel_key} returned to center ({center_pos})")
-
