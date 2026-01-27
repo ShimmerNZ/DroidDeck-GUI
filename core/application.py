@@ -191,7 +191,7 @@ class DroidDeckApplication(QMainWindow):
         time.sleep(0.1)
         self.controller_screen = ControllerConfigScreen(self.websocket)
         time.sleep(0.1)
-        self.settings_screen = SettingsScreen()
+        self.settings_screen = SettingsScreen(self.websocket)
         time.sleep(0.1)
         self.scene_screen = SceneScreen(self.websocket)
         

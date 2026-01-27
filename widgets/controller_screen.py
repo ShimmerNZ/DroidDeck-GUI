@@ -70,6 +70,127 @@ class DirectServoHandler(BehaviorHandler):
             return False
 
 
+class MultiServoHandler(BehaviorHandler):
+    """Handle multiple servo control - single axis to multiple servos with individual invert settings"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Load servo config to get min/max ranges
+        self.servo_config = {}
+        try:
+            with open('resources/configs/servo_config.json', 'r') as f:
+                self.servo_config = json.load(f)
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Could not load servo_config.json: {e}")
+    
+    def process(self, control_name: str, raw_value: float, config: Dict[str, Any]) -> bool:
+        try:
+            servos = config.get('servos', [])
+            
+            if not servos:
+                return False
+            
+            # Process each servo in the list
+            for servo_info in servos:
+                channel = servo_info.get('channel')
+                invert = servo_info.get('invert', False)
+                
+                if not channel:
+                    continue
+                
+                # Get servo-specific min/max from servo config
+                servo_cfg = self.servo_config.get(channel, {})
+                min_pulse = servo_cfg.get('min', 992)
+                max_pulse = servo_cfg.get('max', 2000)
+                
+                # Calculate center and range
+                center = (min_pulse + max_pulse) // 2
+                pulse_range = (max_pulse - min_pulse) // 2
+                
+                # Apply invert and calculate pulse
+                value = -raw_value if invert else raw_value
+                pulse = center + int(value * pulse_range)
+                pulse = max(min_pulse, min(max_pulse, pulse))
+                
+                self.send_websocket_message("servo", channel=channel, pos=pulse)
+                
+                if self.logger:
+                    self.logger.debug(f"Multi servo {channel}: {pulse} (raw: {raw_value}, inverted: {invert})")
+            
+            return True
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in multi servo handler: {e}")
+            return False
+
+
+class ToggleServoHandler(BehaviorHandler):
+    """Handle toggle servo control - button press alternates between two positions"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.toggle_states = {}  # Track current state for each control
+    
+    def process(self, control_name: str, raw_value: float, config: Dict[str, Any]) -> bool:
+        try:
+            servo_channel = config.get('target')
+            position_1 = config.get('position_1', 1000)
+            position_2 = config.get('position_2', 2000)
+            trigger_timing = config.get('trigger_timing', 'on_press')
+            threshold = 0.5
+            
+            if not servo_channel:
+                return False
+            
+            # Initialize state for this control if not exists
+            if control_name not in self.toggle_states:
+                self.toggle_states[control_name] = {
+                    'current_position': 1,  # Start at position 1
+                    'was_pressed': False
+                }
+            
+            state = self.toggle_states[control_name]
+            is_pressed = abs(raw_value) > threshold
+            
+            # Handle trigger timing
+            should_trigger = False
+            if trigger_timing == 'on_press':
+                # Trigger on button press (rising edge)
+                if is_pressed and not state['was_pressed']:
+                    should_trigger = True
+            elif trigger_timing == 'on_release':
+                # Trigger on button release (falling edge)
+                if not is_pressed and state['was_pressed']:
+                    should_trigger = True
+            
+            state['was_pressed'] = is_pressed
+            
+            if should_trigger:
+                # Toggle between positions
+                if state['current_position'] == 1:
+                    pulse = position_1
+                    state['current_position'] = 2
+                else:
+                    pulse = position_2
+                    state['current_position'] = 1
+                
+                self.send_websocket_message("servo", channel=servo_channel, pos=pulse)
+                
+                if self.logger:
+                    self.logger.debug(f"Toggle servo {servo_channel}: {pulse} (position {state['current_position']})")
+                
+                return True
+            
+            return False
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in toggle servo handler: {e}")
+            return False
+
+
 class NemaStepperHandler(BehaviorHandler):
     """Handle NEMA stepper control - move between min/max positions or direct control"""
     
@@ -510,6 +631,8 @@ class BehaviorHandlerRegistry:
         
         self.handlers = {
             "direct_servo": DirectServoHandler(websocket_sender, logger),
+            "multi_servo": MultiServoHandler(websocket_sender, logger),
+            "toggle_servo": ToggleServoHandler(websocket_sender, logger),
             "joystick_pair": JoystickPairHandler(websocket_sender, logger),
             "differential_tracks": DifferentialTracksHandler(websocket_sender, logger),
             "scene_trigger": SceneTriggerHandler(websocket_sender, logger),
@@ -890,7 +1013,7 @@ class ControllerConfigScreen(BaseScreen):
         self.input_types = ["joystick", "trigger", "button", "dpad"]
         
         self.behaviors = [
-            "direct_servo", "joystick_pair", "differential_tracks", 
+            "direct_servo", "multi_servo", "toggle_servo", "joystick_pair", "differential_tracks", 
             "scene_trigger", "toggle_scenes", "nema_stepper", "system_control"
         ]
         
@@ -1067,6 +1190,11 @@ class ControllerConfigScreen(BaseScreen):
         try:
             row = len(self.mapping_rows)
             
+            # Remove button (now first)
+            remove_btn = QPushButton("×")
+            remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
+            remove_btn.setStyleSheet(self._get_remove_button_style())
+            
             input_combo = QComboBox()
             input_combo.addItems(["Select Input..."] + self.current_inputs)  # Use current_inputs
             input_combo.setCurrentText(control_name)
@@ -1082,25 +1210,17 @@ class ControllerConfigScreen(BaseScreen):
             target_label = QLabel(target_text)
             target_label.setStyleSheet(self._get_target_label_style())
             
-            actions_layout = QHBoxLayout()
+            # Configure button (now last, by itself)
             select_btn = QPushButton("Configure")
             select_btn.clicked.connect(lambda: self._select_row_for_config(row))
             select_btn.setStyleSheet(self._get_small_button_style())
             
-            remove_btn = QPushButton("×")
-            remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
-            remove_btn.setStyleSheet(self._get_remove_button_style())
-            
-            actions_layout.addWidget(select_btn)
-            actions_layout.addWidget(remove_btn)
-            actions_widget = QWidget()
-            actions_widget.setLayout(actions_layout)
-            actions_widget.setStyleSheet("border:none; padding:0px;")
-            
-            self.grid_layout.addWidget(input_combo, row, 0)
-            self.grid_layout.addWidget(behavior_combo, row, 1)
-            self.grid_layout.addWidget(target_label, row, 2)
-            self.grid_layout.addWidget(actions_widget, row, 3)
+            # Add to grid: remove, input, behavior, target, configure
+            self.grid_layout.addWidget(remove_btn, row, 0)
+            self.grid_layout.addWidget(input_combo, row, 1)
+            self.grid_layout.addWidget(behavior_combo, row, 2)
+            self.grid_layout.addWidget(target_label, row, 3)
+            self.grid_layout.addWidget(select_btn, row, 4)
             
             row_data = {
                 'input_combo': input_combo,
@@ -1323,24 +1443,7 @@ class ControllerConfigScreen(BaseScreen):
         headers_layout.setVerticalSpacing(10)
         headers_layout.setContentsMargins(0, 0, 0, 0)
         
-        headers = ["Input", "Behavior", "Target(s)", "Actions"]
-        
-        self.header_labels = []
-        for i, header_text in enumerate(headers):
-            header_label = QLabel(header_text)
-            header_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-            self.update_column_header_style(header_label)
-            header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            headers_layout.addWidget(header_label, 0, i)
-            self.header_labels.append(header_label)
-        
-        # Set column stretch factors
-        headers_layout.setColumnStretch(0, 2)
-        headers_layout.setColumnStretch(1, 3)
-        headers_layout.setColumnStretch(2, 4)
-        headers_layout.setColumnStretch(3, 1)
-        
-        layout.addLayout(headers_layout)
+        # Header row removed - provides no value and was redundant
         
         # Scroll area for the grid
         self.scroll_area = QScrollArea()
@@ -1354,11 +1457,12 @@ class ControllerConfigScreen(BaseScreen):
         self.grid_layout.setVerticalSpacing(10)
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Apply same column stretch factors
-        self.grid_layout.setColumnStretch(0, 2)
-        self.grid_layout.setColumnStretch(1, 3)
-        self.grid_layout.setColumnStretch(2, 4)
-        self.grid_layout.setColumnStretch(3, 1)
+        # Apply column stretch factors (remove button, input, behavior, target, configure)
+        self.grid_layout.setColumnStretch(0, 0)  # Remove button - fixed width
+        self.grid_layout.setColumnStretch(1, 2)  # Input
+        self.grid_layout.setColumnStretch(2, 3)  # Behavior
+        self.grid_layout.setColumnStretch(3, 4)  # Target
+        self.grid_layout.setColumnStretch(4, 0)  # Configure button - fixed width
         
         self.scroll_area.setWidget(self.grid_widget)
         layout.addWidget(self.scroll_area)
@@ -1558,6 +1662,11 @@ class ControllerConfigScreen(BaseScreen):
         """Add a new mapping configuration row - updated to use current_inputs"""
         row = len(self.mapping_rows)
         
+        # Remove button (now first)
+        remove_btn = QPushButton("×")
+        remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
+        remove_btn.setStyleSheet(self._get_remove_button_style())
+        
         input_combo = QComboBox()
         input_combo.addItems(["Select Input..."] + self.current_inputs)
         input_combo.setStyleSheet(self._get_combo_style())
@@ -1569,24 +1678,17 @@ class ControllerConfigScreen(BaseScreen):
         target_label = QLabel("Configure targets →")
         target_label.setStyleSheet(self._get_target_label_style())
         
-        actions_layout = QHBoxLayout()
+        # Configure button (now last, by itself)
         select_btn = QPushButton("Configure")
         select_btn.clicked.connect(lambda: self._select_row_for_config(row))
         select_btn.setStyleSheet(self._get_small_button_style())
         
-        remove_btn = QPushButton("×")
-        remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
-        remove_btn.setStyleSheet(self._get_remove_button_style())
-        
-        actions_layout.addWidget(select_btn)
-        actions_layout.addWidget(remove_btn)
-        actions_widget = QWidget()
-        actions_widget.setLayout(actions_layout)
-        
-        self.grid_layout.addWidget(input_combo, row, 0)
-        self.grid_layout.addWidget(behavior_combo, row, 1)
-        self.grid_layout.addWidget(target_label, row, 2)
-        self.grid_layout.addWidget(actions_widget, row, 3)
+        # Add to grid: remove, input, behavior, target, configure
+        self.grid_layout.addWidget(remove_btn, row, 0)
+        self.grid_layout.addWidget(input_combo, row, 1)
+        self.grid_layout.addWidget(behavior_combo, row, 2)
+        self.grid_layout.addWidget(target_label, row, 3)
+        self.grid_layout.addWidget(select_btn, row, 4)
         
         row_data = {
             'input_combo': input_combo,
@@ -1677,6 +1779,10 @@ class ControllerConfigScreen(BaseScreen):
         
         if behavior == "direct_servo":
             self._create_direct_servo_params(row_data)
+        elif behavior == "multi_servo":
+            self._create_multi_servo_params(row_data)
+        elif behavior == "toggle_servo":
+            self._create_toggle_servo_params(row_data)
         elif behavior == "joystick_pair":
             self._create_joystick_pair_params(row_data)
         elif behavior == "differential_tracks":
@@ -1732,6 +1838,225 @@ class ControllerConfigScreen(BaseScreen):
         
         target = row_data['config'].get('target', 'Not configured')
         row_data['target_label'].setText(f"→ {target}")
+
+    def _create_multi_servo_params(self, row_data: Dict):
+        """Create parameters for multi servo behavior - control multiple servos from one axis"""
+        # Header
+        header = QLabel("Multi Servo Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
+        
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            axis_info = QLabel(f"Maps {control_name} to multiple servos with individual invert settings")
+            grey = theme_manager.get("grey")
+            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+            self.params_layout.addWidget(axis_info)
+        
+        # Get existing servos or create empty list
+        servos = row_data['config'].get('servos', [])
+        
+        # Servo list container
+        servos_label = QLabel("Controlled Servos:")
+        servos_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(servos_label)
+        
+        # Create a scroll area for servo list
+        servo_list_widget = QWidget()
+        servo_list_layout = QVBoxLayout(servo_list_widget)
+        servo_list_layout.setContentsMargins(0, 0, 0, 0)
+        servo_list_layout.setSpacing(8)
+        
+        # Display existing servos
+        for i, servo_info in enumerate(servos):
+            servo_row = self._create_multi_servo_row(row_data, i, servo_info)
+            servo_list_layout.addWidget(servo_row)
+        
+        self.params_layout.addWidget(servo_list_widget)
+        
+        # Add servo button
+        add_btn = QPushButton("+ Add Servo")
+        self.update_button_style(add_btn)
+        add_btn.clicked.connect(lambda: self._add_multi_servo_row(row_data, servo_list_layout))
+        self.params_layout.addWidget(add_btn)
+        
+        # Store the layout for updates
+        row_data['servo_list_layout'] = servo_list_layout
+        
+        # Update target label
+        servo_count = len(servos)
+        row_data['target_label'].setText(f"→ {servo_count} servo(s)")
+    
+    def _create_multi_servo_row(self, row_data: Dict, index: int, servo_info: Dict) -> QWidget:
+        """Create a row for one servo in multi-servo configuration"""
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        
+        # Servo selector
+        servo_combo = QComboBox()
+        servo_combo.addItems(["Select Servo..."] + self.servo_channels)
+        servo_combo.setCurrentText(servo_info.get('channel', 'Select Servo...'))
+        servo_combo.setStyleSheet(self._get_combo_style())
+        servo_combo.currentTextChanged.connect(
+            lambda text: self._update_multi_servo_channel(row_data, index, text)
+        )
+        row_layout.addWidget(servo_combo, 3)
+        
+        # Invert checkbox
+        invert_checkbox = QCheckBox("Invert")
+        invert_checkbox.setChecked(servo_info.get('invert', False))
+        invert_checkbox.setStyleSheet("color: white;")
+        invert_checkbox.toggled.connect(
+            lambda checked: self._update_multi_servo_invert(row_data, index, checked)
+        )
+        row_layout.addWidget(invert_checkbox, 1)
+        
+        # Remove button
+        remove_btn = QPushButton("×")
+        remove_btn.setFixedSize(30, 30)
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d32f2f;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #b71c1c;
+            }
+        """)
+        remove_btn.clicked.connect(
+            lambda: self._remove_multi_servo_row(row_data, index, row_widget)
+        )
+        row_layout.addWidget(remove_btn, 0)
+        
+        return row_widget
+    
+    def _add_multi_servo_row(self, row_data: Dict, servo_list_layout: QVBoxLayout):
+        """Add a new servo to multi-servo configuration"""
+        servos = row_data['config'].get('servos', [])
+        new_servo = {'channel': '', 'invert': False}
+        servos.append(new_servo)
+        row_data['config']['servos'] = servos
+        
+        # Create and add the row
+        index = len(servos) - 1
+        servo_row = self._create_multi_servo_row(row_data, index, new_servo)
+        servo_list_layout.addWidget(servo_row)
+        
+        # Update target label
+        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
+    
+    def _remove_multi_servo_row(self, row_data: Dict, index: int, widget: QWidget):
+        """Remove a servo from multi-servo configuration"""
+        servos = row_data['config'].get('servos', [])
+        if index < len(servos):
+            servos.pop(index)
+            row_data['config']['servos'] = servos
+        
+        # Remove widget
+        widget.deleteLater()
+        
+        # Update target label
+        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
+    
+    def _update_multi_servo_channel(self, row_data: Dict, index: int, channel: str):
+        """Update the channel for a specific servo in multi-servo config"""
+        servos = row_data['config'].get('servos', [])
+        if index < len(servos) and channel != "Select Servo...":
+            servos[index]['channel'] = channel
+            row_data['config']['servos'] = servos
+    
+    def _update_multi_servo_invert(self, row_data: Dict, index: int, inverted: bool):
+        """Update the invert setting for a specific servo in multi-servo config"""
+        servos = row_data['config'].get('servos', [])
+        if index < len(servos):
+            servos[index]['invert'] = inverted
+            row_data['config']['servos'] = servos
+
+    def _create_toggle_servo_params(self, row_data: Dict):
+        """Create parameters for toggle servo behavior"""
+        # Header
+        header = QLabel("Toggle Servo Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        primary_color = theme_manager.get("primary_color")
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(header)
+        
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            axis_info = QLabel(f"Press {control_name} to toggle between two positions")
+            grey = theme_manager.get("grey")
+            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+            self.params_layout.addWidget(axis_info)
+        
+        # Servo selector
+        servo_combo = QComboBox()
+        servo_combo.addItems(["Select Servo..."] + self.servo_channels)
+        if 'target' in row_data['config']:
+            servo_combo.setCurrentText(row_data['config']['target'])
+        servo_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'target', text)
+        )
+        servo_combo.setStyleSheet(self._get_combo_style())
+        label = QLabel("Target Servo:")
+        label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label)
+        self.params_layout.addWidget(servo_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Position 1
+        pos1_spin = QSpinBox()
+        pos1_spin.setRange(800, 2200)
+        pos1_spin.setValue(row_data['config'].get('position_1', 1000))
+        pos1_spin.setSuffix(" μs")
+        pos1_spin.valueChanged.connect(
+            lambda val: self._update_row_config(row_data, 'position_1', val)
+        )
+        label1 = QLabel("Position 1:")
+        label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label1)
+        self.params_layout.addWidget(pos1_spin)
+        self.params_layout.addSpacing(6)
+        
+        # Position 2
+        pos2_spin = QSpinBox()
+        pos2_spin.setRange(800, 2200)
+        pos2_spin.setValue(row_data['config'].get('position_2', 2000))
+        pos2_spin.setSuffix(" μs")
+        pos2_spin.valueChanged.connect(
+            lambda val: self._update_row_config(row_data, 'position_2', val)
+        )
+        label2 = QLabel("Position 2:")
+        label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(label2)
+        self.params_layout.addWidget(pos2_spin)
+        self.params_layout.addSpacing(6)
+        
+        # Trigger timing
+        timing_combo = QComboBox()
+        timing_combo.addItems(["on_press", "on_release"])
+        timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
+        timing_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'trigger_timing', text)
+        )
+        timing_combo.setStyleSheet(self._get_combo_style())
+        timing_label = QLabel("Trigger When:")
+        timing_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(timing_label)
+        self.params_layout.addWidget(timing_combo)
+        
+        # Update target label
+        target = row_data['config'].get('target', 'Not configured')
+        pos1 = row_data['config'].get('position_1', 1000)
+        pos2 = row_data['config'].get('position_2', 2000)
+        row_data['target_label'].setText(f"→ {target} ({pos1}↔{pos2})")
 
     def _create_joystick_pair_params(self, row_data: Dict):
         """Create parameters for joystick pair behavior"""
@@ -2227,32 +2552,25 @@ class ControllerConfigScreen(BaseScreen):
         while self.grid_layout.count():
             self.grid_layout.takeAt(0)
             
-        # Reapply all layout settings to match headers exactly
+        # Reapply all layout settings
         self.grid_layout.setHorizontalSpacing(10)
         self.grid_layout.setVerticalSpacing(10)
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Reapply column stretch factors
-        self.grid_layout.setColumnStretch(0, 2)
-        self.grid_layout.setColumnStretch(1, 3)
-        self.grid_layout.setColumnStretch(2, 4)
-        self.grid_layout.setColumnStretch(3, 1)
+        # Reapply column stretch factors (remove button, input, behavior, target, configure)
+        self.grid_layout.setColumnStretch(0, 0)  # Remove button - fixed width
+        self.grid_layout.setColumnStretch(1, 2)  # Input
+        self.grid_layout.setColumnStretch(2, 3)  # Behavior
+        self.grid_layout.setColumnStretch(3, 4)  # Target
+        self.grid_layout.setColumnStretch(4, 0)  # Configure button - fixed width
             
         for row, row_data in enumerate(self.mapping_rows):
-            self.grid_layout.addWidget(row_data['input_combo'], row, 0)
-            self.grid_layout.addWidget(row_data['behavior_combo'], row, 1)
-            self.grid_layout.addWidget(row_data['target_label'], row, 2)
-            
-            # Create actions widget for this row
-            actions_widget = QWidget()
-            actions_layout = QHBoxLayout(actions_widget)
-            actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(5)
-            
-            actions_layout.addWidget(row_data['select_btn'])
-            actions_layout.addWidget(row_data['remove_btn'])
-            
-            self.grid_layout.addWidget(actions_widget, row, 3)
+            # Add to grid: remove, input, behavior, target, configure
+            self.grid_layout.addWidget(row_data['remove_btn'], row, 0)
+            self.grid_layout.addWidget(row_data['input_combo'], row, 1)
+            self.grid_layout.addWidget(row_data['behavior_combo'], row, 2)
+            self.grid_layout.addWidget(row_data['target_label'], row, 3)
+            self.grid_layout.addWidget(row_data['select_btn'], row, 4)
 
     def _save_all_mappings(self):
         """Save all controller mappings to configuration"""
@@ -2360,9 +2678,8 @@ class ControllerConfigScreen(BaseScreen):
             self.update_params_header_style()
             
             # Update column headers
-            if hasattr(self, 'header_labels'):
-                for header_label in self.header_labels:
-                    self.update_column_header_style(header_label)
+            # Header row removed - no headers to update
+            
             
             # Update buttons - FIX: Correct attribute names
             if hasattr(self, 'add_btn'):
@@ -2568,6 +2885,7 @@ class ControllerConfigScreen(BaseScreen):
                     border: 2px solid {primary};
                     border-radius: 4px;
                     padding: 4px 8px;
+                    margin-right: 10px;
                     font-size: 11px;
                     font-weight: bold;
                 }}
@@ -2583,6 +2901,7 @@ class ControllerConfigScreen(BaseScreen):
                     border: 1px solid {primary};
                     border-radius: 4px;
                     padding: 4px 8px;
+                    margin-right: 10px;
                     font-size: 11px;
                 }}
                 QPushButton:hover {{
@@ -2601,6 +2920,7 @@ class ControllerConfigScreen(BaseScreen):
                 border: 1px solid {red};
                 border-radius: 4px;
                 padding: 4px 6px;
+                margin-left: 10px;
                 font-size: 10px;
                 font-weight: bold;
             }}

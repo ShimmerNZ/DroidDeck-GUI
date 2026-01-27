@@ -291,7 +291,7 @@ class ServoConfigScreen(BaseScreen):
                     self.test_sweep_btn.setChecked(True)
                     self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} → {self.nema_config['max_position']:.1f} cm")
                 else:
-                    self.test_sweep_btn.setText("▶ TEST SWEEP")
+                    self.test_sweep_btn.setText("▶ TEST SWEEP")
                     self.test_sweep_btn.setChecked(False)
                     self.update_status("NEMA sweep stopped")
                     
@@ -1069,7 +1069,7 @@ class ServoConfigScreen(BaseScreen):
         # Create operation buttons
         button_configs = [
             ("↻ REFRESH", self.refresh_current_maestro, "Refresh Maestro connection"),
-            ("⌂ SET HOME", self.set_home_positions, "Set current positions as home"),
+            ("💾 SAVE SETTINGS", self.save_all_settings, "Save min, max, home, and name settings"),
             ("↩ GO HOME", self.go_home_positions, "Move all servos to home positions"),
             ("◉ READ POS", self.read_all_positions_now, "Read current servo positions"),
             ("⚡ TOGGLE LIVE", self.toggle_all_live_checkboxes, "Toggle all live updates")
@@ -1359,7 +1359,7 @@ class ServoConfigScreen(BaseScreen):
         control_layout.addLayout(slider_layout)
 
         # Test sweep button
-        self.test_sweep_btn = QPushButton("▶ TEST SWEEP")
+        self.test_sweep_btn = QPushButton("▶ TEST SWEEP")
         self.test_sweep_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.test_sweep_btn.setCheckable(True)
         self.test_sweep_btn.setFixedHeight(40)
@@ -1620,7 +1620,9 @@ class ServoConfigScreen(BaseScreen):
             self._update_checkbox_style(checkbox)
         for label in self.findChildren(QLabel):
             if label not in [self.status_label, self.header, self.maestro_label, self.ops_header]:
-                label.setStyleSheet("color: white; background: transparent;")
+                # Preserve existing font properties
+                current_font = label.font()
+                label.setStyleSheet(f"color: white; background: transparent; font-size: {current_font.pointSize()}pt; font-family: {current_font.family()};")
         
         # Update play buttons
         play_buttons = [widgets[2] for widgets in self.servo_widgets.values() if len(widgets) > 2]
@@ -1647,19 +1649,32 @@ class ServoConfigScreen(BaseScreen):
     def _update_spinbox_style(self, spinbox):
         """Apply themed styling to spinbox"""
         primary = theme_manager.get("primary_color")
+        
+        # Store current value to restore it
+        current_value = spinbox.value()
+        
+        # Set font directly on widget (more reliable than stylesheet for fonts)
+        spinbox.setFont(QFont("Arial", 16))
+        
+        # Apply other styling via stylesheet with min-height to prevent vertical squishing
         spinbox.setStyleSheet(f"""
         QSpinBox {{
             background-color: #2d2d2d;
             border: 1px solid #555;
             border-radius: 4px;
-            padding: 6px;
             color: white;
+            min-height: 30px;
         }}
         QSpinBox:focus {{ 
             border-color: {primary}; 
             background-color: #333333;
         }}
         """)
+        
+        # Force widget to update its display
+        spinbox.setValue(current_value)
+        spinbox.update()
+        spinbox.repaint()
 
     def _update_checkbox_style(self, checkbox):
         """Apply themed styling to checkbox"""
@@ -1894,7 +1909,7 @@ class ServoConfigScreen(BaseScreen):
             name_edit.setMaxLength(25)
             name_edit.setFixedWidth(140)
             name_edit.setPlaceholderText("Servo Name")
-            name_edit.textChanged.connect(lambda text, k=channel_key: self.update_config(k, "name", text))
+            name_edit.textChanged.connect(lambda text, k=channel_key: self._update_servo_config(k, "name", text))
             self._update_input_style(name_edit)
             self.grid_layout.addWidget(name_edit, row, 1)
             
@@ -1916,43 +1931,30 @@ class ServoConfigScreen(BaseScreen):
             
             # Min/Max value controls
             min_spin = QSpinBox()
-            min_spin.setFont(QFont("Arial", 16))
-            min_spin.setRange(0, 2500)
+            min_spin.setRange(800, 2200)
             min_spin.setValue(min_val)
             min_spin.setFixedWidth(75)
-            min_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "min", val))
-            min_spin.valueChanged.connect(lambda val, s=slider: s.setMinimum(val))
+            min_spin.valueChanged.connect(lambda val, k=channel_key, s=slider: self.update_min_value(k, val, s))
             self._update_spinbox_style(min_spin)
             self.grid_layout.addWidget(min_spin, row, 3)
             
             max_spin = QSpinBox()
-            max_spin.setFont(QFont("Arial", 16))
-            max_spin.setRange(0, 2500)
+            max_spin.setRange(800, 2200)
             max_spin.setValue(max_val)
             max_spin.setFixedWidth(75)
-            max_spin.valueChanged.connect(lambda val, k=channel_key: self.update_config(k, "max", val))
-            max_spin.valueChanged.connect(lambda val, s=slider: s.setMaximum(val))
+            max_spin.valueChanged.connect(lambda val, k=channel_key, s=slider: self.update_max_value(k, val, s))
             self._update_spinbox_style(max_spin)
             self.grid_layout.addWidget(max_spin, row, 4)
             
-            # Speed/Acceleration controls
-            speed_spin = QSpinBox()
-            speed_spin.setFont(QFont("Arial", 16))
-            speed_spin.setRange(0, 100)
-            speed_spin.setValue(config.get("speed", 0))
-            speed_spin.setFixedWidth(60)
-            speed_spin.valueChanged.connect(lambda val, k=channel_key: self.update_servo_speed_config(k, val))
-            self._update_spinbox_style(speed_spin)
-            self.grid_layout.addWidget(speed_spin, row, 5)
             
-            accel_spin = QSpinBox()
-            accel_spin.setFont(QFont("Arial", 16))
-            accel_spin.setRange(0, 100)
-            accel_spin.setValue(config.get("accel", 0))
-            accel_spin.setFixedWidth(60)
-            accel_spin.valueChanged.connect(lambda val, k=channel_key: self.update_servo_accel_config(k, val))
-            self._update_spinbox_style(accel_spin)
-            self.grid_layout.addWidget(accel_spin, row, 6)
+            # Home position input (does not update with slider)
+            home_spin = QSpinBox()
+            home_spin.setRange(800, 2200)
+            home_spin.setValue(home_pos if home_pos is not None else (min_val + max_val) // 2)
+            home_spin.setFixedWidth(75)
+            home_spin.valueChanged.connect(lambda val, k=channel_key: self._update_servo_config(k, "home", val))
+            self._update_spinbox_style(home_spin)
+            self.grid_layout.addWidget(home_spin, row, 5)
             
             # Position label
             pos_label = QLabel("---")
@@ -1961,7 +1963,7 @@ class ServoConfigScreen(BaseScreen):
             pos_label.setFixedWidth(60)
             primary = theme_manager.get("primary_color")
             pos_label.setStyleSheet(f"color: {primary}; background: transparent;")
-            self.grid_layout.addWidget(pos_label, row, 7)
+            self.grid_layout.addWidget(pos_label, row, 6)
             
             # Live update checkbox
             live_checkbox = QCheckBox()
@@ -1969,20 +1971,20 @@ class ServoConfigScreen(BaseScreen):
             live_checkbox.setToolTip("Enable live servo updates")
             live_checkbox.setFixedSize(20, 20)
             self._update_checkbox_style(live_checkbox)
-            self.grid_layout.addWidget(live_checkbox, row, 8)
+            self.grid_layout.addWidget(live_checkbox, row, 7)
             
             # Play/sweep button with themed styling
-            play_btn = QPushButton("▶")
+            play_btn = QPushButton("▶")
             play_btn.setFont(QFont("Arial", 12))
             play_btn.setCheckable(True)
             play_btn.setFixedSize(30, 30)
             self._update_play_button_style(play_btn)
             play_btn.clicked.connect(
                 lambda checked, k=channel_key, p=pos_label, b=play_btn,
-                min_spin=min_spin, max_spin=max_spin, speed_spin=speed_spin:
-                self.toggle_sweep_minmax(k, p, b, min_spin.value(), max_spin.value(), speed_spin.value())
+                min_spin=min_spin, max_spin=max_spin:
+                self.toggle_sweep_minmax(k, p, b, min_spin.value(), max_spin.value(), 0)
             )
-            self.grid_layout.addWidget(play_btn, row, 9)
+            self.grid_layout.addWidget(play_btn, row, 8)
             
             # Connect slider to servo movement
             slider.valueChanged.connect(
@@ -1991,7 +1993,7 @@ class ServoConfigScreen(BaseScreen):
             )
             
             # Track widgets for position updates
-            self.servo_widgets[channel_key] = (slider, pos_label, play_btn, live_checkbox, name_edit)
+            self.servo_widgets[channel_key] = (slider, pos_label, play_btn, live_checkbox, name_edit, min_spin, max_spin, home_spin)
         
         self.update_status(f"Maestro {maestro_num}: {channel_count} channels loaded")
 
@@ -2014,6 +2016,14 @@ class ServoConfigScreen(BaseScreen):
         
         # Send to backend immediately
         self.send_websocket_message("servo_acceleration", channel=channel_key, acceleration=accel)
+
+    def _update_servo_config(self, channel_key: str, field: str, value):
+        """Update a servo configuration field (general purpose)"""
+        if channel_key not in self.servo_config:
+            self.servo_config[channel_key] = {}
+        self.servo_config[channel_key][field] = value
+        # Note: We don't auto-save here to avoid constant saves while typing
+        # Save will happen when user clicks "Save Settings" button
 
 # ========================================
     # POSITION UPDATES AND SERVO CONTROL
@@ -2104,6 +2114,42 @@ class ServoConfigScreen(BaseScreen):
         
         self.logger.debug(f"Servo command: {channel_key} -> {value} (speed: {speed}, accel: {accel})")
         
+    def update_min_value(self, channel_key, value, slider):
+        """Update min value with validation"""
+        # Get widgets tuple to access max_spin
+        if channel_key in self.servo_widgets:
+            widgets = self.servo_widgets[channel_key]
+            max_spin = widgets[6] if len(widgets) > 6 else None
+            
+            if max_spin:
+                max_val = max_spin.value()
+                if value >= max_val:
+                    self.update_status(f"⚠️ Min ({value}) must be less than Max ({max_val}) for {channel_key}", error=True)
+                    return
+        
+        # Update config and slider
+        self._update_servo_config(channel_key, "min", value)
+        slider.setMinimum(value)
+        self.update_status("")
+    
+    def update_max_value(self, channel_key, value, slider):
+        """Update max value with validation"""
+        # Get widgets tuple to access min_spin
+        if channel_key in self.servo_widgets:
+            widgets = self.servo_widgets[channel_key]
+            min_spin = widgets[5] if len(widgets) > 5 else None
+            
+            if min_spin:
+                min_val = min_spin.value()
+                if value <= min_val:
+                    self.update_status(f"⚠️ Max ({value}) must be greater than Min ({min_val}) for {channel_key}", error=True)
+                    return
+        
+        # Update config and slider
+        self._update_servo_config(channel_key, "max", value)
+        slider.setMaximum(value)
+        self.update_status("")
+    
     def set_home_positions(self):
         """Set current slider positions as home positions for enabled servos"""
         maestro_num = self.current_maestro + 1
@@ -2151,6 +2197,74 @@ class ServoConfigScreen(BaseScreen):
             self.send_websocket_message("servo_home_positions", 
                                     maestro=maestro_num, 
                                     home_positions=home_positions)
+    
+    def save_all_settings(self):
+        """Save all settings: min, max, home, and name values for all servos"""
+        maestro_num = self.current_maestro + 1
+        
+        if not self.maestro_connected.get(maestro_num, False):
+            self.update_status(f"Maestro {maestro_num} not connected", error=True)
+            return
+        
+        # Prepare data to send to backend
+        channels_config = {}
+        save_count = 0
+        
+        for channel_key, widgets in self.servo_widgets.items():
+            if channel_key.startswith(f"m{maestro_num}_"):
+                # Extract widgets: (slider, pos_label, play_btn, live_checkbox, name_edit, min_spin, max_spin, home_spin)
+                if len(widgets) >= 8:
+                    slider = widgets[0]
+                    name_edit = widgets[4]
+                    min_spin = widgets[5]
+                    max_spin = widgets[6]
+                    home_spin = widgets[7]
+                    
+                    channel_num = int(channel_key.split("_ch")[1])
+                    
+                    # Get all values
+                    min_val = min_spin.value()
+                    max_val = max_spin.value()
+                    home_val = home_spin.value()
+                    name_val = name_edit.text()
+                    
+                    # Validate min < max
+                    if min_val >= max_val:
+                        self.update_status(f"⚠️ Cannot save: Min >= Max for {channel_key}", error=True)
+                        return
+                    
+                    # Update local config
+                    if channel_key not in self.servo_config:
+                        self.servo_config[channel_key] = {}
+                    self.servo_config[channel_key]["min"] = min_val
+                    self.servo_config[channel_key]["max"] = max_val
+                    self.servo_config[channel_key]["home"] = home_val
+                    self.servo_config[channel_key]["name"] = name_val
+                    
+                    # Update home indicator on slider
+                    slider.set_home_position(home_val)
+                    
+                    # Prepare for backend
+                    channels_config[channel_num] = {
+                        "min": min_val,
+                        "max": max_val,
+                        "home": home_val,
+                        "name": name_val
+                    }
+                    
+                    save_count += 1
+        
+        # Save to file
+        success = config_manager.save_config("resources/configs/servo_config.json", self.servo_config)
+        
+        if success:
+            # Send to backend
+            self.send_websocket_message("servo_save_settings", 
+                                      maestro=maestro_num,
+                                      channels=channels_config)
+            self.update_status(f"✓ Saved settings for {save_count} servos")
+        else:
+            self.update_status("Failed to save settings", error=True)
     
     def go_home_positions(self):
         """Move all servos to their home positions"""
@@ -2217,7 +2331,7 @@ class ServoConfigScreen(BaseScreen):
             # Stop existing sweep
             self.active_sweeps[channel_key].stop()
             del self.active_sweeps[channel_key]
-            button.setText("▶")
+            button.setText("▶")
             button.setChecked(False)
             self.logger.info(f"Stopped sweep for {channel_key}")
             return
@@ -2462,7 +2576,7 @@ class MinMaxSweep:
         # Update UI
         self.label.setText(f"C:{center_pos}")
         self.label.setStyleSheet("color: #AAAAAA; background: transparent;")
-        self.btn.setText("▶")
+        self.btn.setText("▶")
         self.btn.setChecked(False)
         
         self.logger.info(f"Min/Max sweep stopped: {self.channel_key} returned to center ({center_pos})")

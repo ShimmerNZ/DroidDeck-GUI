@@ -152,7 +152,7 @@ class HealthScreen(BaseScreen):
         
         # Add legend
         self.graph_widget.addLegend(offset=(10, 20))
-        self.graph_widget.getPlotItem().setContentsMargins(5, 5, 5, 5)
+        self.graph_widget.getPlotItem().setContentsMargins(15, 15, 15, 15)
         
         # Data storage with performance limits
         self.max_data_points = 100
@@ -363,7 +363,7 @@ class HealthScreen(BaseScreen):
         system_layout.addWidget(self.system_header)
         
         # Bandwidth test button with themed styling
-        self.bandwidth_btn = QPushButton("ðŸŒ BANDWIDTH TEST")
+        self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
         self._update_bandwidth_button_style()
@@ -478,11 +478,11 @@ class HealthScreen(BaseScreen):
         panel_bg = theme_manager.get("panel_bg")
         self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
         graph_layout = QVBoxLayout(self.graph_frame)
-        graph_layout.setContentsMargins(15, 10, 15, 10)
+        graph_layout.setContentsMargins(10, 10, 10, 10)
         
         # Graph sizing - larger and full height
-        self.graph_widget.setFixedWidth(680)
-        self.graph_widget.setFixedHeight(475)  # Increased height
+        self.graph_widget.setFixedWidth(690)
+        self.graph_widget.setFixedHeight(455)  # Increased height
         
         graph_layout.addWidget(self.graph_widget)
         
@@ -543,7 +543,7 @@ class HealthScreen(BaseScreen):
         
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
-        self.bandwidth_btn.setText("ðŸŒ BANDWIDTH TEST")
+        self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
         
 
     def get_voltage_status_text(self, voltage: float) -> tuple:

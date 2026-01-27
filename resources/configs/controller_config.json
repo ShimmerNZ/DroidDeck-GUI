@@ -1,9 +1,16 @@
 {
   "left_trigger": {
-    "behavior": "direct_servo",
-    "input_type": "trigger",
-    "target": "m1_ch7",
-    "invert": false
+    "behavior": "multi_servo",
+    "servos": [
+      {
+        "channel": "m1_ch6",
+        "invert": false
+      },
+      {
+        "channel": "m1_ch7",
+        "invert": true
+      }
+    ]
   },
   "button_x": {
     "behavior": "toggle_scenes",
@@ -57,5 +64,10 @@
   "button_menu": {
     "behavior": "system_control",
     "system_action": "exit_app"
+  },
+  "stick_right_click": {
+    "behavior": "toggle_servo",
+    "target": "m2_ch1",
+    "position_1": 850
   }
 }

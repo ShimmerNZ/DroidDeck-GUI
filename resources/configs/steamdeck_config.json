@@ -19,9 +19,10 @@
     "wave_detection": {
       "sample_duration": 2,
       "sample_rate": 5,
-      "confidence_threshold": 0.7,
+      "confidence_threshold": 0.71,
       "stand_down_time": 20
-    }
+    },
+    "volume": 66
   },
   "defaults": {
     "esp32_cam_url": "http://192.168.1.100:81/stream",

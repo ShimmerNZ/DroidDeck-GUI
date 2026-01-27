@@ -333,22 +333,22 @@ class SettingsScreen(BaseScreen):
         """Initialize settings interface"""
         self.config_path = "resources/configs/steamdeck_config.json"
 
-        # Root layout (similar outer margins to Home screen)
+        # Root layout (reduced margins to fit all content)
         root = QVBoxLayout()
-        root.setContentsMargins(98, 22, 90, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(98, 15, 90, 5)
+        root.setSpacing(5)
 
         # Main themed frame (like Home right panel)
         self.main_frame = QFrame()
         self._update_main_frame_style()
 
         main = QVBoxLayout(self.main_frame)
-        main.setContentsMargins(0, 5, 0, 0)
-        main.setSpacing(5)
+        main.setContentsMargins(0, 3, 0, 0)
+        main.setSpacing(3)
 
         # Add header
         self.header = QLabel("Settings Configuration")
-        self.header.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        self.header.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_header_style()
         main.addWidget(self.header)
@@ -365,9 +365,9 @@ class SettingsScreen(BaseScreen):
 
         content_widget = QWidget()
         content_layout = QGridLayout(content_widget)
-        content_layout.setContentsMargins(8, 0, 8, 0)
-        content_layout.setHorizontalSpacing(12)
-        content_layout.setVerticalSpacing(10)
+        content_layout.setContentsMargins(6, 0, 6, 0)
+        content_layout.setHorizontalSpacing(8)
+        content_layout.setVerticalSpacing(6)
 
         # Sections
         self.network_group = self._create_section("Network Configuration")
@@ -379,16 +379,21 @@ class SettingsScreen(BaseScreen):
         self.wave_group = self._create_section("Wave Detection")
         self._build_wave(self.wave_group)
 
-        # Two-column placement to use width
+        # Two-column layout: Network on left, Logging + Wave stacked on right
         content_layout.addWidget(self.network_group, 0, 0, 2, 1)  # row, col, rowspan, colspan
         content_layout.addWidget(self.logging_group, 0, 1)
         content_layout.addWidget(self.wave_group, 1, 1)
-        # Add spacing below network configuration
-        content_layout.setRowMinimumHeight(2, 10)  # 20px spacing row
-        # Buttons row (full width) - moved to row 3 to account for spacing
-        content_layout.setRowStretch(1, 1)
+        
+        # Set column widths
+        content_layout.setColumnStretch(0, 1)  # Network
+        content_layout.setColumnStretch(1, 1)  # Logging + Wave
+        
+        # Add minimal spacing below sections
+        content_layout.setRowMinimumHeight(2, 5)
+        
+        # Buttons row (full width)
         buttons_layout = self._create_control_buttons()
-        content_layout.addLayout(buttons_layout, 3, 0, 1, 2)  # Changed from row 2 to 3
+        content_layout.addLayout(buttons_layout, 3, 0, 1, 2)  # Span both columns
 
         self.scroll_area.setWidget(content_widget)
         main.addWidget(self.scroll_area)
@@ -491,6 +496,32 @@ class SettingsScreen(BaseScreen):
         self._update_theme_button_styles()
 
         row.addStretch()
+        
+        # Add volume control to the right of theme buttons
+        vol_label = QLabel("System Volume:")
+        vol_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self._update_label_style(vol_label)
+        row.addWidget(vol_label)
+        
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(70)  # Default 70%
+        self.volume_slider.setMaximumWidth(140)
+        self.volume_slider.setFixedHeight(26)
+        self._update_slider_style(self.volume_slider)
+        row.addWidget(self.volume_slider)
+        
+        self.volume_value = QLabel("70%")
+        self.volume_value.setFont(QFont("Arial", 13))
+        self.volume_value.setMaximumWidth(60)
+        self._update_value_label_style(self.volume_value)
+        row.addWidget(self.volume_value)
+        
+        # Update label when slider moves
+        self.volume_slider.valueChanged.connect(
+            lambda v: self.volume_value.setText(f"{v}%")
+        )
+        
         parent_layout.addLayout(row)
 
     def _update_theme_button_styles(self):
@@ -521,7 +552,7 @@ class SettingsScreen(BaseScreen):
 
     def _create_section(self, title: str) -> QGroupBox:
         group = QGroupBox(title)
-        group.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        group.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self._update_section_style(group)
         return group
 
@@ -533,16 +564,16 @@ class SettingsScreen(BaseScreen):
             font-weight: bold;
             border: 2px solid {primary};
             border-radius: 6px;
-            margin-top: 18px;
-            padding-top: 12px;
+            margin-top: 12px;
+            padding-top: 8px;
             color: {primary};
             background-color: rgba(0, 0, 0, 0.3);
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
             left: 15px;
-            padding: 0 8px 0 8px;
-            top: 5px;
+            padding: 0 6px 0 6px;
+            top: 3px;
             border-radius: 6px;
             background-color: {panel_bg};
             color: {primary};
@@ -551,11 +582,11 @@ class SettingsScreen(BaseScreen):
 
     def _build_network(self, group: QGroupBox):
         layout = QGridLayout()
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(6)
+        layout.setContentsMargins(8, 0, 8, 4)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 16)
+        font = QFont("Arial", 13)
         labels = [
             ("ESP32 Camera:", "esp32_url", "http://192.168.1.100:81/stream"),
             ("Camera Proxy:", "proxy_url", "http://10.1.1.230:8081/stream"),
@@ -566,13 +597,13 @@ class SettingsScreen(BaseScreen):
         for i, (text, key, placeholder) in enumerate(labels):
             lab = QLabel(text)
             lab.setFont(font)
-            lab.setMinimumWidth(170)
+            lab.setMinimumWidth(140)
             self._update_label_style(lab)
 
             edit = QLineEdit()
             edit.setFont(font)
-            edit.setFixedHeight(30)
-            edit.setMinimumWidth(230)
+            edit.setFixedHeight(26)
+            edit.setMinimumWidth(200)
             edit.setPlaceholderText(placeholder)
             self._update_input_style(edit)
 
@@ -584,11 +615,11 @@ class SettingsScreen(BaseScreen):
 
     def _build_logging(self, group: QGroupBox):
         layout = QGridLayout()
-        layout.setContentsMargins(10, 0, 10, 10)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(8)
+        layout.setContentsMargins(8, 0, 8, 4)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 16)
+        font = QFont("Arial", 13)
 
         items = [
             ("Global Debug:", "debug_combo"),
@@ -608,7 +639,7 @@ class SettingsScreen(BaseScreen):
             combo = QComboBox()
             combo.setFont(font)
             combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
-            combo.setFixedHeight(30)
+            combo.setFixedHeight(26)
             combo.setFixedWidth(120)
             self._update_combo_style(combo)
 
@@ -620,11 +651,11 @@ class SettingsScreen(BaseScreen):
 
     def _build_wave(self, group: QGroupBox):
         layout = QGridLayout()
-        layout.setContentsMargins(10, 0, 10, 10)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(8)
+        layout.setContentsMargins(8, 0, 8, 4)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 16)
+        font = QFont("Arial", 13)
 
         # Row 0: Sample Duration / Sample Rate
         dur_lab = QLabel("Sample Duration:")
@@ -635,7 +666,7 @@ class SettingsScreen(BaseScreen):
         self.sample_duration_spin.setFont(font)
         self.sample_duration_spin.setRange(1, 10)
         self.sample_duration_spin.setValue(3)
-        self.sample_duration_spin.setFixedHeight(30)
+        self.sample_duration_spin.setFixedHeight(26)
         self.sample_duration_spin.setMaximumWidth(70)
         self._update_spinbox_style(self.sample_duration_spin)
         layout.addWidget(self.sample_duration_spin, 0, 1)
@@ -648,7 +679,7 @@ class SettingsScreen(BaseScreen):
         self.sample_rate_spin.setFont(font)
         self.sample_rate_spin.setRange(1, 60)
         self.sample_rate_spin.setValue(5)
-        self.sample_rate_spin.setFixedHeight(30)
+        self.sample_rate_spin.setFixedHeight(26)
         self.sample_rate_spin.setMaximumWidth(70)
         self._update_spinbox_style(self.sample_rate_spin)
         layout.addWidget(self.sample_rate_spin, 0, 3)
@@ -663,7 +694,7 @@ class SettingsScreen(BaseScreen):
         self.confidence_slider.setRange(0, 100)
         self.confidence_slider.setValue(70)
         self.confidence_slider.setMaximumWidth(140)
-        self.confidence_slider.setFixedHeight(30)
+        self.confidence_slider.setFixedHeight(26)
         self._update_slider_style(self.confidence_slider)
 
         self.confidence_value = QLabel("70%")
@@ -687,12 +718,13 @@ class SettingsScreen(BaseScreen):
         self.stand_down_spin.setFont(font)
         self.stand_down_spin.setRange(0, 300)
         self.stand_down_spin.setValue(30)
-        self.stand_down_spin.setFixedHeight(30)
+        self.stand_down_spin.setFixedHeight(26)
         self.stand_down_spin.setMaximumWidth(90)
         self._update_spinbox_style(self.stand_down_spin)
         layout.addWidget(self.stand_down_spin, 1, 3)
 
         group.setLayout(layout)
+
 
     # ---------- Buttons row ----------
 
@@ -704,22 +736,22 @@ class SettingsScreen(BaseScreen):
         self.save_btn = QPushButton("💾 Save Settings")
         self.save_btn.setFont(font)
         self.save_btn.clicked.connect(self.save_config)
-        self.save_btn.setFixedHeight(45)
-        self.save_btn.setMinimumWidth(160)
+        self.save_btn.setFixedHeight(40)
+        self.save_btn.setMinimumWidth(140)
         self._update_save_button_style()
 
         self.reset_btn = QPushButton("🔄 Reset")
         self.reset_btn.setFont(font)
         self.reset_btn.clicked.connect(self.reset_to_defaults)
-        self.reset_btn.setFixedHeight(45)
-        self.reset_btn.setMinimumWidth(120)
+        self.reset_btn.setFixedHeight(40)
+        self.reset_btn.setMinimumWidth(110)
         self._update_reset_button_style()
 
         self.test_connection_btn = QPushButton("🔗 Test")
         self.test_connection_btn.setFont(font)
         self.test_connection_btn.clicked.connect(self.test_websocket_connection)
-        self.test_connection_btn.setFixedHeight(45)
-        self.test_connection_btn.setMinimumWidth(110)
+        self.test_connection_btn.setFixedHeight(40)
+        self.test_connection_btn.setMinimumWidth(100)
         self._update_test_button_style()
 
         row.addWidget(self.save_btn)
@@ -786,7 +818,13 @@ class SettingsScreen(BaseScreen):
     # ---------- Widget styling helpers ----------
 
     def _update_label_style(self, label: QLabel):
-        label.setStyleSheet("color: white; background: transparent;")
+        label.setStyleSheet("""
+            color: white; 
+            background: transparent;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 0px;
+        """)
 
     def _update_input_style(self, input_field: QLineEdit):
         primary = theme_manager.get("primary_color")
@@ -842,11 +880,19 @@ class SettingsScreen(BaseScreen):
         min-height: 24px;
         max-height: 40px;
         font-size: 14px;
-
+        font-family: Arial;
         }}
         QSpinBox:focus {{ 
             border-color: {primary}; 
             background-color: #333333;
+        }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            font-size: 14px;
+            font-family: Arial;
+            font-weight: bold;
+        }}
+        QSpinBox::up-arrow, QSpinBox::down-arrow {{
+            font-size: 14px;
         }}
         """)
 
@@ -976,6 +1022,11 @@ class SettingsScreen(BaseScreen):
         self.confidence_value.setText(f"{conf_pct}%")
         self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
 
+        # Audio - Load volume
+        volume = current.get("volume", 70)
+        self.volume_slider.setValue(volume)
+        self.volume_value.setText(f"{volume}%")
+
         # Theme selector state - ensure buttons reflect current theme
         self._update_theme_button_styles()
 
@@ -1010,7 +1061,8 @@ class SettingsScreen(BaseScreen):
                     "sample_rate": self.sample_rate_spin.value(),
                     "confidence_threshold": self.confidence_slider.value() / 100.0,
                     "stand_down_time": self.stand_down_spin.value(),
-                }
+                },
+                "volume": self.volume_slider.value()
             },
             "defaults": existing.get("defaults", {})
         }
@@ -1022,16 +1074,21 @@ class SettingsScreen(BaseScreen):
 
         if success:
             if self.websocket:
+                # Send volume update to backend
+                volume_val = self.volume_slider.value()
+                self.logger.info(f"Sending volume update to backend: {volume_val}%")
                 self.send_websocket_message(
-                    "update_camera_config",
-                    esp32_url=self.network_inputs["esp32_url"].text().strip()
+                    "set_system_volume",
+                    volume=volume_val
                 )
+            else:
+                self.logger.warning("WebSocket not available - volume update not sent to backend")
 
             QMessageBox.information(
                 self,
                 "Settings Saved",
                 "Configuration updated successfully.\n\n"
-                "Note: Some changes (e.g., global log level) may require app restart."
+                "Note: Some changes (e.g., global log level, volume) may require app restart."
             )
             self.logger.info("Configuration updated successfully")
             self._notify_config_changes()
@@ -1134,7 +1191,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"🔍 {category}:")
+            result_lines.append(f"ðŸ” {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1143,13 +1200,13 @@ class SettingsScreen(BaseScreen):
                     message = result['message']
                     
                     if status == 'success':
-                        icon = "✅"
+                        icon = "âœ…"
                     elif status == 'warning':
-                        icon = "⚠️"
+                        icon = "âš ï¸"
                     elif status == 'info':
-                        icon = "ℹ️"
+                        icon = "â„¹ï¸"
                     else:
-                        icon = "❌"
+                        icon = "âŒ"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")
@@ -1160,7 +1217,7 @@ class SettingsScreen(BaseScreen):
         if overall_success:
             result_lines.append("🎉 All critical tests passed! Your network configuration looks good.")
         else:
-            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
+            result_lines.append("âš ï¸ Some tests failed. Please check the issues above and verify your network configuration.")
         
         # Show results in appropriate dialog type
         result_text = "\n".join(result_lines)
@@ -1231,6 +1288,7 @@ class SettingsScreen(BaseScreen):
                     "confidence_threshold": 0.7,
                     "stand_down_time": 30,
                 },
+                "volume": 70,
             }
         }
         default_config["defaults"] = default_config["current"].copy()
@@ -1256,4 +1314,3 @@ class SettingsScreen(BaseScreen):
 
         except Exception as e:
             self.logger.warning(f"Failed to notify components of config changes: {e}")
-
