@@ -261,10 +261,6 @@ class ServoConfigScreen(BaseScreen):
                 self.handle_nema_error(msg)
             elif msg_type == "nema_enable_response":
                 self.handle_nema_enable_response(msg)
-            else:
-                # CATCH-ALL: Log any message types we don't handle
-                print(f"SERVO SCREEN: UNHANDLED MESSAGE TYPE: '{msg_type}'")
-                self.logger.warning(f"Unhandled message type: {msg_type}")
                 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to parse WebSocket message: {e}")
@@ -1875,33 +1871,28 @@ class ServoConfigScreen(BaseScreen):
             self.update_status("Failed to request Maestro info: WebSocket error", error=True)
 
     def refresh_current_maestro(self):
-        """Resync settings from backend - request config from backend via WebSocket"""
+        """Request servo configuration from backend via WebSocket"""
         maestro_num = self.current_maestro + 1
-        
-        print("=" * 80)
-        print(f"REFRESH BUTTON CLICKED - Maestro {maestro_num}")
-        print("=" * 80)
         
         # Stop any active operations
         self.stop_all_sweeps()
-        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():\
+        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
             self.position_update_timer.stop()
         
-        # Request configuration from backend via WebSocket
-        self.update_status(f"[REFRESH] Requesting config from backend for Maestro {maestro_num}...")
-        
-        print(f"Sending servo_request_config for Maestro {maestro_num}")
-        
         # Send WebSocket request to backend
+        self.update_status(f"Requesting config from backend for Maestro {maestro_num}...")
         success = self.send_websocket_message("servo_request_config", maestro=maestro_num)
         
-        if success:
-            print(f"[SENT] Config request sent successfully!")
-            self.logger.info(f"[SENT] Config request sent to backend for Maestro {maestro_num}")
-        else:
-            print(f"[ERROR] Failed to send config request!")
-            self.logger.error(f"[ERROR] Failed to send config request to backend")
-            self.update_status("[ERROR] Failed to request config from backend", error=True)
+        if not success:
+            self.logger.error("Failed to send config request to backend")
+            self.update_status("Failed to request config from backend", error=True)
+
+    def update_maestro_selector_status(self):
+        """Update the maestro selector to show which ones are detected"""
+        pass
+            # Grid not yet built, just reload
+            self.reload_servo_config()
+            self.update_status(f"✅ Configuration reloaded for Maestro {maestro_num}")
 
     def update_maestro_selector_status(self):
         """Update the maestro selector to show which ones are detected"""
@@ -1989,10 +1980,6 @@ class ServoConfigScreen(BaseScreen):
             channel_key = f"m{maestro_num}_ch{i}"
             config = self.servo_config.get(channel_key, {})
             row = i
-            
-            # Debug: Log what we're reading from config
-            servo_name = config.get("name", "")
-            self.logger.debug(f"Building grid row {i}: {channel_key}, name='{servo_name}', config={config}")
             
             # Channel number
             label = QLabel(f"Ch{i}")

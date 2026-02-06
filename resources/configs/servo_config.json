@@ -165,13 +165,13 @@
     "home": 1261,
     "min": 992,
     "max": 2000,
-    "name": "Head Pan"
+    "name": "Head Tilt"
   },
   "m1_ch1": {
     "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": "Head Tilt"
+    "name": "Head Pan"
   },
   "m1_ch2": {
     "home": 1500,
