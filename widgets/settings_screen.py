@@ -1305,6 +1305,22 @@ class SettingsScreen(BaseScreen):
             success = False
 
         if success:
+            # ALSO save volume to hardware_config.json so it persists on backend restart
+            try:
+                volume_float = self._get_volume_value() / 100.0  # Convert to 0.0-1.0
+                hw_config = config_manager.get_config("configs/hardware_config.json")
+                if "hardware" not in hw_config:
+                    hw_config["hardware"] = {}
+                if "audio" not in hw_config["hardware"]:
+                    hw_config["hardware"]["audio"] = {}
+                    
+                hw_config["hardware"]["audio"]["volume"] = volume_float
+                
+                if config_manager.save_config("configs/hardware_config.json", hw_config):
+                    self.logger.info(f"Volume {volume_float:.2f} saved to hardware_config.json")
+            except Exception as e:
+                self.logger.warning(f"Could not save volume to hardware_config: {e}")
+            
             if self.websocket:
                 # Send volume update to backend
                 volume_val = self._get_volume_value()

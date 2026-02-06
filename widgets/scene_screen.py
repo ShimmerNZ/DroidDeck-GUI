@@ -22,7 +22,7 @@ CATEGORIES = {
     "Surprise": "😲",
     "Love": "❤️",
     "Calm": "😌",
-    "Sound Effect": "🔊",
+    "Sound Effect": "📊",
     "Misc": "⭐",
     "Idle": "💤",
     "Sleepy": "😴"
@@ -322,7 +322,15 @@ class EnhancedSceneRow(QWidget):
         grey = theme_manager.get("grey")
         
         audio_enabled = self.audio_cb.isChecked() if hasattr(self, 'audio_cb') else self.scene_data.get("audio_enabled", False)
-        script_enabled = self.script_cb.isChecked() if hasattr(self, 'script_cb') else self.scene_data.get("script_enabled", False)
+        
+        # Check if any script is specified
+        if hasattr(self, 'script_m1_input') and hasattr(self, 'script_m2_input'):
+            has_m1 = self.script_m1_input.text().strip() != ""
+            has_m2 = self.script_m2_input.text().strip() != ""
+            script_enabled = has_m1 or has_m2
+        else:
+            script_enabled = (self.scene_data.get("script_maestro1") is not None or 
+                            self.scene_data.get("script_maestro2") is not None)
         
         # Update audio indicator
         self.audio_indicator.setStyleSheet(f"""
@@ -541,33 +549,43 @@ class EnhancedSceneRow(QWidget):
         layout.addWidget(self.audio_cb)
         layout.addWidget(self.audio_file_combo)
         
-        # Script section
-        self.script_cb = QCheckBox("Script:")
-        self.script_cb.setChecked(self.scene_data.get("script_enabled", False))
-        self.update_checkbox_style(self.script_cb)
+        # Maestro 1 Script section
+        maestro1_label = QLabel("M1 Script:")
+        maestro1_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 70px; border: none; background: transparent;")
         
-        # Script input
-        self.script_input = QLineEdit()
-        script_value = self.scene_data.get("script_name", "")
-        if script_value and script_value != 0:
-            self.script_input.setText(str(script_value))
+        self.script_m1_input = QLineEdit()
+        script_m1_value = self.scene_data.get("script_maestro1")
+        if script_m1_value is not None:
+            self.script_m1_input.setText(str(script_m1_value))
         else:
-            self.script_input.setText("")
+            self.script_m1_input.setText("")
         
-        self.script_input.setPlaceholderText("Script #")
-        self.script_input.setEnabled(self.script_cb.isChecked())
-        self.update_script_input_style()
+        self.script_m1_input.setPlaceholderText("#")
+        self.update_script_input_style(self.script_m1_input)
         
-        def update_script_input_enabled():
-            enabled = self.script_cb.isChecked()
-            self.script_input.setEnabled(enabled)
+        self.script_m1_input.textChanged.connect(lambda text: self.validate_script_input(text, self.script_m1_input))
         
-        self.script_input.textChanged.connect(self.validate_script_input)
-        self.script_cb.stateChanged.connect(lambda: update_script_input_enabled())
-        self.script_cb.stateChanged.connect(self.update_indicators)
+        layout.addWidget(maestro1_label)
+        layout.addWidget(self.script_m1_input)
         
-        layout.addWidget(self.script_cb)
-        layout.addWidget(self.script_input)
+        # Maestro 2 Script section
+        maestro2_label = QLabel("M2 Script:")
+        maestro2_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 70px; border: none; background: transparent;")
+        
+        self.script_m2_input = QLineEdit()
+        script_m2_value = self.scene_data.get("script_maestro2")
+        if script_m2_value is not None:
+            self.script_m2_input.setText(str(script_m2_value))
+        else:
+            self.script_m2_input.setText("")
+        
+        self.script_m2_input.setPlaceholderText("#")
+        self.update_script_input_style(self.script_m2_input)
+        
+        self.script_m2_input.textChanged.connect(lambda text: self.validate_script_input(text, self.script_m2_input))
+        
+        layout.addWidget(maestro2_label)
+        layout.addWidget(self.script_m2_input)
         
         # Duration section
         duration_label = QLabel("Duration:")
@@ -591,14 +609,21 @@ class EnhancedSceneRow(QWidget):
         self.delay_spin.setRange(0, 10000)
         self.delay_spin.setValue(self.scene_data.get("delay", 0))
         self.delay_spin.setSuffix("ms")
-        self.delay_spin.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
+        # Delay is enabled if audio is checked AND at least one script is specified
+        self.delay_spin.setEnabled(self.audio_cb.isChecked() and (
+            self.script_m1_input.text().strip() != "" or 
+            self.script_m2_input.text().strip() != ""
+        ))
         self.update_spin_style(self.delay_spin)
         
         def update_delay_enabled():
-            self.delay_spin.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
+            has_script = (self.script_m1_input.text().strip() != "" or 
+                         self.script_m2_input.text().strip() != "")
+            self.delay_spin.setEnabled(self.audio_cb.isChecked() and has_script)
         
         self.audio_cb.stateChanged.connect(update_delay_enabled)
-        self.script_cb.stateChanged.connect(update_delay_enabled)
+        self.script_m1_input.textChanged.connect(lambda: update_delay_enabled())
+        self.script_m2_input.textChanged.connect(lambda: update_delay_enabled())
         
         layout.addWidget(delay_label)
         layout.addWidget(self.delay_spin)
@@ -694,13 +719,13 @@ class EnhancedSceneRow(QWidget):
             }}
         """)
     
-    def update_script_input_style(self):
+    def update_script_input_style(self, input_widget):
         """Update script input styling"""
         card_bg = theme_manager.get("card_bg")
         primary = theme_manager.get("primary_color")
         grey = theme_manager.get("grey")
         
-        self.script_input.setStyleSheet(f"""
+        input_widget.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {card_bg};
                 border: 2px solid {primary};
@@ -739,16 +764,18 @@ class EnhancedSceneRow(QWidget):
             }}
         """)
     
-    def validate_script_input(self, text):
+    def validate_script_input(self, text, input_widget):
         """Only allow digits in script input"""
         if text and not text.isdigit():
             filtered_text = ''.join(c for c in text if c.isdigit())
-            self.script_input.setText(filtered_text)
+            input_widget.setText(filtered_text)
     
     def update_indicators(self):
         """Update the type indicators based on checkbox states"""
         audio_enabled = self.audio_cb.isChecked()
-        script_enabled = self.script_cb.isChecked()
+        has_m1_script = self.script_m1_input.text().strip() != ""
+        has_m2_script = self.script_m2_input.text().strip() != ""
+        script_enabled = has_m1_script or has_m2_script
         primary = theme_manager.get("primary_color")
         grey = theme_manager.get("grey")
         
@@ -812,11 +839,11 @@ class EnhancedSceneRow(QWidget):
     
     def get_scene_data(self):
         """Extract current scene data from widgets"""
-        script_value = self.script_input.text().strip()
-        if script_value.isdigit():
-            script_num = int(script_value)
-        else:
-            script_num = None
+        script_m1_value = self.script_m1_input.text().strip()
+        script_m1_num = int(script_m1_value) if script_m1_value.isdigit() else None
+        
+        script_m2_value = self.script_m2_input.text().strip()
+        script_m2_num = int(script_m2_value) if script_m2_value.isdigit() else None
         
         audio_file = self.audio_file_combo.currentText() if self.audio_cb.isChecked() else ""
         
@@ -826,10 +853,10 @@ class EnhancedSceneRow(QWidget):
             "categories": self.category_selector.get_selected_categories(),
             "audio_enabled": self.audio_cb.isChecked(),
             "audio_file": audio_file,
-            "script_enabled": self.script_cb.isChecked(),
-            "script_name": script_num if (self.script_cb.isChecked() and script_num is not None) else None,
+            "script_maestro1": script_m1_num,
+            "script_maestro2": script_m2_num,
             "duration": self.duration_spin.value(),
-            "delay": self.delay_spin.value() if (self.audio_cb.isChecked() and self.script_cb.isChecked()) else 0
+            "delay": self.delay_spin.value() if (self.audio_cb.isChecked() and (script_m1_num is not None or script_m2_num is not None)) else 0
         }
 
 class SceneScreen(BaseScreen):

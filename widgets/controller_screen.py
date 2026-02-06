@@ -1129,25 +1129,25 @@ class ControllerConfigScreen(BaseScreen):
         
         current_action = row_data['config'].get('system_action', 'Not configured')
         if current_action in descriptions:
-            desc_label = QLabel(f"📝 {descriptions[current_action]}")
+            desc_label = QLabel(f"ðŸ“ {descriptions[current_action]}")
             desc_label.setStyleSheet(f"color: #4CAF50; padding: 8px; background-color: rgba(76, 175, 80, 0.1); border-radius: 4px; font-size: 10px; font-style: italic; border: none;")
             desc_label.setWordWrap(True)
             self.params_layout.addWidget(desc_label)
         
         # Warning for destructive actions
         if current_action in ["restart_pi", "shutdown_pi"]:
-            warning_label = QLabel("⚠️ WARNING: This will affect the entire Raspberry Pi system!")
+            warning_label = QLabel("âš ï¸ WARNING: This will affect the entire Raspberry Pi system!")
             warning_label.setStyleSheet(f"color: #F44336; padding: 6px; background-color: rgba(244, 67, 54, 0.1); border-radius: 4px; font-size: 10px; font-weight: bold; border: none;")
             warning_label.setWordWrap(True)
             self.params_layout.addWidget(warning_label)
         elif current_action in ["exit_app", "restart_app"]:
-            info_label = QLabel("ℹ️ This action includes a confirmation dialog for safety")
+            info_label = QLabel("â„¹ï¸ This action includes a confirmation dialog for safety")
             info_label.setStyleSheet(f"color: #2196F3; padding: 6px; background-color: rgba(33, 150, 243, 0.1); border-radius: 4px; font-size: 10px; border: none;")
             info_label.setWordWrap(True)
             self.params_layout.addWidget(info_label)
         
         action = row_data['config'].get('system_action', 'Not configured')
-        row_data['target_label'].setText(f"→ {action}")
+        row_data['target_label'].setText(f"â†’ {action}")
 
     def _load_existing_configuration(self):
         """Load existing controller configuration on startup"""
@@ -1191,7 +1191,7 @@ class ControllerConfigScreen(BaseScreen):
             row = len(self.mapping_rows)
             
             # Remove button (now first)
-            remove_btn = QPushButton("×")
+            remove_btn = QPushButton("Ã—")
             remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
             remove_btn.setStyleSheet(self._get_remove_button_style())
             
@@ -1307,32 +1307,32 @@ class ControllerConfigScreen(BaseScreen):
         """Get display text for target column based on behavior and config"""
         if behavior == "direct_servo":
             target = config.get('target', 'Not configured')
-            return f"→ {target}"
+            return f"â†’ {target}"
         elif behavior == "joystick_pair":
             x_servo = config.get('x_servo', '?')
             y_servo = config.get('y_servo', '?')
-            return f"→ X:{x_servo}, Y:{y_servo}"
+            return f"â†’ X:{x_servo}, Y:{y_servo}"
         elif behavior == "differential_tracks":
             left = config.get('left_servo', '?')
             right = config.get('right_servo', '?')
-            return f"→ L:{left}, R:{right}"
+            return f"â†’ L:{left}, R:{right}"
         elif behavior == "scene_trigger":
             scene = config.get('scene', 'Not configured')
-            return f"→ {scene}"
+            return f"â†’ {scene}"
         elif behavior == "toggle_scenes":
             scene1 = config.get('scene_1', '?')
             scene2 = config.get('scene_2', '?')
-            return f"→ {scene1} ⟷ {scene2}"
+            return f"â†’ {scene1} âŸ· {scene2}"
         elif behavior == "nema_stepper":
             mode = config.get('nema_behavior', 'Not configured')
             min_pos = config.get('min_position', '?')
             max_pos = config.get('max_position', '?')
-            return f"→ NEMA {mode}: {min_pos}-{max_pos}cm"
+            return f"â†’ NEMA {mode}: {min_pos}-{max_pos}cm"
         elif behavior == "system_control":  # ADD THIS
             action = config.get('system_action', 'Not configured')
-            return f"→ {action}"
+            return f"â†’ {action}"
         else:
-            return "Configure targets →"
+            return "Configure targets â†’"
 
     def _init_ui(self):
         """Initialize the UI layout with proper padding"""
@@ -1500,7 +1500,7 @@ class ControllerConfigScreen(BaseScreen):
         header_layout.addStretch()
         
         # Calibration button
-        self.calibration_button = QPushButton("🎮 Controller Calibration")
+        self.calibration_button = QPushButton("ðŸŽ® Controller Calibration")
         self.calibration_button.setStyleSheet("""
             QPushButton {
                 background-color: #1e90ff;
@@ -1663,7 +1663,7 @@ class ControllerConfigScreen(BaseScreen):
         row = len(self.mapping_rows)
         
         # Remove button (now first)
-        remove_btn = QPushButton("×")
+        remove_btn = QPushButton("Ã—")
         remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
         remove_btn.setStyleSheet(self._get_remove_button_style())
         
@@ -1675,7 +1675,7 @@ class ControllerConfigScreen(BaseScreen):
         behavior_combo.addItems(["Select Behavior..."] + self.behaviors)
         behavior_combo.setStyleSheet(self._get_combo_style())
         
-        target_label = QLabel("Configure targets →")
+        target_label = QLabel("Configure targets â†’")
         target_label.setStyleSheet(self._get_target_label_style())
         
         # Configure button (now last, by itself)
@@ -1737,7 +1737,7 @@ class ControllerConfigScreen(BaseScreen):
         if row_index < len(self.mapping_rows):
             row_data = self.mapping_rows[row_index]
             row_data['config'] = {}
-            row_data['target_label'].setText("Configure targets →")
+            row_data['target_label'].setText("Configure targets â†’")
             
             if self.selected_row_index == row_index:
                 self._create_behavior_parameters(row_data)
@@ -1772,7 +1772,7 @@ class ControllerConfigScreen(BaseScreen):
         
         # Show warning if conflicts exist
         if row_data.get('conflict_detected', False):
-            warning = QLabel("⚠️ Configuration conflict detected. Please resolve before saving.")
+            warning = QLabel("âš ï¸ Configuration conflict detected. Please resolve before saving.")
             self.update_warning_style(warning)
             warning.setWordWrap(True)
             self.params_layout.addWidget(warning)
@@ -1837,7 +1837,7 @@ class ControllerConfigScreen(BaseScreen):
         self._add_clean_param_row("", invert_checkbox)
         
         target = row_data['config'].get('target', 'Not configured')
-        row_data['target_label'].setText(f"→ {target}")
+        row_data['target_label'].setText(f"â†’ {target}")
 
     def _create_multi_servo_params(self, row_data: Dict):
         """Create parameters for multi servo behavior - control multiple servos from one axis"""
@@ -1885,9 +1885,46 @@ class ControllerConfigScreen(BaseScreen):
         # Store the layout for updates
         row_data['servo_list_layout'] = servo_list_layout
         
+        
+        self.params_layout.addSpacing(10)
+        
+        # Trigger mode (axis vs button)
+        mode_combo = QComboBox()
+        mode_combo.addItems(["axis", "button"])
+        mode_combo.setCurrentText(row_data['config'].get('trigger_mode', 'axis'))
+        mode_combo.setStyleSheet(self._get_combo_style())
+        mode_label = QLabel("Control Mode:")
+        mode_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_label)
+        self.params_layout.addWidget(mode_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Mode explanation
+        current_mode = row_data['config'].get('trigger_mode', 'axis')
+        if current_mode == 'button':
+            mode_help = QLabel("Button mode: Held = min_pulse position, Released = home")
+        else:
+            mode_help = QLabel("Axis mode: Continuous control from joystick/axis input")
+        grey = theme_manager.get("grey")
+        mode_help.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 9px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_help)
+        
+        # Store mode help label for updates
+        row_data['mode_help_label'] = mode_help
+        
+        # Update mode help when mode changes
+        def update_mode_help(mode):
+            self._update_row_config(row_data, 'trigger_mode', mode)
+            if mode == 'button':
+                row_data['mode_help_label'].setText("Button mode: Held = min_pulse position, Released = home")
+            else:
+                row_data['mode_help_label'].setText("Axis mode: Continuous control from joystick/axis input")
+        
+        mode_combo.currentTextChanged.connect(update_mode_help)
+        
         # Update target label
         servo_count = len(servos)
-        row_data['target_label'].setText(f"→ {servo_count} servo(s)")
+        row_data['target_label'].setText(f"â†’ {servo_count} servo(s)")
     
     def _create_multi_servo_row(self, row_data: Dict, index: int, servo_info: Dict) -> QWidget:
         """Create a row for one servo in multi-servo configuration"""
@@ -1916,7 +1953,7 @@ class ControllerConfigScreen(BaseScreen):
         row_layout.addWidget(invert_checkbox, 1)
         
         # Remove button
-        remove_btn = QPushButton("×")
+        remove_btn = QPushButton("Ã—")
         remove_btn.setFixedSize(30, 30)
         remove_btn.setStyleSheet("""
             QPushButton {
@@ -1951,7 +1988,7 @@ class ControllerConfigScreen(BaseScreen):
         servo_list_layout.addWidget(servo_row)
         
         # Update target label
-        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
+        row_data['target_label'].setText(f"â†’ {len(servos)} servo(s)")
     
     def _remove_multi_servo_row(self, row_data: Dict, index: int, widget: QWidget):
         """Remove a servo from multi-servo configuration"""
@@ -1964,7 +2001,7 @@ class ControllerConfigScreen(BaseScreen):
         widget.deleteLater()
         
         # Update target label
-        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
+        row_data['target_label'].setText(f"â†’ {len(servos)} servo(s)")
     
     def _update_multi_servo_channel(self, row_data: Dict, index: int, channel: str):
         """Update the channel for a specific servo in multi-servo config"""
@@ -1978,6 +2015,20 @@ class ControllerConfigScreen(BaseScreen):
         servos = row_data['config'].get('servos', [])
         if index < len(servos):
             servos[index]['invert'] = inverted
+            row_data['config']['servos'] = servos
+
+    def _update_multi_servo_min_pulse(self, row_data: Dict, index: int, value: int):
+        """Update the min_pulse for a specific servo in multi-servo config"""
+        servos = row_data['config'].get('servos', [])
+        if index < len(servos):
+            servos[index]['min_pulse'] = value
+            row_data['config']['servos'] = servos
+    
+    def _update_multi_servo_max_pulse(self, row_data: Dict, index: int, value: int):
+        """Update the max_pulse for a specific servo in multi-servo config"""
+        servos = row_data['config'].get('servos', [])
+        if index < len(servos):
+            servos[index]['max_pulse'] = value
             row_data['config']['servos'] = servos
 
     def _create_toggle_servo_params(self, row_data: Dict):
@@ -2051,12 +2102,50 @@ class ControllerConfigScreen(BaseScreen):
         timing_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(timing_label)
         self.params_layout.addWidget(timing_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Trigger mode (toggle vs hold)
+        mode_combo = QComboBox()
+        mode_combo.addItems(["toggle", "hold"])
+        mode_combo.setCurrentText(row_data['config'].get('trigger_mode', 'toggle'))
+        mode_combo.setStyleSheet(self._get_combo_style())
+        mode_label = QLabel("Trigger Mode:")
+        mode_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_label)
+        self.params_layout.addWidget(mode_combo)
+        self.params_layout.addSpacing(6)
+        
+        # Mode explanation
+        current_mode = row_data['config'].get('trigger_mode', 'toggle')
+        if current_mode == 'hold':
+            mode_help = QLabel("Hold mode: Held = Position 2, Released = Position 1")
+        else:
+            mode_help = QLabel("Toggle mode: Each press switches between positions")
+        grey = theme_manager.get("grey")
+        mode_help.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 9px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_help)
+        
+        # Store mode help label for updates
+        row_data['mode_help_label'] = mode_help
+        
+        # Update mode help when mode changes
+        def update_mode_help(mode):
+            self._update_row_config(row_data, 'trigger_mode', mode)
+            if mode == 'hold':
+                row_data['mode_help_label'].setText("Hold mode: Held = Position 2, Released = Position 1")
+            else:
+                row_data['mode_help_label'].setText("Toggle mode: Each press switches between positions")
+        
+        mode_combo.currentTextChanged.connect(update_mode_help)
         
         # Update target label
         target = row_data['config'].get('target', 'Not configured')
         pos1 = row_data['config'].get('position_1', 1000)
         pos2 = row_data['config'].get('position_2', 2000)
-        row_data['target_label'].setText(f"→ {target} ({pos1}↔{pos2})")
+        mode = row_data['config'].get('trigger_mode', 'toggle')
+        mode_str = "hold" if mode == "hold" else "toggle"
+        row_data['target_label'].setText(f"→ {target} ({pos1}↔{pos2}) [{mode_str}]")
+
 
     def _create_joystick_pair_params(self, row_data: Dict):
         """Create parameters for joystick pair behavior"""
@@ -2088,7 +2177,7 @@ class ControllerConfigScreen(BaseScreen):
         
         x_servo = row_data['config'].get('x_servo', '?')
         y_servo = row_data['config'].get('y_servo', '?')
-        row_data['target_label'].setText(f"→ X:{x_servo}, Y:{y_servo}")
+        row_data['target_label'].setText(f"â†’ X:{x_servo}, Y:{y_servo}")
 
     def _create_differential_tracks_params(self, row_data: Dict):
         """Create parameters for differential tracks behavior"""
@@ -2141,7 +2230,7 @@ class ControllerConfigScreen(BaseScreen):
         
         left = row_data['config'].get('left_servo', '?')
         right = row_data['config'].get('right_servo', '?')
-        row_data['target_label'].setText(f"→ L:{left}, R:{right}")
+        row_data['target_label'].setText(f"â†’ L:{left}, R:{right}")
 
     def _create_scene_trigger_params(self, row_data: Dict):
         """Create parameters for scene trigger behavior"""
@@ -2186,7 +2275,7 @@ class ControllerConfigScreen(BaseScreen):
         self.params_layout.addSpacing(6)
         
         scene = row_data['config'].get('scene', 'Not configured')
-        row_data['target_label'].setText(f"→ {scene}")
+        row_data['target_label'].setText(f"â†’ {scene}")
 
     def _create_toggle_scenes_params(self, row_data: Dict):
         """Create parameters for toggle scenes behavior"""
@@ -2249,7 +2338,7 @@ class ControllerConfigScreen(BaseScreen):
         
         scene1 = row_data['config'].get('scene_1', '?')
         scene2 = row_data['config'].get('scene_2', '?')
-        row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
+        row_data['target_label'].setText(f"â†’ {scene1} âŸ· {scene2}")
 
     def _create_nema_stepper_params(self, row_data: Dict):
         """Create streamlined parameters for NEMA stepper behavior"""
@@ -2343,7 +2432,7 @@ class ControllerConfigScreen(BaseScreen):
             ("Min Position:", f"{nema_config.get('min_position', 0.0):.1f} cm"),
             ("Max Position:", f"{nema_config.get('max_position', 20.0):.1f} cm"),
             ("Movement Speed:", f"{nema_config.get('normal_speed', 800)} steps/s"),
-            ("Acceleration:", f"{nema_config.get('acceleration', 800)} steps/s²")
+            ("Acceleration:", f"{nema_config.get('acceleration', 800)} steps/sÂ²")
         ]
         
         for label_text, value_text in config_items:
@@ -2402,7 +2491,7 @@ class ControllerConfigScreen(BaseScreen):
         mode = row_data['config'].get('nema_behavior', 'Not configured')
         min_pos = nema_config.get('min_position', 0.0)
         max_pos = nema_config.get('max_position', 20.0)
-        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos:.1f}-{max_pos:.1f}cm")
+        row_data['target_label'].setText(f"â†’ NEMA {mode}: {min_pos:.1f}-{max_pos:.1f}cm")
 
     def _get_clean_combo_style(self):
         """Get clean combobox styling without borders"""
@@ -2482,30 +2571,30 @@ class ControllerConfigScreen(BaseScreen):
         behavior = row_data['behavior_combo'].currentText()
         if behavior == "direct_servo":
             target = row_data['config'].get('target', 'Not configured')
-            row_data['target_label'].setText(f"→ {target}")
+            row_data['target_label'].setText(f"â†’ {target}")
         elif behavior == "joystick_pair":
             x_servo = row_data['config'].get('x_servo', '?')
             y_servo = row_data['config'].get('y_servo', '?') 
-            row_data['target_label'].setText(f"→ X:{x_servo}, Y:{y_servo}")
+            row_data['target_label'].setText(f"â†’ X:{x_servo}, Y:{y_servo}")
         elif behavior == "differential_tracks":
             left = row_data['config'].get('left_servo', '?')
             right = row_data['config'].get('right_servo', '?')
-            row_data['target_label'].setText(f"→ L:{left}, R:{right}")
+            row_data['target_label'].setText(f"â†’ L:{left}, R:{right}")
         elif behavior == "scene_trigger":
             scene = row_data['config'].get('scene', 'Not configured')
-            row_data['target_label'].setText(f"→ {scene}")
+            row_data['target_label'].setText(f"â†’ {scene}")
         elif behavior == "toggle_scenes":
             scene1 = row_data['config'].get('scene_1', '?')
             scene2 = row_data['config'].get('scene_2', '?')
-            row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
+            row_data['target_label'].setText(f"â†’ {scene1} âŸ· {scene2}")
         elif behavior == "nema_stepper":
             mode = row_data['config'].get('nema_behavior', 'Not configured')
             min_pos = row_data['config'].get('min_position', '?')
             max_pos = row_data['config'].get('max_position', '?')
-            row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
+            row_data['target_label'].setText(f"â†’ NEMA {mode}: {min_pos}-{max_pos}cm")
         elif behavior == "system_control":  # ADD THIS
             action = row_data['config'].get('system_action', 'Not configured')
-            row_data['target_label'].setText(f"→ {action}")
+            row_data['target_label'].setText(f"â†’ {action}")
 
             if hasattr(self, 'selected_row_index') and self.selected_row_index is not None:
                 if 0 <= self.selected_row_index < len(self.mapping_rows):

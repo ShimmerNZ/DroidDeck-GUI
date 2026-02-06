@@ -218,19 +218,9 @@ class ServoConfigScreen(BaseScreen):
     
     def handle_message(self, message: str):
         """Enhanced message handler to support NEMA WebSocket messages"""
-        # CRITICAL DEBUG: Log that we received ANY message
-        print("=" * 80)
-        print("SERVO SCREEN: handle_message() CALLED!")
-        print(f"Message preview: {message[:100]}")
-        print("=" * 80)
-        
         try:
             msg = json.loads(message)
             msg_type = msg.get("type")
-            
-            # Log the message type
-            print(f"SERVO SCREEN: Message type = '{msg_type}'")
-            self.logger.info(f"[WS_MSG] Received: {msg_type}")
             
             # Handle existing message types first
             if msg_type == "telemetry":
