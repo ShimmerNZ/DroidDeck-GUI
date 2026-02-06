@@ -2066,11 +2066,12 @@ class ControllerConfigScreen(BaseScreen):
         pos1_spin = QSpinBox()
         pos1_spin.setRange(800, 2200)
         pos1_spin.setValue(row_data['config'].get('position_1', 1000))
-        pos1_spin.setSuffix(" μs")
+        pos1_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # Remove up/down arrows
+        pos1_spin.setKeyboardTracking(True)  # Update while typing
         pos1_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_1', val)
         )
-        label1 = QLabel("Position 1:")
+        label1 = QLabel("Position 1 (μs):")
         label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label1)
         self.params_layout.addWidget(pos1_spin)
@@ -2080,11 +2081,12 @@ class ControllerConfigScreen(BaseScreen):
         pos2_spin = QSpinBox()
         pos2_spin.setRange(800, 2200)
         pos2_spin.setValue(row_data['config'].get('position_2', 2000))
-        pos2_spin.setSuffix(" μs")
+        pos2_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # Remove up/down arrows
+        pos2_spin.setKeyboardTracking(True)  # Update while typing
         pos2_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_2', val)
         )
-        label2 = QLabel("Position 2:")
+        label2 = QLabel("Position 2 (μs):")
         label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label2)
         self.params_layout.addWidget(pos2_spin)
