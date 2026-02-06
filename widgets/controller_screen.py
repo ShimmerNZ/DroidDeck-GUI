@@ -1150,18 +1150,26 @@ class ControllerConfigScreen(BaseScreen):
         row_data['target_label'].setText(f"→ {action}")
 
     def _load_existing_configuration(self):
-        """Load existing controller configuration on startup"""
+        """Load existing controller configuration on startup - handles both single and multiple mappings"""
         try:
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config and isinstance(config, dict):
                 for control_name, control_config in config.items():
-                    self._add_mapping_row_from_config(control_name, control_config)
+                    # Handle both list format (multiple mappings) and dict format (single mapping)
+                    if isinstance(control_config, list):
+                        # Multiple mappings for this button
+                        for single_config in control_config:
+                            self._add_mapping_row_from_config(control_name, single_config)
+                    else:
+                        # Single mapping (old format)
+                        self._add_mapping_row_from_config(control_name, control_config)
                 
                 # Sort mappings alphabetically after loading
                 self._rebuild_grid_layout()
                 
                 if self.logger:
-                    self.logger.info(f"Loaded {len(config)} existing controller mappings")
+                    total_mappings = sum(len(c) if isinstance(c, list) else 1 for c in config.values())
+                    self.logger.info(f"Loaded {total_mappings} controller mappings from {len(config)} buttons")
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Could not load controller config: {e}")
@@ -2693,7 +2701,7 @@ class ControllerConfigScreen(BaseScreen):
             self.grid_layout.addWidget(row_data['select_btn'], row, 4)
 
     def _save_all_mappings(self):
-        """Save all controller mappings to configuration"""
+        """Save all controller mappings to configuration - supports multiple mappings per button"""
         conflicts_exist = any(row['conflict_detected'] for row in self.mapping_rows)
         if conflicts_exist:
             QMessageBox.warning(self, "Conflicts Detected", 
@@ -2707,10 +2715,24 @@ class ControllerConfigScreen(BaseScreen):
             behavior = row_data['behavior_combo'].currentText()
             
             if control_name != "Select Input..." and behavior != "Select Behavior...":
-                controller_config[control_name] = {
+                config_entry = {
                     'behavior': behavior,
                     **row_data['config']
                 }
+                
+                # Support multiple mappings per button
+                if control_name in controller_config:
+                    # Already have mapping(s) for this button
+                    existing = controller_config[control_name]
+                    if isinstance(existing, list):
+                        # Already a list, append to it
+                        existing.append(config_entry)
+                    else:
+                        # Single dict, convert to list
+                        controller_config[control_name] = [existing, config_entry]
+                else:
+                    # First mapping for this button - store as list for consistency
+                    controller_config[control_name] = [config_entry]
         
         try:
             config_manager.save_config("resources/configs/controller_config.json", controller_config)
@@ -2723,14 +2745,21 @@ class ControllerConfigScreen(BaseScreen):
             else:
                 self.logger.warning("WebSocket not connected - controller config not synced to backend")
 
-            QMessageBox.information(self, "Saved", f"Saved {len(controller_config)} controller mappings.")
+            # Count total mappings
+            total_mappings = sum(len(configs) if isinstance(configs, list) else 1 
+                               for configs in controller_config.values())
+            QMessageBox.information(self, "Saved", 
+                                  f"Saved {total_mappings} controller mapping(s) for {len(controller_config)} button(s).")
             
             # Update behavior registry
-            for control_name, config in controller_config.items():
-                self.behavior_registry.register_mapping(control_name, config['behavior'], config)
+            for control_name, configs in controller_config.items():
+                # Handle both list and single dict formats
+                config_list = configs if isinstance(configs, list) else [configs]
+                for config in config_list:
+                    self.behavior_registry.register_mapping(control_name, config['behavior'], config)
             
             if self.logger:
-                self.logger.info(f"Saved {len(controller_config)} controller mappings")
+                self.logger.info(f"Saved {total_mappings} controller mappings for {len(controller_config)} buttons")
                 
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save controller mappings: {e}")
