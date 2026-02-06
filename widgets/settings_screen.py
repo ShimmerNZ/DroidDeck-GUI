@@ -637,24 +637,36 @@ class SettingsScreen(BaseScreen):
         self._update_label_style(vol_label)
         row.addWidget(vol_label)
         
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(70)  # Default 70%
-        self.volume_slider.setMaximumWidth(140)
-        self.volume_slider.setFixedHeight(26)
-        self._update_slider_style(self.volume_slider)
-        row.addWidget(self.volume_slider)
+        # Volume adjustment buttons (like confidence)
+        vol_control = QHBoxLayout()
+        vol_control.setSpacing(4)
         
+        # Minus button
+        self.volume_minus_btn = QPushButton("-")
+        self.volume_minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.volume_minus_btn.setFixedSize(30, 26)
+        self.volume_minus_btn.clicked.connect(lambda: self._adjust_volume(-5))
+        self._update_adjust_button_style(self.volume_minus_btn)
+        
+        # Value display
         self.volume_value = QLabel("70%")
         self.volume_value.setFont(QFont("Arial", 13))
-        self.volume_value.setMaximumWidth(60)
+        self.volume_value.setMinimumWidth(50)
+        self.volume_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_value_label_style(self.volume_value)
-        row.addWidget(self.volume_value)
         
-        # Update label when slider moves
-        self.volume_slider.valueChanged.connect(
-            lambda v: self.volume_value.setText(f"{v}%")
-        )
+        # Plus button
+        self.volume_plus_btn = QPushButton("+")
+        self.volume_plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.volume_plus_btn.setFixedSize(30, 26)
+        self.volume_plus_btn.clicked.connect(lambda: self._adjust_volume(5))
+        self._update_adjust_button_style(self.volume_plus_btn)
+        
+        vol_control.addWidget(self.volume_minus_btn)
+        vol_control.addWidget(self.volume_value)
+        vol_control.addWidget(self.volume_plus_btn)
+        
+        row.addLayout(vol_control)
         
         parent_layout.addLayout(row)
 
@@ -1214,7 +1226,6 @@ class SettingsScreen(BaseScreen):
 
         # Audio - Load volume
         volume = current.get("volume", 70)
-        self.volume_slider.setValue(volume)
         self.volume_value.setText(f"{volume}%")
 
         # Theme selector state - ensure buttons reflect current theme
@@ -1230,6 +1241,19 @@ class SettingsScreen(BaseScreen):
         """Get current confidence value from label text"""
         try:
             return int(self.confidence_value.text().rstrip('%'))
+        except ValueError:
+            return 70  # Default value
+
+    def _adjust_volume(self, delta: int):
+        """Adjust volume value by delta (e.g., +5 or -5)"""
+        current = self._get_volume_value()
+        new_value = max(0, min(100, current + delta))
+        self.volume_value.setText(f"{new_value}%")
+    
+    def _get_volume_value(self) -> int:
+        """Get current volume value from label text"""
+        try:
+            return int(self.volume_value.text().rstrip('%'))
         except ValueError:
             return 70  # Default value
 
@@ -1265,7 +1289,7 @@ class SettingsScreen(BaseScreen):
                     "confidence_threshold": self._get_confidence_value() / 100.0,
                     "stand_down_time": self.stand_down_spin.value(),
                 },
-                "volume": self.volume_slider.value()
+                "volume": self._get_volume_value()
             },
             "defaults": existing.get("defaults", {})
         }
@@ -1278,7 +1302,7 @@ class SettingsScreen(BaseScreen):
         if success:
             if self.websocket:
                 # Send volume update to backend
-                volume_val = self.volume_slider.value()
+                volume_val = self._get_volume_value()
                 self.logger.info(f"Sending volume update to backend: {volume_val}%")
                 self.send_websocket_message(
                     "set_system_volume",
