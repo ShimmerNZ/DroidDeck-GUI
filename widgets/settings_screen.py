@@ -650,7 +650,7 @@ class SettingsScreen(BaseScreen):
         
         # Value display
         self.volume_value = QLabel("70%")
-        self.volume_value.setFont(QFont("Arial", 13))
+        self.volume_value.setFont(QFont("Arial", 15))
         self.volume_value.setMinimumWidth(50)
         self.volume_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_value_label_style(self.volume_value)
@@ -732,7 +732,7 @@ class SettingsScreen(BaseScreen):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 13)
+        font = QFont("Arial", 15)
         labels = [
             ("ESP32 Camera:", "esp32_url", "http://192.168.1.100:81/stream"),
             ("Camera Proxy:", "proxy_url", "http://10.1.1.230:8081/stream"),
@@ -765,7 +765,7 @@ class SettingsScreen(BaseScreen):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 13)
+        font = QFont("Arial", 15)
 
         items = [
             ("Global Debug:", "debug_combo"),
@@ -801,7 +801,7 @@ class SettingsScreen(BaseScreen):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(4)
 
-        font = QFont("Arial", 13)
+        font = QFont("Arial", 15)
 
         # Row 0: Sample Duration / Sample Rate
         dur_lab = QLabel("Sample Duration:")
@@ -888,21 +888,21 @@ class SettingsScreen(BaseScreen):
         row = QHBoxLayout()
         row.setSpacing(12)
 
-        self.save_btn = QPushButton("ðŸ’¾ Save Settings")
+        self.save_btn = QPushButton("Save Settings")
         self.save_btn.setFont(font)
         self.save_btn.clicked.connect(self.save_config)
         self.save_btn.setFixedHeight(40)
         self.save_btn.setMinimumWidth(140)
         self._update_save_button_style()
 
-        self.reset_btn = QPushButton("ðŸ”„ Reset")
+        self.reset_btn = QPushButton("Reset")
         self.reset_btn.setFont(font)
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         self.reset_btn.setFixedHeight(40)
         self.reset_btn.setMinimumWidth(110)
         self._update_reset_button_style()
 
-        self.test_connection_btn = QPushButton("ðŸ”— Test")
+        self.test_connection_btn = QPushButton("Test")
         self.test_connection_btn.setFont(font)
         self.test_connection_btn.clicked.connect(self.test_websocket_connection)
         self.test_connection_btn.setFixedHeight(40)
@@ -1003,6 +1003,7 @@ class SettingsScreen(BaseScreen):
             border: none;
             padding: 4px 8px;
             border-radius: 0px;
+            font-size: 15px;
         """)
 
     def _update_input_style(self, input_field: QLineEdit):
@@ -1014,6 +1015,7 @@ class SettingsScreen(BaseScreen):
             border-radius: 4px;
             padding: 6px;
             color: white;
+            font-size: 15px;
         }}
         QLineEdit:focus {{ 
             border-color: {primary}; 
@@ -1030,6 +1032,7 @@ class SettingsScreen(BaseScreen):
             border-radius: 4px;
             padding: 6px;
             color: white;
+            font-size: 15px;
         }}
         QComboBox:focus {{ 
             border-color: {primary}; 
@@ -1041,6 +1044,7 @@ class SettingsScreen(BaseScreen):
             background-color: #2d2d2d;
             color: white;
             selection-background-color: {primary};
+            font-size: 15px;
         }}
         """)
 
@@ -1051,14 +1055,14 @@ class SettingsScreen(BaseScreen):
         background-color: #2d2d2d;
         border: 1px solid #555;
         border-radius: 4px;
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-top: 2px;
+        padding-bottom: 2px;
         padding-left: 8px;
         padding-right: 0px;
         color: white;
-        min-height: 24px;
-        max-height: 40px;
-        font-size: 14px;
+        min-height: 20px;
+        max-height: 26px;
+        font-size: 15px;
         font-family: Arial;
         }}
         QSpinBox:focus {{ 
@@ -1066,12 +1070,12 @@ class SettingsScreen(BaseScreen):
             background-color: #333333;
         }}
         QSpinBox::up-button, QSpinBox::down-button {{
-            font-size: 14px;
+            font-size: 15px;
             font-family: Arial;
             font-weight: bold;
         }}
         QSpinBox::up-arrow, QSpinBox::down-arrow {{
-            font-size: 14px;
+            font-size: 15px;
         }}
         """)
 
@@ -1108,6 +1112,7 @@ class SettingsScreen(BaseScreen):
             border: 0px solid transparent !important;
             outline: 0px solid transparent !important;
             selection-background-color: transparent;
+            font-size: 15px;
         }}
         QLabel:focus {{
             border: 0px solid transparent !important;
