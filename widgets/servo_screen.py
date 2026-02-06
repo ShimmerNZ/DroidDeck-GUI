@@ -231,6 +231,8 @@ class ServoConfigScreen(BaseScreen):
                 self.handle_servo_position(msg)
             elif msg_type == "all_servo_positions":
                 self.handle_all_servo_positions(msg)
+            elif msg_type == "servo_config_response":
+                self.handle_servo_config_response(msg)
                 
             # ========================================
             # NEW NEMA MESSAGE HANDLERS
@@ -544,6 +546,47 @@ class ServoConfigScreen(BaseScreen):
                 self.update_status(f"Read {len(positions)} positions from Maestro {maestro_num}")
             else:
                 self.update_status(f"No positions received from Maestro {maestro_num}", warning=True)
+
+    def handle_servo_config_response(self, data):
+        """Handle servo config response from backend"""
+        try:
+            maestro = data.get("maestro")
+            config = data.get("config", {})
+            
+            self.logger.info(f"📥 Received config from backend: {len(config)} entries for Maestro {maestro}")
+            
+            # Update local config with backend data
+            updated_count = 0
+            for channel_key, channel_config in config.items():
+                if channel_key.startswith("m"):  # Skip "nema" entry
+                    # Merge backend config into local config
+                    if channel_key not in self.servo_config:
+                        self.servo_config[channel_key] = {}
+                    
+                    # Update all four values
+                    self.servo_config[channel_key].update(channel_config)
+                    updated_count += 1
+                    
+                    self.logger.debug(f"  Updated {channel_key}: {channel_config}")
+            
+            # Save merged config to frontend file
+            success = config_manager.save_config(
+                "resources/configs/servo_config.json", 
+                self.servo_config
+            )
+            
+            if success:
+                self.logger.info(f"✅ Saved merged config to frontend: {updated_count} channels")
+            
+            # Update UI grid with new values
+            if hasattr(self, 'grid_layout'):
+                self.update_grid()
+            
+            self.update_status(f"✅ Config refreshed from backend: {updated_count} channels updated")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling servo config response: {e}")
+            self.update_status(f"Error refreshing config: {str(e)}", error=True)
 
 # ========================================
     # NEMA CONTROL METHODS
@@ -2440,12 +2483,15 @@ class ServoConfigScreen(BaseScreen):
     
     @error_boundary
     def reload_servo_config(self):
-        """Reload servo configuration and update grid"""
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("resources/configs/servo_config.json")
-        if hasattr(self, 'grid_layout'):
-            self.update_grid()
-        self.logger.info("Servo config reloaded")
+        """Request servo configuration from backend"""
+        maestro_num = self.current_maestro + 1
+        
+        # Send request to backend
+        self.send_websocket_message("servo_request_config", 
+                                    maestro=maestro_num)
+        
+        self.update_status(f"🔄 Requesting config from backend for Maestro {maestro_num}...")
+        self.logger.info(f"Requesting servo config from backend for Maestro {maestro_num}")
 
     def update_config(self, config_dict: Dict[str, Any]) -> bool:
         try:
