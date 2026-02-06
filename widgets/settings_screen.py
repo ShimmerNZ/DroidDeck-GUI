@@ -824,24 +824,33 @@ class SettingsScreen(BaseScreen):
         layout.addWidget(conf_lab, 1, 0)
 
         conf_row = QHBoxLayout()
-        self.confidence_slider = QSlider(Qt.Orientation.Horizontal)
-        self.confidence_slider.setRange(0, 100)
-        self.confidence_slider.setValue(70)
-        self.confidence_slider.setMaximumWidth(140)
-        self.confidence_slider.setFixedHeight(26)
-        self._update_slider_style(self.confidence_slider)
-
+        conf_row.setSpacing(4)
+        
+        # Minus button
+        self.confidence_minus_btn = QPushButton("-")
+        self.confidence_minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.confidence_minus_btn.setFixedSize(30, 26)
+        self.confidence_minus_btn.clicked.connect(lambda: self._adjust_confidence(-5))
+        self._update_adjust_button_style(self.confidence_minus_btn)
+        
+        # Value display
         self.confidence_value = QLabel("70%")
         self.confidence_value.setFont(font)
-        self.confidence_value.setMaximumWidth(60)
+        self.confidence_value.setMinimumWidth(50)
+        self.confidence_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_value_label_style(self.confidence_value)
-
-        self.confidence_slider.valueChanged.connect(
-            lambda v: self.confidence_value.setText(f"{v}%")
-        )
-
-        conf_row.addWidget(self.confidence_slider)
+        
+        # Plus button
+        self.confidence_plus_btn = QPushButton("+")
+        self.confidence_plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.confidence_plus_btn.setFixedSize(30, 26)
+        self.confidence_plus_btn.clicked.connect(lambda: self._adjust_confidence(5))
+        self._update_adjust_button_style(self.confidence_plus_btn)
+        
+        conf_row.addWidget(self.confidence_minus_btn)
         conf_row.addWidget(self.confidence_value)
+        conf_row.addWidget(self.confidence_plus_btn)
+        conf_row.addStretch()
         layout.addLayout(conf_row, 1, 1)
 
         sd_lab = QLabel("Stand Down:")
@@ -892,7 +901,7 @@ class SettingsScreen(BaseScreen):
         row.addWidget(self.reset_btn)
         row.addWidget(self.test_connection_btn)
         
-        self.update_btn = QPushButton("⬇️ Update")
+        self.update_btn = QPushButton("Update")
         self.update_btn.setFont(font)
         self.update_btn.clicked.connect(self.check_for_updates)
         self.update_btn.setFixedHeight(40)
@@ -1105,6 +1114,29 @@ class SettingsScreen(BaseScreen):
         # Also try this as a backup - set attribute to prevent focus
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         label.setEnabled(True)  # Keep enabled but non-interactive
+
+    def _update_adjust_button_style(self, button: QPushButton):
+        """Style for +/- adjustment buttons"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        button.setStyleSheet(f"""
+        QPushButton {{
+            background-color: #2d2d2d;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-weight: bold;
+            padding: 2px;
+        }}
+        QPushButton:hover {{
+            background-color: {primary};
+            border-color: {primary};
+        }}
+        QPushButton:pressed {{
+            background-color: {primary_light};
+        }}
+        """)
+
     # ---------- Theme change hook ----------
 
     def _on_theme_changed(self):
@@ -1177,7 +1209,6 @@ class SettingsScreen(BaseScreen):
         self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
         self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
         conf_pct = int(wave.get("confidence_threshold", 0.7) * 100)
-        self.confidence_slider.setValue(conf_pct)
         self.confidence_value.setText(f"{conf_pct}%")
         self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
 
@@ -1188,6 +1219,19 @@ class SettingsScreen(BaseScreen):
 
         # Theme selector state - ensure buttons reflect current theme
         self._update_theme_button_styles()
+
+    def _adjust_confidence(self, delta: int):
+        """Adjust confidence value by delta (e.g., +5 or -5)"""
+        current = self._get_confidence_value()
+        new_value = max(0, min(100, current + delta))
+        self.confidence_value.setText(f"{new_value}%")
+    
+    def _get_confidence_value(self) -> int:
+        """Get current confidence value from label text"""
+        try:
+            return int(self.confidence_value.text().rstrip('%'))
+        except ValueError:
+            return 70  # Default value
 
     
     def save_config(self):
@@ -1218,7 +1262,7 @@ class SettingsScreen(BaseScreen):
                 "wave_detection": {
                     "sample_duration": self.sample_duration_spin.value(),
                     "sample_rate": self.sample_rate_spin.value(),
-                    "confidence_threshold": self.confidence_slider.value() / 100.0,
+                    "confidence_threshold": self._get_confidence_value() / 100.0,
                     "stand_down_time": self.stand_down_spin.value(),
                 },
                 "volume": self.volume_slider.value()
