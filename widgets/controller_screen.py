@@ -1129,7 +1129,7 @@ class ControllerConfigScreen(BaseScreen):
         
         current_action = row_data['config'].get('system_action', 'Not configured')
         if current_action in descriptions:
-            desc_label = QLabel(f"ðŸ“ {descriptions[current_action]}")
+            desc_label = QLabel(f"📝 {descriptions[current_action]}")
             desc_label.setStyleSheet(f"color: #4CAF50; padding: 8px; background-color: rgba(76, 175, 80, 0.1); border-radius: 4px; font-size: 10px; font-style: italic; border: none;")
             desc_label.setWordWrap(True)
             self.params_layout.addWidget(desc_label)
@@ -1147,7 +1147,7 @@ class ControllerConfigScreen(BaseScreen):
             self.params_layout.addWidget(info_label)
         
         action = row_data['config'].get('system_action', 'Not configured')
-        row_data['target_label'].setText(f"â†’ {action}")
+        row_data['target_label'].setText(f"→ {action}")
 
     def _load_existing_configuration(self):
         """Load existing controller configuration on startup"""
@@ -1156,6 +1156,9 @@ class ControllerConfigScreen(BaseScreen):
             if config and isinstance(config, dict):
                 for control_name, control_config in config.items():
                     self._add_mapping_row_from_config(control_name, control_config)
+                
+                # Sort mappings alphabetically after loading
+                self._rebuild_grid_layout()
                 
                 if self.logger:
                     self.logger.info(f"Loaded {len(config)} existing controller mappings")
@@ -1191,7 +1194,7 @@ class ControllerConfigScreen(BaseScreen):
             row = len(self.mapping_rows)
             
             # Remove button (now first)
-            remove_btn = QPushButton("Ã—")
+            remove_btn = QPushButton("×")
             remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
             remove_btn.setStyleSheet(self._get_remove_button_style())
             
@@ -1307,32 +1310,32 @@ class ControllerConfigScreen(BaseScreen):
         """Get display text for target column based on behavior and config"""
         if behavior == "direct_servo":
             target = config.get('target', 'Not configured')
-            return f"â†’ {target}"
+            return f"→ {target}"
         elif behavior == "joystick_pair":
             x_servo = config.get('x_servo', '?')
             y_servo = config.get('y_servo', '?')
-            return f"â†’ X:{x_servo}, Y:{y_servo}"
+            return f"→ X:{x_servo}, Y:{y_servo}"
         elif behavior == "differential_tracks":
             left = config.get('left_servo', '?')
             right = config.get('right_servo', '?')
-            return f"â†’ L:{left}, R:{right}"
+            return f"→ L:{left}, R:{right}"
         elif behavior == "scene_trigger":
             scene = config.get('scene', 'Not configured')
-            return f"â†’ {scene}"
+            return f"→ {scene}"
         elif behavior == "toggle_scenes":
             scene1 = config.get('scene_1', '?')
             scene2 = config.get('scene_2', '?')
-            return f"â†’ {scene1} âŸ· {scene2}"
+            return f"→ {scene1} âŸ· {scene2}"
         elif behavior == "nema_stepper":
             mode = config.get('nema_behavior', 'Not configured')
             min_pos = config.get('min_position', '?')
             max_pos = config.get('max_position', '?')
-            return f"â†’ NEMA {mode}: {min_pos}-{max_pos}cm"
+            return f"→ NEMA {mode}: {min_pos}-{max_pos}cm"
         elif behavior == "system_control":  # ADD THIS
             action = config.get('system_action', 'Not configured')
-            return f"â†’ {action}"
+            return f"→ {action}"
         else:
-            return "Configure targets â†’"
+            return "Configure targets →"
 
     def _init_ui(self):
         """Initialize the UI layout with proper padding"""
@@ -1500,7 +1503,7 @@ class ControllerConfigScreen(BaseScreen):
         header_layout.addStretch()
         
         # Calibration button
-        self.calibration_button = QPushButton("ðŸŽ® Controller Calibration")
+        self.calibration_button = QPushButton("🎮 Controller Calibration")
         self.calibration_button.setStyleSheet("""
             QPushButton {
                 background-color: #1e90ff;
@@ -1663,7 +1666,7 @@ class ControllerConfigScreen(BaseScreen):
         row = len(self.mapping_rows)
         
         # Remove button (now first)
-        remove_btn = QPushButton("Ã—")
+        remove_btn = QPushButton("×")
         remove_btn.clicked.connect(lambda: self._remove_mapping_row(row))
         remove_btn.setStyleSheet(self._get_remove_button_style())
         
@@ -1675,7 +1678,7 @@ class ControllerConfigScreen(BaseScreen):
         behavior_combo.addItems(["Select Behavior..."] + self.behaviors)
         behavior_combo.setStyleSheet(self._get_combo_style())
         
-        target_label = QLabel("Configure targets â†’")
+        target_label = QLabel("Configure targets →")
         target_label.setStyleSheet(self._get_target_label_style())
         
         # Configure button (now last, by itself)
@@ -1737,7 +1740,7 @@ class ControllerConfigScreen(BaseScreen):
         if row_index < len(self.mapping_rows):
             row_data = self.mapping_rows[row_index]
             row_data['config'] = {}
-            row_data['target_label'].setText("Configure targets â†’")
+            row_data['target_label'].setText("Configure targets →")
             
             if self.selected_row_index == row_index:
                 self._create_behavior_parameters(row_data)
@@ -1837,7 +1840,7 @@ class ControllerConfigScreen(BaseScreen):
         self._add_clean_param_row("", invert_checkbox)
         
         target = row_data['config'].get('target', 'Not configured')
-        row_data['target_label'].setText(f"â†’ {target}")
+        row_data['target_label'].setText(f"→ {target}")
 
     def _create_multi_servo_params(self, row_data: Dict):
         """Create parameters for multi servo behavior - control multiple servos from one axis"""
@@ -1924,7 +1927,7 @@ class ControllerConfigScreen(BaseScreen):
         
         # Update target label
         servo_count = len(servos)
-        row_data['target_label'].setText(f"â†’ {servo_count} servo(s)")
+        row_data['target_label'].setText(f"→ {servo_count} servo(s)")
     
     def _create_multi_servo_row(self, row_data: Dict, index: int, servo_info: Dict) -> QWidget:
         """Create a row for one servo in multi-servo configuration"""
@@ -1953,7 +1956,7 @@ class ControllerConfigScreen(BaseScreen):
         row_layout.addWidget(invert_checkbox, 1)
         
         # Remove button
-        remove_btn = QPushButton("Ã—")
+        remove_btn = QPushButton("×")
         remove_btn.setFixedSize(30, 30)
         remove_btn.setStyleSheet("""
             QPushButton {
@@ -1988,7 +1991,7 @@ class ControllerConfigScreen(BaseScreen):
         servo_list_layout.addWidget(servo_row)
         
         # Update target label
-        row_data['target_label'].setText(f"â†’ {len(servos)} servo(s)")
+        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
     
     def _remove_multi_servo_row(self, row_data: Dict, index: int, widget: QWidget):
         """Remove a servo from multi-servo configuration"""
@@ -2001,7 +2004,7 @@ class ControllerConfigScreen(BaseScreen):
         widget.deleteLater()
         
         # Update target label
-        row_data['target_label'].setText(f"â†’ {len(servos)} servo(s)")
+        row_data['target_label'].setText(f"→ {len(servos)} servo(s)")
     
     def _update_multi_servo_channel(self, row_data: Dict, index: int, channel: str):
         """Update the channel for a specific servo in multi-servo config"""
@@ -2179,7 +2182,7 @@ class ControllerConfigScreen(BaseScreen):
         
         x_servo = row_data['config'].get('x_servo', '?')
         y_servo = row_data['config'].get('y_servo', '?')
-        row_data['target_label'].setText(f"â†’ X:{x_servo}, Y:{y_servo}")
+        row_data['target_label'].setText(f"→ X:{x_servo}, Y:{y_servo}")
 
     def _create_differential_tracks_params(self, row_data: Dict):
         """Create parameters for differential tracks behavior"""
@@ -2232,7 +2235,7 @@ class ControllerConfigScreen(BaseScreen):
         
         left = row_data['config'].get('left_servo', '?')
         right = row_data['config'].get('right_servo', '?')
-        row_data['target_label'].setText(f"â†’ L:{left}, R:{right}")
+        row_data['target_label'].setText(f"→ L:{left}, R:{right}")
 
     def _create_scene_trigger_params(self, row_data: Dict):
         """Create parameters for scene trigger behavior"""
@@ -2277,7 +2280,7 @@ class ControllerConfigScreen(BaseScreen):
         self.params_layout.addSpacing(6)
         
         scene = row_data['config'].get('scene', 'Not configured')
-        row_data['target_label'].setText(f"â†’ {scene}")
+        row_data['target_label'].setText(f"→ {scene}")
 
     def _create_toggle_scenes_params(self, row_data: Dict):
         """Create parameters for toggle scenes behavior"""
@@ -2340,7 +2343,7 @@ class ControllerConfigScreen(BaseScreen):
         
         scene1 = row_data['config'].get('scene_1', '?')
         scene2 = row_data['config'].get('scene_2', '?')
-        row_data['target_label'].setText(f"â†’ {scene1} âŸ· {scene2}")
+        row_data['target_label'].setText(f"→ {scene1} âŸ· {scene2}")
 
     def _create_nema_stepper_params(self, row_data: Dict):
         """Create streamlined parameters for NEMA stepper behavior"""
@@ -2493,7 +2496,7 @@ class ControllerConfigScreen(BaseScreen):
         mode = row_data['config'].get('nema_behavior', 'Not configured')
         min_pos = nema_config.get('min_position', 0.0)
         max_pos = nema_config.get('max_position', 20.0)
-        row_data['target_label'].setText(f"â†’ NEMA {mode}: {min_pos:.1f}-{max_pos:.1f}cm")
+        row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos:.1f}-{max_pos:.1f}cm")
 
     def _get_clean_combo_style(self):
         """Get clean combobox styling without borders"""
@@ -2573,30 +2576,30 @@ class ControllerConfigScreen(BaseScreen):
         behavior = row_data['behavior_combo'].currentText()
         if behavior == "direct_servo":
             target = row_data['config'].get('target', 'Not configured')
-            row_data['target_label'].setText(f"â†’ {target}")
+            row_data['target_label'].setText(f"→ {target}")
         elif behavior == "joystick_pair":
             x_servo = row_data['config'].get('x_servo', '?')
             y_servo = row_data['config'].get('y_servo', '?') 
-            row_data['target_label'].setText(f"â†’ X:{x_servo}, Y:{y_servo}")
+            row_data['target_label'].setText(f"→ X:{x_servo}, Y:{y_servo}")
         elif behavior == "differential_tracks":
             left = row_data['config'].get('left_servo', '?')
             right = row_data['config'].get('right_servo', '?')
-            row_data['target_label'].setText(f"â†’ L:{left}, R:{right}")
+            row_data['target_label'].setText(f"→ L:{left}, R:{right}")
         elif behavior == "scene_trigger":
             scene = row_data['config'].get('scene', 'Not configured')
-            row_data['target_label'].setText(f"â†’ {scene}")
+            row_data['target_label'].setText(f"→ {scene}")
         elif behavior == "toggle_scenes":
             scene1 = row_data['config'].get('scene_1', '?')
             scene2 = row_data['config'].get('scene_2', '?')
-            row_data['target_label'].setText(f"â†’ {scene1} âŸ· {scene2}")
+            row_data['target_label'].setText(f"→ {scene1} âŸ· {scene2}")
         elif behavior == "nema_stepper":
             mode = row_data['config'].get('nema_behavior', 'Not configured')
             min_pos = row_data['config'].get('min_position', '?')
             max_pos = row_data['config'].get('max_position', '?')
-            row_data['target_label'].setText(f"â†’ NEMA {mode}: {min_pos}-{max_pos}cm")
+            row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
         elif behavior == "system_control":  # ADD THIS
             action = row_data['config'].get('system_action', 'Not configured')
-            row_data['target_label'].setText(f"â†’ {action}")
+            row_data['target_label'].setText(f"→ {action}")
 
             if hasattr(self, 'selected_row_index') and self.selected_row_index is not None:
                 if 0 <= self.selected_row_index < len(self.mapping_rows):
@@ -2613,33 +2616,40 @@ class ControllerConfigScreen(BaseScreen):
                 child.widget().deleteLater()
 
     def _remove_mapping_row(self, row_index: int):
-        """Remove a mapping row"""
+        """Remove a mapping row and refresh display"""
         if 0 <= row_index < len(self.mapping_rows):
             row_data = self.mapping_rows[row_index]
             control_name = row_data['input_combo'].currentText()
             if control_name != "Select Input...":
                 self.behavior_registry.unregister_mapping(control_name)
             
-            for key in ['input_combo', 'behavior_combo', 'target_label']:
-                widget = row_data[key]
-                self.grid_layout.removeWidget(widget)
-                widget.deleteLater()
+            # Remove all widgets for this row
+            widgets_to_remove = ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']
+            for key in widgets_to_remove:
+                if key in row_data:
+                    widget = row_data[key]
+                    self.grid_layout.removeWidget(widget)
+                    widget.deleteLater()
             
-            actions_widget = row_data['select_btn'].parent()
-            self.grid_layout.removeWidget(actions_widget)
-            actions_widget.deleteLater()
-            
+            # Remove from list
             self.mapping_rows.pop(row_index)
             
+            # Clear selection if this was the selected row
             if self.selected_row_index == row_index:
                 self.selected_row_index = None
                 self._show_no_selection_message()
+            elif self.selected_row_index is not None and self.selected_row_index > row_index:
+                # Adjust selected row index if it's after the removed row
+                self.selected_row_index -= 1
             
+            # Rebuild the entire grid layout
             self._rebuild_grid_layout()
+            
+            # Check for conflicts after removal
             self._check_for_conflicts()
 
     def _rebuild_grid_layout(self):
-        """Rebuild grid layout with correct row indices after removal"""
+        """Rebuild grid layout with correct row indices after removal - now sorts alphabetically"""
         while self.grid_layout.count():
             self.grid_layout.takeAt(0)
             
@@ -2654,8 +2664,27 @@ class ControllerConfigScreen(BaseScreen):
         self.grid_layout.setColumnStretch(2, 3)  # Behavior
         self.grid_layout.setColumnStretch(3, 4)  # Target
         self.grid_layout.setColumnStretch(4, 0)  # Configure button - fixed width
+        
+        # Sort mappings alphabetically by input name
+        self.mapping_rows.sort(key=lambda row: row['input_combo'].currentText())
             
         for row, row_data in enumerate(self.mapping_rows):
+            # Reconnect remove button to correct row index
+            remove_btn = row_data['remove_btn']
+            try:
+                remove_btn.clicked.disconnect()
+            except:
+                pass
+            remove_btn.clicked.connect(lambda checked, r=row: self._remove_mapping_row(r))
+            
+            # Reconnect configure button to correct row index
+            select_btn = row_data['select_btn']
+            try:
+                select_btn.clicked.disconnect()
+            except:
+                pass
+            select_btn.clicked.connect(lambda checked, r=row: self._select_row_for_config(r))
+            
             # Add to grid: remove, input, behavior, target, configure
             self.grid_layout.addWidget(row_data['remove_btn'], row, 0)
             self.grid_layout.addWidget(row_data['input_combo'], row, 1)
