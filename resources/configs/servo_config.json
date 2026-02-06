@@ -9,129 +9,129 @@
     "max_position": 13.0
   },
   "m2_ch0": {
-    "home": 1529,
+    "home": 1500,
     "accel": 0,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Left Arm Raise"
   },
   "m2_ch1": {
-    "home": 1520,
+    "home": 1500,
     "accel": 0,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Right Arm Raise"
   },
   "m2_ch2": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Neck Raise"
   },
   "m2_ch3": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch4": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch5": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch6": {
-    "home": 992,
-    "min": 992,
-    "max": 2000,
-    "name": ""
+    "home": 1500,
+    "min": 1600,
+    "max": 2200,
+    "name": "Left Eyelid"
   },
   "m2_ch7": {
-    "home": 992,
-    "min": 992,
-    "max": 2000,
-    "name": ""
+    "home": 1500,
+    "min": 800,
+    "max": 1200,
+    "name": "Right Eyelid"
   },
   "m2_ch8": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Left Focus"
   },
   "m2_ch9": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Right Focus"
   },
   "m2_ch10": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch11": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch12": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Left Track"
   },
   "m2_ch13": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Right Track"
   },
   "m2_ch14": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch15": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch16": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch17": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch18": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch19": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch20": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
@@ -156,13 +156,13 @@
   },
   "m1_ch7": {
     "accel": 0,
-    "home": 1512,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "L Wrist"
   },
   "m1_ch0": {
-    "home": 1301,
+    "home": 1261,
     "min": 992,
     "max": 2000,
     "name": "Head Pan"
@@ -174,112 +174,130 @@
     "name": "Head Tilt"
   },
   "m1_ch2": {
-    "home": 1488,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Left Eye Tilt"
   },
   "m1_ch3": {
-    "home": 1496,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "Right Eye Tilt"
   },
   "m1_ch4": {
-    "home": 1504,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch5": {
-    "home": 1504,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch6": {
-    "home": 1496,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "L Shoulder Pivot"
   },
   "m1_ch8": {
-    "home": 1488,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": "",
+    "name": "L Finger",
     "accel": 8
   },
   "m1_ch9": {
-    "home": 1496,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "L Thumb"
   },
   "m1_ch10": {
-    "home": 1488,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch11": {
-    "home": 1488,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch12": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "R Shoulder Pivot"
   },
   "m1_ch13": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "R Wrist"
   },
   "m1_ch14": {
-    "home": 1005,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "R Finger"
   },
   "m1_ch15": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
-    "name": ""
+    "name": "R Thumb"
   },
   "m1_ch16": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch17": {
-    "home": 992,
+    "home": 1500,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m1_ch18": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   },
   "m1_ch19": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   },
   "m1_ch20": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   },
   "m1_ch21": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   },
   "m1_ch22": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   },
   "m1_ch23": {
-    "home": 992
+    "home": 1500,
+    "min": 992,
+    "max": 2000,
+    "name": ""
   }
 }

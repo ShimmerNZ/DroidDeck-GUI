@@ -408,6 +408,7 @@ class DroidDeckApplication(QMainWindow):
         # Failsafe button with proper sizing and styling
         self.failsafe_button = QPushButton()
         self.failsafe_button.setCheckable(True)
+        self.failsafe_button.setChecked(True)
         
         # Set failsafe button size to match its icon size (300x70 from your code)
         # But let's make it more reasonable for navigation bar
@@ -499,7 +500,9 @@ class DroidDeckApplication(QMainWindow):
                     self.logger.warning(f"Icon not found: {normal_icon_path}")
         
         # Update failsafe button icon with new size
-        failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
+        is_checked = self.failsafe_button.isChecked()
+        failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=is_checked)
+
         if os.path.exists(failsafe_icon_path):
             self.failsafe_button.setIcon(QIcon(failsafe_icon_path))
             # Use the new smaller size instead of 300x70

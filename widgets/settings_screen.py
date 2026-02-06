@@ -4,6 +4,12 @@ Settings Screen (Themed)
 import requests
 import socket
 import time
+import os
+import sys
+import zipfile
+import shutil
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
@@ -308,6 +314,134 @@ class NetworkTestThread(QThread):
                 
         except Exception as e:
             self.logger.warning(f"Error during test cleanup: {e}")
+
+
+class UpdateThread(QThread):
+    """Background thread for downloading and installing updates from GitHub"""
+    
+    progress_updated = pyqtSignal(str)  # status message
+    update_completed = pyqtSignal(bool, str)  # success, message
+    
+    GITHUB_REPO = "ShimmerNZ/DroidDeck-GUI"
+    GITHUB_ZIP_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+    
+    # Files/folders to protect (will NOT be overwritten)
+    PROTECTED_PATHS = [
+        "resources/configs/",
+        "resources/configs/controller_config.json",
+        "resources/configs/controller_mappings.json",
+        "resources/configs/motion_config.json",
+        "resources/configs/movement_controls.json",
+        "resources/configs/scenes_config.json",
+        "resources/configs/servo_config.json",
+        "resources/configs/steamdeck_config.json",
+        "resources/configs/theme_config.json",
+        "resources/configs/voltage_alert_config.json",
+    ]
+    
+    def __init__(self):
+        super().__init__()
+        self.app_root = self._get_app_root()
+    
+    def _get_app_root(self) -> Path:
+        """Determine the application root directory"""
+        # If running from a script, use that directory
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable
+            return Path(sys.executable).parent
+        else:
+            # Running as script - find main.py location
+            # Assume this file is in widgets/ and main.py is in parent
+            return Path(__file__).parent.parent
+    
+    def run(self):
+        """Download and install update"""
+        temp_dir = None
+        try:
+            # Step 1: Download
+            self.progress_updated.emit("Downloading update from GitHub...")
+            temp_dir = Path(tempfile.mkdtemp())
+            zip_path = temp_dir / "update.zip"
+            
+            response = requests.get(self.GITHUB_ZIP_URL, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(zip_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size:
+                            percent = int((downloaded / total_size) * 100)
+                            self.progress_updated.emit(f"Downloading: {percent}%")
+            
+            # Step 2: Extract
+            self.progress_updated.emit("Extracting files...")
+            extract_dir = temp_dir / "extracted"
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # Find the extracted folder (GitHub adds repo name prefix)
+            extracted_folders = list(extract_dir.iterdir())
+            if not extracted_folders:
+                raise Exception("No files found in downloaded archive")
+            
+            source_dir = extracted_folders[0]
+            
+            # Step 3: Update files (skip protected configs)
+            self.progress_updated.emit("Installing update...")
+            self._update_files(source_dir, self.app_root)
+            
+            self.update_completed.emit(True, "Update completed successfully! Please restart the application.")
+            
+        except requests.exceptions.RequestException as e:
+            self.update_completed.emit(False, f"Download failed: {str(e)}")
+        except zipfile.BadZipFile:
+            self.update_completed.emit(False, "Downloaded file is corrupted")
+        except Exception as e:
+            self.update_completed.emit(False, f"Update failed: {str(e)}")
+        finally:
+            # Cleanup temp directory
+            if temp_dir and temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception:
+                    pass  # Ignore cleanup errors
+    
+    def _update_files(self, source_dir: Path, target_dir: Path):
+        """Copy files from source to target, protecting config files"""
+        for item in source_dir.rglob('*'):
+            if item.is_file():
+                # Get relative path from source
+                rel_path = item.relative_to(source_dir)
+                target_path = target_dir / rel_path
+                
+                # Check if this file is protected
+                if self._is_protected(rel_path):
+                    continue  # Skip protected files
+                
+                # Create parent directory if needed
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy file
+                try:
+                    shutil.copy2(item, target_path)
+                except Exception as e:
+                    # Log but don't fail on individual file errors
+                    print(f"Warning: Could not update {rel_path}: {e}")
+    
+    def _is_protected(self, rel_path: Path) -> bool:
+        """Check if a file path should be protected from updates"""
+        path_str = str(rel_path).replace('\\', '/')
+        
+        for protected in self.PROTECTED_PATHS:
+            if path_str.startswith(protected) or path_str == protected:
+                return True
+        
+        return False
 
 
 class SettingsScreen(BaseScreen):
@@ -733,21 +867,21 @@ class SettingsScreen(BaseScreen):
         row = QHBoxLayout()
         row.setSpacing(12)
 
-        self.save_btn = QPushButton("💾 Save Settings")
+        self.save_btn = QPushButton("ðŸ’¾ Save Settings")
         self.save_btn.setFont(font)
         self.save_btn.clicked.connect(self.save_config)
         self.save_btn.setFixedHeight(40)
         self.save_btn.setMinimumWidth(140)
         self._update_save_button_style()
 
-        self.reset_btn = QPushButton("🔄 Reset")
+        self.reset_btn = QPushButton("ðŸ”„ Reset")
         self.reset_btn.setFont(font)
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         self.reset_btn.setFixedHeight(40)
         self.reset_btn.setMinimumWidth(110)
         self._update_reset_button_style()
 
-        self.test_connection_btn = QPushButton("🔗 Test")
+        self.test_connection_btn = QPushButton("ðŸ”— Test")
         self.test_connection_btn.setFont(font)
         self.test_connection_btn.clicked.connect(self.test_websocket_connection)
         self.test_connection_btn.setFixedHeight(40)
@@ -757,6 +891,15 @@ class SettingsScreen(BaseScreen):
         row.addWidget(self.save_btn)
         row.addWidget(self.reset_btn)
         row.addWidget(self.test_connection_btn)
+        
+        self.update_btn = QPushButton("⬇️ Update")
+        self.update_btn.setFont(font)
+        self.update_btn.clicked.connect(self.check_for_updates)
+        self.update_btn.setFixedHeight(40)
+        self.update_btn.setMinimumWidth(110)
+        self._update_update_button_style()
+        row.addWidget(self.update_btn)
+        
         row.addStretch()
         return row
 
@@ -813,6 +956,21 @@ class SettingsScreen(BaseScreen):
         QPushButton:pressed {{ 
             background-color: {primary};
         }}
+        """)
+
+    def _update_update_button_style(self):
+        """Style for the update button - blue/info color"""
+        self.update_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        QPushButton:hover { background-color: #42A5F5; }
+        QPushButton:pressed { background-color: #1976D2; }
         """)
 
     # ---------- Widget styling helpers ----------
@@ -988,6 +1146,7 @@ class SettingsScreen(BaseScreen):
             self._update_save_button_style()
             self._update_reset_button_style()
             self._update_test_button_style()
+            self._update_update_button_style()
 
             self.logger.info(f"Settings screen updated for theme: {theme_manager.get_theme_name()}")
         except Exception as e:
@@ -1191,7 +1350,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"ðŸ” {category}:")
+            result_lines.append(f"Ã°Å¸â€Â {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1200,13 +1359,13 @@ class SettingsScreen(BaseScreen):
                     message = result['message']
                     
                     if status == 'success':
-                        icon = "âœ…"
+                        icon = "Ã¢Å“â€¦"
                     elif status == 'warning':
-                        icon = "âš ï¸"
+                        icon = "Ã¢Å¡Â Ã¯Â¸Â"
                     elif status == 'info':
-                        icon = "â„¹ï¸"
+                        icon = "Ã¢â€žÂ¹Ã¯Â¸Â"
                     else:
-                        icon = "âŒ"
+                        icon = "Ã¢ÂÅ’"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")
@@ -1215,9 +1374,9 @@ class SettingsScreen(BaseScreen):
         
         # Add summary
         if overall_success:
-            result_lines.append("🎉 All critical tests passed! Your network configuration looks good.")
+            result_lines.append("ðŸŽ‰ All critical tests passed! Your network configuration looks good.")
         else:
-            result_lines.append("âš ï¸ Some tests failed. Please check the issues above and verify your network configuration.")
+            result_lines.append("Ã¢Å¡Â Ã¯Â¸Â Some tests failed. Please check the issues above and verify your network configuration.")
         
         # Show results in appropriate dialog type
         result_text = "\n".join(result_lines)
@@ -1257,7 +1416,7 @@ class SettingsScreen(BaseScreen):
             QMessageBox.warning(
                 self,
                 "Invalid Settings",
-                "Please correct the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
+                "Please correct the following errors:\n\n" + "\n".join(f"â€¢ {e}" for e in errors)
             )
             return False
         return True
@@ -1314,3 +1473,62 @@ class SettingsScreen(BaseScreen):
 
         except Exception as e:
             self.logger.warning(f"Failed to notify components of config changes: {e}")
+
+    # ---------- Update System ----------
+
+    def check_for_updates(self):
+        """Check for and install updates from GitHub"""
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            "Update DroidDeck",
+            "This will download the latest version from GitHub.\n\n"
+            "Your configuration files in resources/configs/ will NOT be overwritten.\n\n"
+            "Do you want to proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # Create progress dialog
+        self.update_progress = QProgressDialog("Preparing to update...", "Cancel", 0, 0, self)
+        self.update_progress.setWindowTitle("Updating DroidDeck")
+        self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.update_progress.setMinimumDuration(0)
+        self.update_progress.setCancelButton(None)  # No cancel for now
+        self.update_progress.setFixedSize(400, 120)
+        self.update_progress.show()
+        
+        # Create and start update thread
+        self.update_thread = UpdateThread()
+        self.update_thread.progress_updated.connect(self._on_update_progress)
+        self.update_thread.update_completed.connect(self._on_update_complete)
+        self.update_thread.start()
+    
+    def _on_update_progress(self, message: str):
+        """Update progress dialog with current status"""
+        if hasattr(self, 'update_progress'):
+            self.update_progress.setLabelText(message)
+            QApplication.processEvents()
+    
+    def _on_update_complete(self, success: bool, message: str):
+        """Handle update completion"""
+        # Close progress dialog
+        if hasattr(self, 'update_progress'):
+            self.update_progress.close()
+        
+        # Show result message
+        if success:
+            QMessageBox.information(
+                self,
+                "Update Complete",
+                message
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Update Failed",
+                message
+            )
