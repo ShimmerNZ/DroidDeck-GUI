@@ -218,9 +218,19 @@ class ServoConfigScreen(BaseScreen):
     
     def handle_message(self, message: str):
         """Enhanced message handler to support NEMA WebSocket messages"""
+        # CRITICAL DEBUG: Log that we received ANY message
+        print("=" * 80)
+        print("SERVO SCREEN: handle_message() CALLED!")
+        print(f"Message preview: {message[:100]}")
+        print("=" * 80)
+        
         try:
             msg = json.loads(message)
             msg_type = msg.get("type")
+            
+            # Log the message type
+            print(f"SERVO SCREEN: Message type = '{msg_type}'")
+            self.logger.info(f"[WS_MSG] Received: {msg_type}")
             
             # Handle existing message types first
             if msg_type == "telemetry":
@@ -232,7 +242,9 @@ class ServoConfigScreen(BaseScreen):
             elif msg_type == "all_servo_positions":
                 self.handle_all_servo_positions(msg)
             elif msg_type == "servo_config_response":
+                print("SERVO SCREEN: About to call handle_servo_config_response()")
                 self.handle_servo_config_response(msg)
+                print("SERVO SCREEN: handle_servo_config_response() completed")
                 
             # ========================================
             # NEW NEMA MESSAGE HANDLERS
@@ -249,6 +261,10 @@ class ServoConfigScreen(BaseScreen):
                 self.handle_nema_error(msg)
             elif msg_type == "nema_enable_response":
                 self.handle_nema_enable_response(msg)
+            else:
+                # CATCH-ALL: Log any message types we don't handle
+                print(f"SERVO SCREEN: UNHANDLED MESSAGE TYPE: '{msg_type}'")
+                self.logger.warning(f"Unhandled message type: {msg_type}")
                 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to parse WebSocket message: {e}")
@@ -549,25 +565,45 @@ class ServoConfigScreen(BaseScreen):
 
     def handle_servo_config_response(self, data):
         """Handle servo config response from backend"""
+        print("=" * 80)
+        print("INSIDE handle_servo_config_response()!!!")
+        print(f"Data keys: {data.keys()}")
+        print("=" * 80)
+        
         try:
             maestro = data.get("maestro")
             config = data.get("config", {})
             
-            self.logger.info(f"📥 Received config from backend: {len(config)} entries for Maestro {maestro}")
+            print(f"Maestro: {maestro}, Config entries: {len(config)}")
+            self.logger.info(f"[RECV] Received config from backend: {len(config)} entries for Maestro {maestro}")
             
             # Update local config with backend data
             updated_count = 0
             for channel_key, channel_config in config.items():
                 if channel_key.startswith("m"):  # Skip "nema" entry
+                    # Log what we're receiving
+                    name = channel_config.get("name", "")
+                    min_val = channel_config.get("min")
+                    max_val = channel_config.get("max")
+                    home_val = channel_config.get("home")
+                    
+                    self.logger.info(f"  Updating {channel_key}: name='{name}', min={min_val}, max={max_val}, home={home_val}")
+                    
                     # Merge backend config into local config
                     if channel_key not in self.servo_config:
                         self.servo_config[channel_key] = {}
                     
-                    # Update all four values
-                    self.servo_config[channel_key].update(channel_config)
-                    updated_count += 1
+                    # Update all four values explicitly
+                    if "name" in channel_config:
+                        self.servo_config[channel_key]["name"] = channel_config["name"]
+                    if "min" in channel_config:
+                        self.servo_config[channel_key]["min"] = channel_config["min"]
+                    if "max" in channel_config:
+                        self.servo_config[channel_key]["max"] = channel_config["max"]
+                    if "home" in channel_config:
+                        self.servo_config[channel_key]["home"] = channel_config["home"]
                     
-                    self.logger.debug(f"  Updated {channel_key}: {channel_config}")
+                    updated_count += 1
             
             # Save merged config to frontend file
             success = config_manager.save_config(
@@ -576,16 +612,22 @@ class ServoConfigScreen(BaseScreen):
             )
             
             if success:
-                self.logger.info(f"✅ Saved merged config to frontend: {updated_count} channels")
+                self.logger.info(f"[OK] Saved merged config to frontend: {updated_count} channels")
+            else:
+                self.logger.error("Failed to save merged config to frontend file")
             
             # Update UI grid with new values
             if hasattr(self, 'grid_layout'):
+                self.logger.info(f"Rebuilding grid with updated config...")
                 self.update_grid()
+                self.logger.info(f"Grid rebuilt successfully")
+            else:
+                self.logger.warning("No grid_layout found, skipping UI update")
             
-            self.update_status(f"✅ Config refreshed from backend: {updated_count} channels updated")
+            self.update_status(f"[OK] Config refreshed from backend: {updated_count} channels updated")
             
         except Exception as e:
-            self.logger.error(f"Error handling servo config response: {e}")
+            self.logger.error(f"Error handling servo config response: {e}", exc_info=True)
             self.update_status(f"Error refreshing config: {str(e)}", error=True)
 
 # ========================================
@@ -1833,67 +1875,33 @@ class ServoConfigScreen(BaseScreen):
             self.update_status("Failed to request Maestro info: WebSocket error", error=True)
 
     def refresh_current_maestro(self):
-        """Resync settings from backend - reload config and update UI"""
+        """Resync settings from backend - request config from backend via WebSocket"""
         maestro_num = self.current_maestro + 1
+        
+        print("=" * 80)
+        print(f"REFRESH BUTTON CLICKED - Maestro {maestro_num}")
+        print("=" * 80)
         
         # Stop any active operations
         self.stop_all_sweeps()
-        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():
+        if hasattr(self, 'position_update_timer') and self.position_update_timer.isActive():\
             self.position_update_timer.stop()
         
-        self.update_status(f"Resyncing settings from backend for Maestro {maestro_num}...")
+        # Request configuration from backend via WebSocket
+        self.update_status(f"[REFRESH] Requesting config from backend for Maestro {maestro_num}...")
         
-        # Reload configuration from disk (backend has already saved it)
-        config_manager.clear_cache()
-        self.servo_config = config_manager.get_config("resources/configs/servo_config.json")
+        print(f"Sending servo_request_config for Maestro {maestro_num}")
         
-        # Update the grid with new config values
-        if hasattr(self, 'grid_layout') and self.servo_widgets:
-            # Update existing widgets with new config values
-            for channel_key, widgets in self.servo_widgets.items():
-                if channel_key.startswith(f"m{maestro_num}_"):
-                    config = self.servo_config.get(channel_key, {})
-                    
-                    # Extract widgets
-                    slider, pos_label, play_btn, live_checkbox, name_edit, min_spin, max_spin, home_spin = widgets
-                    
-                    # Update min/max
-                    min_val = config.get("min", 992)
-                    max_val = config.get("max", 2000)
-                    home_val = config.get("home", 1500)
-                    name_val = config.get("name", "")
-                    
-                    # Update spinboxes
-                    min_spin.blockSignals(True)
-                    min_spin.setValue(min_val)
-                    min_spin.blockSignals(False)
-                    
-                    max_spin.blockSignals(True)
-                    max_spin.setValue(max_val)
-                    max_spin.blockSignals(False)
-                    
-                    home_spin.blockSignals(True)
-                    home_spin.setValue(home_val)
-                    home_spin.blockSignals(False)
-                    
-                    # Update name
-                    name_edit.blockSignals(True)
-                    name_edit.setText(name_val)
-                    name_edit.blockSignals(False)
-                    
-                    # Update slider range and home indicator
-                    slider.blockSignals(True)
-                    slider.setMinimum(min_val)
-                    slider.setMaximum(max_val)
-                    slider.set_home_position(home_val)
-                    slider.blockSignals(False)
-            
-            self.update_status(f"✅ Settings resynced from backend for Maestro {maestro_num}")
-            self.logger.info(f"Resynced settings from backend for Maestro {maestro_num}")
+        # Send WebSocket request to backend
+        success = self.send_websocket_message("servo_request_config", maestro=maestro_num)
+        
+        if success:
+            print(f"[SENT] Config request sent successfully!")
+            self.logger.info(f"[SENT] Config request sent to backend for Maestro {maestro_num}")
         else:
-            # Grid not yet built, just reload
-            self.reload_servo_config()
-            self.update_status(f"✅ Configuration reloaded for Maestro {maestro_num}")
+            print(f"[ERROR] Failed to send config request!")
+            self.logger.error(f"[ERROR] Failed to send config request to backend")
+            self.update_status("[ERROR] Failed to request config from backend", error=True)
 
     def update_maestro_selector_status(self):
         """Update the maestro selector to show which ones are detected"""
@@ -1981,6 +1989,10 @@ class ServoConfigScreen(BaseScreen):
             channel_key = f"m{maestro_num}_ch{i}"
             config = self.servo_config.get(channel_key, {})
             row = i
+            
+            # Debug: Log what we're reading from config
+            servo_name = config.get("name", "")
+            self.logger.debug(f"Building grid row {i}: {channel_key}, name='{servo_name}', config={config}")
             
             # Channel number
             label = QLabel(f"Ch{i}")
