@@ -1890,13 +1890,6 @@ class ServoConfigScreen(BaseScreen):
     def update_maestro_selector_status(self):
         """Update the maestro selector to show which ones are detected"""
         pass
-            # Grid not yet built, just reload
-            self.reload_servo_config()
-            self.update_status(f"✅ Configuration reloaded for Maestro {maestro_num}")
-
-    def update_maestro_selector_status(self):
-        """Update the maestro selector to show which ones are detected"""
-        pass
 
     @error_boundary
     def handle_websocket_message(self, message: str):
