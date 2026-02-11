@@ -221,10 +221,11 @@ class CategorySelectorDialog(QDialog):
 class EnhancedSceneRow(QWidget):
     """Enhanced expandable scene row with better styling and layout"""
     
-    def __init__(self, scene_data, audio_files, row_index, parent_screen):
+    def __init__(self, scene_data, audio_files, bottango_scenes, row_index, parent_screen):
         super().__init__()
         self.scene_data = scene_data
         self.audio_files = audio_files
+        self.bottango_scenes = bottango_scenes
         self.row_index = row_index
         self.parent_screen = parent_screen
         self.is_expanded = False
@@ -521,8 +522,8 @@ class EnhancedSceneRow(QWidget):
         self.update_details_style()
         
         layout = QHBoxLayout(self.details_widget)
-        layout.setContentsMargins(20, 15, 25, 15)
-        layout.setSpacing(20)
+        layout.setContentsMargins(15, 15, 15, 15)  # Reduced from 20,15,25,15
+        layout.setSpacing(12)  # Reduced from 20
         
         # Audio section
         self.audio_cb = QCheckBox("Audio:")
@@ -539,6 +540,7 @@ class EnhancedSceneRow(QWidget):
             self.audio_file_combo.setCurrentIndex(0)
         
         self.audio_file_combo.setEnabled(self.audio_cb.isChecked())
+        self.audio_file_combo.setMaximumWidth(180)  # Limit width
         self.update_combo_style(self.audio_file_combo)
         
         self.audio_cb.stateChanged.connect(
@@ -549,84 +551,73 @@ class EnhancedSceneRow(QWidget):
         layout.addWidget(self.audio_cb)
         layout.addWidget(self.audio_file_combo)
         
-        # Maestro 1 Script section
-        maestro1_label = QLabel("M1 Script:")
-        maestro1_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 70px; border: none; background: transparent;")
+        # Script (Bottango Scene) section
+        self.script_cb = QCheckBox("Script:")
+        self.script_cb.setChecked(self.scene_data.get("script_enabled", False))
+        self.update_checkbox_style(self.script_cb)
         
-        self.script_m1_input = QLineEdit()
-        script_m1_value = self.scene_data.get("script_maestro1")
-        if script_m1_value is not None:
-            self.script_m1_input.setText(str(script_m1_value))
+        # Bottango scene dropdown
+        self.bottango_combo = QComboBox()
+        scene_names = [scene["name"] for scene in self.bottango_scenes]
+        if scene_names:
+            self.bottango_combo.addItems(scene_names)
         else:
-            self.script_m1_input.setText("")
+            self.bottango_combo.addItem("No scenes available")
         
-        self.script_m1_input.setPlaceholderText("#")
-        self.update_script_input_style(self.script_m1_input)
+        current_bottango = self.scene_data.get("bottango_scene", "")
+        if current_bottango and current_bottango in scene_names:
+            self.bottango_combo.setCurrentText(current_bottango)
+        elif scene_names:
+            self.bottango_combo.setCurrentIndex(0)
         
-        self.script_m1_input.textChanged.connect(lambda text: self.validate_script_input(text, self.script_m1_input))
+        self.bottango_combo.setEnabled(self.script_cb.isChecked())
+        self.bottango_combo.setMaximumWidth(180)  # Limit width
+        self.update_combo_style(self.bottango_combo)
         
-        layout.addWidget(maestro1_label)
-        layout.addWidget(self.script_m1_input)
+        self.script_cb.stateChanged.connect(
+            lambda state: self.bottango_combo.setEnabled(state == Qt.CheckState.Checked)
+        )
+        self.script_cb.stateChanged.connect(self.update_indicators)
         
-        # Maestro 2 Script section
-        maestro2_label = QLabel("M2 Script:")
-        maestro2_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 70px; border: none; background: transparent;")
+        layout.addWidget(self.script_cb)
+        layout.addWidget(self.bottango_combo)
         
-        self.script_m2_input = QLineEdit()
-        script_m2_value = self.scene_data.get("script_maestro2")
-        if script_m2_value is not None:
-            self.script_m2_input.setText(str(script_m2_value))
-        else:
-            self.script_m2_input.setText("")
+        # Duration section (plain text input)
+        duration_label = QLabel("Duration(s):")
+        duration_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; min-width: 68px; border: none; background: transparent;")
         
-        self.script_m2_input.setPlaceholderText("#")
-        self.update_script_input_style(self.script_m2_input)
-        
-        self.script_m2_input.textChanged.connect(lambda text: self.validate_script_input(text, self.script_m2_input))
-        
-        layout.addWidget(maestro2_label)
-        layout.addWidget(self.script_m2_input)
-        
-        # Duration section
-        duration_label = QLabel("Duration:")
-        duration_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 65px; border: none; background: transparent;")
-        
-        self.duration_spin = QDoubleSpinBox()
-        self.duration_spin.setRange(0.1, 99.9)
-        self.duration_spin.setSingleStep(0.1)
-        self.duration_spin.setValue(self.scene_data.get("duration", 1.0))
-        self.duration_spin.setSuffix("s")
-        self.update_spin_style(self.duration_spin)
+        self.duration_input = QLineEdit()
+        self.duration_input.setText(str(self.scene_data.get("duration", 1.0)))
+        self.duration_input.setPlaceholderText("1.0")
+        self.duration_input.setMaximumWidth(60)  # Smaller input
+        self.update_text_input_style(self.duration_input)
+        self.duration_input.textChanged.connect(lambda text: self.validate_float_input(text, self.duration_input))
         
         layout.addWidget(duration_label)
-        layout.addWidget(self.duration_spin)
+        layout.addWidget(self.duration_input)
         
-        # Delay section
-        delay_label = QLabel("Delay:")
-        delay_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; min-width: 45px; border: none; background: transparent;")
+        # Delay section (plain text input)
+        delay_label = QLabel("Delay(ms):")
+        delay_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; min-width: 62px; border: none; background: transparent;")
         
-        self.delay_spin = QSpinBox()
-        self.delay_spin.setRange(0, 10000)
-        self.delay_spin.setValue(self.scene_data.get("delay", 0))
-        self.delay_spin.setSuffix("ms")
-        # Delay is enabled if audio is checked AND at least one script is specified
-        self.delay_spin.setEnabled(self.audio_cb.isChecked() and (
-            self.script_m1_input.text().strip() != "" or 
-            self.script_m2_input.text().strip() != ""
-        ))
-        self.update_spin_style(self.delay_spin)
+        self.delay_input = QLineEdit()
+        self.delay_input.setText(str(self.scene_data.get("delay", 0)))
+        self.delay_input.setPlaceholderText("0")
+        self.delay_input.setMaximumWidth(60)  # Smaller input
+        self.update_text_input_style(self.delay_input)
+        self.delay_input.textChanged.connect(lambda text: self.validate_int_input(text, self.delay_input))
+        
+        # Delay is enabled if audio is checked AND script is checked
+        self.delay_input.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
         
         def update_delay_enabled():
-            has_script = (self.script_m1_input.text().strip() != "" or 
-                         self.script_m2_input.text().strip() != "")
-            self.delay_spin.setEnabled(self.audio_cb.isChecked() and has_script)
+            self.delay_input.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
         
         self.audio_cb.stateChanged.connect(update_delay_enabled)
-        self.script_m1_input.textChanged.connect(lambda: update_delay_enabled())
-        self.script_m2_input.textChanged.connect(lambda: update_delay_enabled())
+        self.script_cb.stateChanged.connect(update_delay_enabled)
         
         layout.addWidget(delay_label)
-        layout.addWidget(self.delay_spin)
+        layout.addWidget(self.delay_input)
         layout.addStretch()
         
         self.main_layout.addWidget(self.details_widget)
@@ -692,7 +683,7 @@ class EnhancedSceneRow(QWidget):
                 padding: 4px 8px;
                 font-size: 12px;
                 min-height: 25px;
-                min-width: 200px;
+                min-width: 140px;
             }}
             QComboBox:disabled {{
                 background-color: #333;
@@ -746,36 +737,68 @@ class EnhancedSceneRow(QWidget):
             }}
         """)
     
-    def update_spin_style(self, spin_widget):
-        """Update spinbox styling"""
+    def update_text_input_style(self, input_widget):
+        """Update text input styling (for duration and delay)"""
         card_bg = theme_manager.get("card_bg")
         primary = theme_manager.get("primary_color")
+        grey = theme_manager.get("grey")
         
-        spin_widget.setStyleSheet(f"""
-            QDoubleSpinBox, QSpinBox {{
+        input_widget.setStyleSheet(f"""
+            QLineEdit {{
                 background-color: {card_bg};
                 border: 2px solid {primary};
                 border-radius: 4px;
-                color: white;
-                padding: 4px 6px 8px 6px;
+                color: {primary};
+                padding: 4px 8px;
                 font-size: 12px;
                 min-height: 25px;
-                max-width: 70px;
+                min-width: 50px;
+            }}
+            QLineEdit:disabled {{
+                background-color: #333;
+                border-color: {grey};
+                color: {grey};
+            }}
+            QLineEdit::placeholder {{
+                color: {grey};
             }}
         """)
     
-    def validate_script_input(self, text, input_widget):
-        """Only allow digits in script input"""
+    def validate_float_input(self, text, input_widget):
+        """Only allow valid float input for duration"""
+        if text:
+            # Allow digits, single decimal point
+            filtered = ''.join(c for c in text if c.isdigit() or c == '.')
+            # Ensure only one decimal point
+            if filtered.count('.') > 1:
+                filtered = filtered[:filtered.rfind('.')]
+            if filtered != text:
+                input_widget.setText(filtered)
+    
+    def validate_int_input(self, text, input_widget):
+        """Only allow digits for delay"""
         if text and not text.isdigit():
             filtered_text = ''.join(c for c in text if c.isdigit())
             input_widget.setText(filtered_text)
     
+    def update_bottango_scenes(self, bottango_scenes):
+        """Update the Bottango scenes dropdown with new scenes"""
+        self.bottango_scenes = bottango_scenes
+        current_selection = self.bottango_combo.currentText()
+        self.bottango_combo.clear()
+        
+        scene_names = [scene["name"] for scene in bottango_scenes]
+        if scene_names:
+            self.bottango_combo.addItems(scene_names)
+            if current_selection in scene_names:
+                self.bottango_combo.setCurrentText(current_selection)
+        else:
+            self.bottango_combo.addItem("No scenes available")
+    
     def update_indicators(self):
         """Update the type indicators based on checkbox states"""
         audio_enabled = self.audio_cb.isChecked()
-        has_m1_script = self.script_m1_input.text().strip() != ""
-        has_m2_script = self.script_m2_input.text().strip() != ""
-        script_enabled = has_m1_script or has_m2_script
+        script_enabled = self.script_cb.isChecked()
         primary = theme_manager.get("primary_color")
         grey = theme_manager.get("grey")
         
@@ -839,24 +862,40 @@ class EnhancedSceneRow(QWidget):
     
     def get_scene_data(self):
         """Extract current scene data from widgets"""
-        script_m1_value = self.script_m1_input.text().strip()
-        script_m1_num = int(script_m1_value) if script_m1_value.isdigit() else None
-        
-        script_m2_value = self.script_m2_input.text().strip()
-        script_m2_num = int(script_m2_value) if script_m2_value.isdigit() else None
-        
         audio_file = self.audio_file_combo.currentText() if self.audio_cb.isChecked() else ""
+        
+        # Get bottango scene if script is enabled
+        bottango_scene = ""
+        if self.script_cb.isChecked():
+            bottango_scene = self.bottango_combo.currentText()
+            if bottango_scene == "No scenes available":
+                bottango_scene = ""
+        
+        # Parse duration and delay with defaults
+        try:
+            duration = float(self.duration_input.text()) if self.duration_input.text() else 1.0
+        except ValueError:
+            duration = 1.0
+        
+        try:
+            delay = int(self.delay_input.text()) if self.delay_input.text() else 0
+        except ValueError:
+            delay = 0
+        
+        # Only include delay if both audio and script are enabled
+        if not (self.audio_cb.isChecked() and self.script_cb.isChecked()):
+            delay = 0
         
         return {
             "label": self.name_edit.text().strip(),
-            "emoji": "🎭",  # Default emoji
+            "emoji": "🎭",
             "categories": self.category_selector.get_selected_categories(),
             "audio_enabled": self.audio_cb.isChecked(),
             "audio_file": audio_file,
-            "script_maestro1": script_m1_num,
-            "script_maestro2": script_m2_num,
-            "duration": self.duration_spin.value(),
-            "delay": self.delay_spin.value() if (self.audio_cb.isChecked() and (script_m1_num is not None or script_m2_num is not None)) else 0
+            "script_enabled": self.script_cb.isChecked(),
+            "bottango_scene": bottango_scene,
+            "duration": duration,
+            "delay": delay
         }
 
 class SceneScreen(BaseScreen):
@@ -868,6 +907,7 @@ class SceneScreen(BaseScreen):
         self.setFixedWidth(1200)
         self.scenes_data = []
         self.audio_files = []
+        self.bottango_scenes = []  # Available Bottango scenes from backend
         self.scene_rows = []
         
         # Register for theme changes
@@ -983,9 +1023,9 @@ class SceneScreen(BaseScreen):
         self.status_label.setStyleSheet(f"""
             QLabel {{
                 color: {primary};
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
-                padding: 10px;
+                padding: 5px;
                 background: transparent;
                 border: none;
             }}
@@ -1042,32 +1082,34 @@ class SceneScreen(BaseScreen):
         self.add_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.add_btn.clicked.connect(lambda: self.add_scene())
         
-        # Status indicator
+        # Status indicator with word wrap enabled
         self.status_label = QLabel("Ready")
+        self.status_label.setWordWrap(True)  # Enable text wrapping
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Center align
         primary = theme_manager.get("primary_color")
         self.status_label.setStyleSheet(f"""
             QLabel {{
                 color: {primary};
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
-                padding: 10px;
+                padding: 5px;
                 background: transparent;
                 border: none;
             }}
         """)
         
-        # Action buttons
-        self.refresh_btn = QPushButton("🔄 Refresh from Backend")
+        # Action buttons (removed emojis)
+        self.refresh_btn = QPushButton("Refresh from Backend")
         self.refresh_btn.clicked.connect(lambda: self.refresh_from_backend())
         
-        self.save_btn = QPushButton("💾 Save Configuration")
+        self.save_btn = QPushButton("Save Configuration")
         self.save_btn.clicked.connect(lambda: self.save_config())
         
         # Apply initial styling
         self.update_button_styles()
         
         btn_layout.addWidget(self.add_btn)
-        btn_layout.addWidget(self.status_label)
+        btn_layout.addWidget(self.status_label, 1)  # Give status label stretch factor
         btn_layout.addStretch()
         btn_layout.addWidget(self.refresh_btn)
         btn_layout.addWidget(self.save_btn)
@@ -1141,7 +1183,7 @@ class SceneScreen(BaseScreen):
 
     @error_boundary
     def refresh_from_backend(self):
-        """Refresh both scenes and audio files from backend in parallel"""
+        """Refresh scenes, audio files, and Bottango scenes from backend"""
         primary = theme_manager.get("primary_color")
         self.update_status("Refreshing from backend...", primary)
         
@@ -1149,17 +1191,22 @@ class SceneScreen(BaseScreen):
         self.refresh_status = {
             "scenes_complete": False,
             "audio_complete": False,
+            "bottango_complete": False,
             "scenes_count": 0,
             "audio_count": 0,
+            "bottango_count": 0,
             "scenes_success": False,
-            "audio_success": False
+            "audio_success": False,
+            "bottango_success": False
         }
         
-        # Send both requests in parallel
-        scenes_success = self.send_websocket_message("get_scenes")
-        audio_success = self.send_websocket_message("get_audio_files")
+        # Send refresh request (backend will return audio + Bottango scenes)
+        refresh_success = self.send_websocket_message("refresh_backend")
         
-        if not (scenes_success or audio_success):
+        # Also request scenes list separately
+        scenes_success = self.send_websocket_message("get_scenes")
+        
+        if not (refresh_success or scenes_success):
             self.update_status("Backend unavailable - keeping local data", "orange")
             self.logger.warning("Failed to refresh from backend")
 
@@ -1240,6 +1287,46 @@ class SceneScreen(BaseScreen):
                         self.check_refresh_completion()
                     else:
                         self.update_status("No audio files from backend", "orange")
+            
+            elif msg_type == "backend_refresh_response":
+                # Handle combined refresh response (audio + Bottango scenes)
+                files = msg.get("audio_files", [])
+                bottango_scenes = msg.get("bottango_scenes", [])
+                
+                # Update audio files
+                if files:
+                    self.audio_files = files
+                    self.logger.info(f"Loaded {len(files)} audio files from backend")
+                    for row in self.scene_rows:
+                        row.audio_files = files
+                        current_selection = row.audio_file_combo.currentText()
+                        row.audio_file_combo.clear()
+                        row.audio_file_combo.addItems(files)
+                        if current_selection in files:
+                            row.audio_file_combo.setCurrentText(current_selection)
+                        elif files:
+                            row.audio_file_combo.setCurrentIndex(0)
+                    
+                # Update Bottango scenes
+                if bottango_scenes:
+                    self.bottango_scenes = bottango_scenes
+                    self.logger.info(f"Loaded {len(bottango_scenes)} Bottango scenes from backend")
+                    # Update all scene rows with new Bottango scenes
+                    for row in self.scene_rows:
+                        row.update_bottango_scenes(bottango_scenes)
+                
+                # Update refresh tracking
+                if hasattr(self, 'refresh_status'):
+                    self.refresh_status["audio_complete"] = True
+                    self.refresh_status["audio_count"] = len(files)
+                    self.refresh_status["audio_success"] = len(files) > 0
+                    self.refresh_status["bottango_complete"] = True
+                    self.refresh_status["bottango_count"] = len(bottango_scenes)
+                    self.refresh_status["bottango_success"] = len(bottango_scenes) > 0
+                    self.check_refresh_completion()
+                else:
+                    status_msg = f"Loaded {len(files)} audio files, {len(bottango_scenes)} Bottango scenes"
+                    self.update_status(status_msg, green)
 
                     
             elif msg_type == "scenes_saved":
@@ -1266,21 +1353,27 @@ class SceneScreen(BaseScreen):
         green = theme_manager.get("green")
         red = theme_manager.get("red")
         
-        # Check if both are complete
-        if self.refresh_status["scenes_complete"] and self.refresh_status["audio_complete"]:
+        # Check if all are complete
+        scenes_done = self.refresh_status.get("scenes_complete", False)
+        audio_done = self.refresh_status.get("audio_complete", False)
+        bottango_done = self.refresh_status.get("bottango_complete", False)
+        
+        if scenes_done and audio_done and bottango_done:
             scenes_count = self.refresh_status["scenes_count"]
             audio_count = self.refresh_status["audio_count"]
+            bottango_count = self.refresh_status["bottango_count"]
             scenes_ok = self.refresh_status["scenes_success"]
             audio_ok = self.refresh_status["audio_success"]
+            bottango_ok = self.refresh_status["bottango_success"]
             
-            if scenes_ok and audio_ok:
-                self.update_status(f"Loaded {scenes_count} scenes and {audio_count} audio files", green)
+            if scenes_ok and audio_ok and bottango_ok:
+                self.update_status(f"Loaded {scenes_count} scenes, {audio_count} audio files, {bottango_count} Bottango scenes", green)
+            elif scenes_ok and audio_ok:
+                self.update_status(f"Loaded {scenes_count} scenes, {audio_count} audio files (No Bottango scenes)", "orange")
             elif scenes_ok:
-                self.update_status(f"Loaded {scenes_count} scenes, audio failed", "orange")
-            elif audio_ok:
-                self.update_status(f"Scenes failed, loaded {audio_count} audio files", "orange")
+                self.update_status(f"Loaded {scenes_count} scenes only", "orange")
             else:
-                self.update_status("Failed to load scenes and audio files", red)
+                self.update_status("Refresh completed with errors", red)
             
             # Clear refresh tracking
             del self.refresh_status
@@ -1306,7 +1399,7 @@ class SceneScreen(BaseScreen):
         self.logger.info("No local config found - starting with empty scene list")
 
     def convert_old_format(self, old_scenes):
-        """Convert old emotion_buttons.json format to new scenes.json format"""
+        """Convert old emotion_buttons.json format to new Bottango-based format"""
         converted = []
         for scene in old_scenes:
             new_scene = {
@@ -1316,7 +1409,7 @@ class SceneScreen(BaseScreen):
                 "audio_enabled": scene.get("audio_enabled", False),
                 "audio_file": scene.get("audio_file", ""),
                 "script_enabled": scene.get("script_enabled", False),
-                "script_name": scene.get("script_name", 0),
+                "bottango_scene": scene.get("bottango_scene", ""),  # New Bottango reference
                 "duration": scene.get("duration", 1.0),
                 "delay": scene.get("delay", 0)
             }
@@ -1333,7 +1426,7 @@ class SceneScreen(BaseScreen):
         
         # Create new enhanced rows with proper parent reference
         for i, scene_data in enumerate(self.scenes_data):
-            scene_row = EnhancedSceneRow(scene_data, self.audio_files, i, self)
+            scene_row = EnhancedSceneRow(scene_data, self.audio_files, self.bottango_scenes, i, self)
             self.scene_rows.append(scene_row)
             # Insert before the stretch
             self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
@@ -1346,8 +1439,8 @@ class SceneScreen(BaseScreen):
             "categories": [],
             "audio_enabled": False,
             "audio_file": "",
-            "script_enabled": False, 
-            "script_name": 0,
+            "script_enabled": False,
+            "bottango_scene": "",  # Reference to Bottango scene
             "duration": 2.0,
             "delay": 0
         }
@@ -1355,7 +1448,7 @@ class SceneScreen(BaseScreen):
         self.scenes_data.append(new_scene)
         
         # Create and add new enhanced row with proper parent reference
-        scene_row = EnhancedSceneRow(new_scene, self.audio_files, len(self.scene_rows), self)
+        scene_row = EnhancedSceneRow(new_scene, self.audio_files, self.bottango_scenes, len(self.scene_rows), self)
         self.scene_rows.append(scene_row)
         self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
         
