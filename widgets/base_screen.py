@@ -164,17 +164,33 @@ class SteamDeckBatteryWidget(QWidget):
 
     LOW_BATTERY_THRESHOLD = 20
     CRITICAL_BATTERY_THRESHOLD = 10
-    BATTERY_PATH = "/sys/class/power_supply/BAT0/capacity"
-    CHARGING_PATH = "/sys/class/power_supply/BAT0/status"
+
+    # Candidate sysfs paths - BAT0 is standard, BAT1 seen on some devices
+    BATTERY_PATHS = [
+        "/sys/class/power_supply/BAT0/capacity",
+        "/sys/class/power_supply/BAT1/capacity",
+    ]
+    CHARGING_PATHS = [
+        "/sys/class/power_supply/BAT0/status",
+        "/sys/class/power_supply/BAT1/status",
+    ]
 
     def __init__(self):
         super().__init__()
+        import platform as _platform
+        self._platform = _platform.system().lower()
+
         self.setFixedSize(160, 32)
         self._percent = -1
         self._charging = False
         self._color = "#44FF44"
         self._flash_state = True
-        self._visible = self._battery_available()
+
+        # Visible on Linux only - hide completely on macOS/Windows
+        self._visible = (self._platform == "linux")
+
+        self._battery_path = None
+        self._charging_path = None
 
         self._flash_timer = QTimer()
         self._flash_timer.timeout.connect(self._toggle_flash)
@@ -185,24 +201,70 @@ class SteamDeckBatteryWidget(QWidget):
             self._poll_timer.start(30000)
             self._read_battery()
 
-    def _battery_available(self) -> bool:
-        """Check whether a battery sysfs node exists on this platform"""
+    def _find_paths(self):
+        """Locate the sysfs battery paths, trying all candidates"""
         import os
-        return os.path.exists(self.BATTERY_PATH)
+        for cap_path, status_path in zip(self.BATTERY_PATHS, self.CHARGING_PATHS):
+            if os.path.exists(cap_path):
+                self._battery_path = cap_path
+                self._charging_path = status_path
+                return True
+        return False
 
     def _read_battery(self):
-        """Read battery capacity and charging state from sysfs"""
-        try:
-            with open(self.BATTERY_PATH, "r") as f:
-                self._percent = int(f.read().strip())
+        """Read battery capacity - tries sysfs first, falls back to upower"""
+        # Try to find sysfs path if not yet located
+        if self._battery_path is None:
+            self._find_paths()
+
+        # Method 1: sysfs direct read
+        if self._battery_path:
             try:
-                with open(self.CHARGING_PATH, "r") as f:
-                    self._charging = f.read().strip().lower() in ("charging", "full")
+                with open(self._battery_path, "r") as f:
+                    self._percent = int(f.read().strip())
+                try:
+                    with open(self._charging_path, "r") as f:
+                        self._charging = f.read().strip().lower() in ("charging", "full")
+                except Exception:
+                    self._charging = False
+                self._update_state()
+                self.update()
+                return
             except Exception:
-                self._charging = False
-            self._update_state()
+                pass  # Fall through to upower
+
+        # Method 2: upower command (works inside Distrobox containers)
+        try:
+            import subprocess, re
+            result = subprocess.run(
+                ["upower", "-i", "/org/freedesktop/UPower/devices/battery_BAT0"],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode == 0:
+                pct_match = re.search(r"percentage:\s+(\d+)", result.stdout)
+                state_match = re.search(r"state:\s+(\w+)", result.stdout)
+                if pct_match:
+                    self._percent = int(pct_match.group(1))
+                    self._charging = state_match and state_match.group(1) in ("charging", "fully-charged")
+                    self._update_state()
+                    self.update()
+                    return
         except Exception:
-            self._percent = -1
+            pass
+
+        # Method 3: acpi command
+        try:
+            import subprocess, re
+            result = subprocess.run(["acpi", "-b"], capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                pct_match = re.search(r"(\d+)%", result.stdout)
+                if pct_match:
+                    self._percent = int(pct_match.group(1))
+                    self._charging = "charging" in result.stdout.lower()
+                    self._update_state()
+        except Exception:
+            pass
+
         self.update()
 
     def _update_state(self):
