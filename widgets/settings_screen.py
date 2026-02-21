@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Settings Screen (Themed)
 """
@@ -1439,7 +1441,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"Ã°Å¸â€Â {category}:")
+            result_lines.append(f"🔍 {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1448,13 +1450,13 @@ class SettingsScreen(BaseScreen):
                     message = result['message']
                     
                     if status == 'success':
-                        icon = "Ã¢Å“â€¦"
+                        icon = "✅"
                     elif status == 'warning':
-                        icon = "Ã¢Å¡Â Ã¯Â¸Â"
+                        icon = "⚠️"
                     elif status == 'info':
-                        icon = "Ã¢â€žÂ¹Ã¯Â¸Â"
+                        icon = "✅️"
                     else:
-                        icon = "Ã¢ÂÅ’"
+                        icon = "✗"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")
@@ -1463,9 +1465,9 @@ class SettingsScreen(BaseScreen):
         
         # Add summary
         if overall_success:
-            result_lines.append("ðŸŽ‰ All critical tests passed! Your network configuration looks good.")
+            result_lines.append("🎉 All critical tests passed! Your network configuration looks good.")
         else:
-            result_lines.append("Ã¢Å¡Â Ã¯Â¸Â Some tests failed. Please check the issues above and verify your network configuration.")
+            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
         
         # Show results in appropriate dialog type
         result_text = "\n".join(result_lines)
@@ -1505,7 +1507,7 @@ class SettingsScreen(BaseScreen):
             QMessageBox.warning(
                 self,
                 "Invalid Settings",
-                "Please correct the following errors:\n\n" + "\n".join(f"â€¢ {e}" for e in errors)
+                "Please correct the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
             )
             return False
         return True

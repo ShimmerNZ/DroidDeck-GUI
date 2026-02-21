@@ -107,6 +107,12 @@ class CategorySelectorDialog(QDialog):
         self.checkboxes = {}
         self.setup_ui()
         
+        # Connect state change handlers for Idle category exclusivity
+        for category, checkbox in self.checkboxes.items():
+            checkbox.stateChanged.connect(
+                lambda state, cat=category: self._on_category_changed(cat, state)
+            )
+        
     def setup_ui(self):
         self.setWindowTitle("Select Categories")
         self.setModal(True)
@@ -152,7 +158,40 @@ class CategorySelectorDialog(QDialog):
             emoji = CATEGORIES.get(category, "⭐")
             checkbox = QCheckBox(f"{emoji} {category}")
             checkbox.setChecked(category in self.selected_categories)
-            checkbox.setStyleSheet(f"""
+            
+            # Special styling for Idle category to highlight its exclusivity
+            if category == "Idle":
+                idle_color = "#88ccff"  # Light blue for Idle
+                checkbox.setStyleSheet(f"""
+                    QCheckBox {{
+                        color: {idle_color};
+                        font-size: 16px;
+                        padding: 12px;
+                        min-height: 40px;
+                        font-weight: bold;
+                        background-color: #2a2a3a;
+                        border-radius: 4px;
+                    }}
+                    QCheckBox::indicator {{
+                        width: 24px;
+                        height: 24px;
+                    }}
+                    QCheckBox::indicator:checked {{
+                        background-color: {idle_color};
+                        border: 2px solid {idle_color};
+                        border-radius: 4px;
+                    }}
+                    QCheckBox::indicator:unchecked {{
+                        background-color: #555;
+                        border: 2px solid {grey};
+                        border-radius: 4px;
+                    }}
+                    QCheckBox:hover {{
+                        background-color: #3a3a4a;
+                    }}
+                """)
+            else:
+                checkbox.setStyleSheet(f"""
                 QCheckBox {{
                     color: {primary};
                     font-size: 16px;
@@ -217,6 +256,69 @@ class CategorySelectorDialog(QDialog):
             if checkbox.isChecked():
                 selected.append(category)
         return selected
+    
+    def _on_category_changed(self, changed_category: str, state: int):
+        """
+        Handle category checkbox changes with Idle exclusivity rule
+        
+        Rule: Idle category is exclusive - cannot be combined with other categories
+        - If Idle is checked: uncheck all other categories
+        - If another category is checked while Idle is checked: uncheck Idle
+        """
+        from PyQt6.QtCore import Qt
+        
+        is_checked = (state == Qt.CheckState.Checked.value)
+        
+        if changed_category == "Idle" and is_checked:
+            # Idle was just checked → uncheck all other categories
+            for category, checkbox in self.checkboxes.items():
+                if category != "Idle" and checkbox.isChecked():
+                    checkbox.blockSignals(True)  # Prevent recursion
+                    checkbox.setChecked(False)
+                    checkbox.blockSignals(False)
+            
+            # Show info message
+            primary = theme_manager.get("primary_color")
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Idle Category")
+            msg.setText("💤 Idle is an exclusive category")
+            msg.setInformativeText(
+                "Idle scenes use ADDITIVE blending and layer over joystick control.\n\n"
+                "For safety, Idle scenes should only contain subtle head/neck movements.\n\n"
+                "Other categories have been deselected."
+            )
+            msg.setStyleSheet(f"""
+                QMessageBox {{
+                    background-color: #222;
+                }}
+                QMessageBox QLabel {{
+                    color: {primary};
+                    font-size: 14px;
+                }}
+                QPushButton {{
+                    background-color: #333;
+                    border: 2px solid {primary};
+                    border-radius: 6px;
+                    color: {primary};
+                    padding: 8px 16px;
+                    font-weight: bold;
+                    min-width: 80px;
+                }}
+                QPushButton:hover {{
+                    background-color: #444;
+                }}
+            """)
+            msg.exec()
+            
+        elif changed_category != "Idle" and is_checked:
+            # Non-Idle category was checked → uncheck Idle if it's checked
+            idle_checkbox = self.checkboxes.get("Idle")
+            if idle_checkbox and idle_checkbox.isChecked():
+                idle_checkbox.blockSignals(True)
+                idle_checkbox.setChecked(False)
+                idle_checkbox.blockSignals(False)
+
     
 class EnhancedSceneRow(QWidget):
     """Enhanced expandable scene row with better styling and layout"""

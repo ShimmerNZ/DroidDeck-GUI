@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Servo Configuration Screen (Themed)
 Real-time servo control and configuration interface with theme support
@@ -293,9 +295,9 @@ class ServoConfigScreen(BaseScreen):
                 if sweeping:
                     self.test_sweep_btn.setText("â¸ STOP SWEEP")
                     self.test_sweep_btn.setChecked(True)
-                    self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} â†’ {self.nema_config['max_position']:.1f} cm")
+                    self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} → {self.nema_config['max_position']:.1f} cm")
                 else:
-                    self.test_sweep_btn.setText("â–¶ TEST SWEEP")
+                    self.test_sweep_btn.setText("▶ TEST SWEEP")
                     self.test_sweep_btn.setChecked(False)
                     self.update_status("NEMA sweep stopped")
                     
@@ -370,7 +372,7 @@ class ServoConfigScreen(BaseScreen):
                 self.enable_btn.blockSignals(True)
                 self.enable_btn.setChecked(hardware_enabled)
                 if hardware_enabled:
-                    self.enable_btn.setText("ðŸ”´ DISABLE")
+                    self.enable_btn.setText("🔴 DISABLE")
                 else:
                     self.enable_btn.setText("⚡ ENABLE")
                 self.enable_btn.blockSignals(False)
@@ -437,7 +439,7 @@ class ServoConfigScreen(BaseScreen):
                     self.enable_btn.blockSignals(True)
                     self.enable_btn.setChecked(enabled)
                     if enabled:
-                        self.enable_btn.setText("ðŸ”´ DISABLE")
+                        self.enable_btn.setText("🔴 DISABLE")
                     else:
                         self.enable_btn.setText("⚡ ENABLE")
                     self.enable_btn.blockSignals(False)
@@ -472,7 +474,7 @@ class ServoConfigScreen(BaseScreen):
             if hasattr(self, 'nema_test_sweeping') and self.nema_test_sweeping:
                 self.nema_test_sweeping = False
                 if hasattr(self, 'test_sweep_btn'):
-                    self.test_sweep_btn.setText("â–¶Â TEST SWEEP")
+                    self.test_sweep_btn.setText("▶️ TEST SWEEP")
                     self.test_sweep_btn.setChecked(False)
                     
         except Exception as e:
@@ -758,7 +760,7 @@ class ServoConfigScreen(BaseScreen):
     def update_nema_acceleration(self, value):
         """Update acceleration slider"""
         self.nema_config["acceleration"] = value
-        self.accel_value_label.setText(f"{value} steps/sÃ‚Â²")
+        self.accel_value_label.setText(f"{value} steps/s²")
         self.save_nema_config()
 
     def init_nema_connection(self):
@@ -1296,7 +1298,7 @@ class ServoConfigScreen(BaseScreen):
         accel_label.setStyleSheet("color: white; background: transparent;")
         form_layout.addWidget(accel_label, 4, 0)
         
-        self.accel_value_label = QLabel(f"{self.nema_config['acceleration']} steps/sÃ‚Â²")
+        self.accel_value_label = QLabel(f"{self.nema_config['acceleration']} steps/s²")
         self.accel_value_label.setStyleSheet("color: white; background: transparent;")
         form_layout.addWidget(self.accel_value_label, 4, 1)
         
@@ -1430,7 +1432,7 @@ class ServoConfigScreen(BaseScreen):
         control_layout.addLayout(slider_layout)
 
         # Test sweep button
-        self.test_sweep_btn = QPushButton("â–¶ TEST SWEEP")
+        self.test_sweep_btn = QPushButton("▶ TEST SWEEP")
         self.test_sweep_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.test_sweep_btn.setCheckable(True)
         self.test_sweep_btn.setFixedHeight(40)
@@ -1511,7 +1513,7 @@ class ServoConfigScreen(BaseScreen):
         """Handle enable button toggle with proper UI feedback"""
         # Update button appearance immediately
         if checked:
-            self.enable_btn.setText("ðŸ”´ DISABLE")
+            self.enable_btn.setText("🔴 DISABLE")
             self.enable_btn.setStyleSheet("""
                 QPushButton {
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -2042,7 +2044,7 @@ class ServoConfigScreen(BaseScreen):
             self.grid_layout.addWidget(live_checkbox, row, 7)
             
             # Play/sweep button with themed styling
-            play_btn = QPushButton("â–¶")
+            play_btn = QPushButton("▶")
             play_btn.setFont(QFont("Arial", 12))
             play_btn.setCheckable(True)
             play_btn.setFixedSize(30, 30)
@@ -2192,7 +2194,7 @@ class ServoConfigScreen(BaseScreen):
             if max_spin:
                 max_val = max_spin.value()
                 if value >= max_val:
-                    self.update_status(f"âš ï¸ Min ({value}) must be less than Max ({max_val}) for {channel_key}", error=True)
+                    self.update_status(f"⚠️ Min ({value}) must be less than Max ({max_val}) for {channel_key}", error=True)
                     return
         
         # Update config and slider
@@ -2210,7 +2212,7 @@ class ServoConfigScreen(BaseScreen):
             if min_spin:
                 min_val = min_spin.value()
                 if value <= min_val:
-                    self.update_status(f"âš ï¸ Max ({value}) must be greater than Min ({min_val}) for {channel_key}", error=True)
+                    self.update_status(f"⚠️ Max ({value}) must be greater than Min ({min_val}) for {channel_key}", error=True)
                     return
         
         # Update config and slider
@@ -2298,7 +2300,7 @@ class ServoConfigScreen(BaseScreen):
                     
                     # Validate min < max
                     if min_val >= max_val:
-                        self.update_status(f"âš ï¸ Cannot save: Min >= Max for {channel_key}", error=True)
+                        self.update_status(f"⚠️ Cannot save: Min >= Max for {channel_key}", error=True)
                         return
                     
                     # Update local config
@@ -2399,7 +2401,7 @@ class ServoConfigScreen(BaseScreen):
             # Stop existing sweep
             self.active_sweeps[channel_key].stop()
             del self.active_sweeps[channel_key]
-            button.setText("â–¶")
+            button.setText("▶")
             button.setChecked(False)
             self.logger.info(f"Stopped sweep for {channel_key}")
             return
@@ -2415,7 +2417,7 @@ class ServoConfigScreen(BaseScreen):
         # Create new sweep
         sweep = MinMaxSweep(self, channel_key, pos_label, button, actual_min, actual_max, actual_speed)
         self.active_sweeps[channel_key] = sweep
-        button.setText("â¸Â")
+        button.setText("⏸️")
         self.logger.info(f"Started sweep for {channel_key}")
     
     def toggle_all_live_checkboxes(self):
@@ -2647,7 +2649,7 @@ class MinMaxSweep:
         # Update UI
         self.label.setText(f"C:{center_pos}")
         self.label.setStyleSheet("color: #AAAAAA; background: transparent;")
-        self.btn.setText("â–¶")
+        self.btn.setText("▶")
         self.btn.setChecked(False)
         
         self.logger.info(f"Min/Max sweep stopped: {self.channel_key} returned to center ({center_pos})")
