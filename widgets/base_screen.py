@@ -51,88 +51,14 @@ class BaseScreen(QWidget, ABC, metaclass=WidgetABCMeta):
 from PyQt6.QtGui import QPainter, QColor, QFont
 from PyQt6.QtCore import QRect
 
-class WiFiSignalWidget(QWidget):
-    """Custom widget for displaying WiFi signal strength with visual bars"""
-    
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(300, 32)
-        self.current_signal = 0
-        self.current_ping = None
-        self.flash_timer = QTimer()
-        self.flash_timer.timeout.connect(self.toggle_flash)
-        self.flash_state = True
-        self.color = "#44FF44"
-        self.update_display(0, None)
-    
-    def update_display(self, signal_percent: int, ping_ms: float = None):
-        """Update WiFi display with signal bars and ping-based coloring"""
-        self.current_signal = signal_percent
-        self.current_ping = ping_ms
-        
-        # Determine color based on ping quality
-        self.color, should_flash = self.get_color_from_ping(ping_ms)
-        
-        # Handle flashing for no response
-        if should_flash:
-            self.start_flashing()
-        else:
-            self.stop_flashing()
-        
-        # Trigger repaint
-        self.update()
-    
-    def paintEvent(self, event):
-        """Custom paint event to draw signal bars"""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Bar dimensions and positions
-        bar_width = 4
-        bar_spacing = 2
-        bar_heights = [10, 15, 20, 25, 30]  # Heights for bars 1-4
-        start_x = 190  # Position bars more to the right
-        base_y = 30
-        
-        # Determine how many bars should be active
-        if self.current_signal >= 95:
-            active_bars = 5 
-        elif self.current_signal >= 75:
-            active_bars = 4
-        elif self.current_signal >= 50:
-            active_bars = 3
-        elif self.current_signal >= 25:
-            active_bars = 2
-        elif self.current_signal > 0:
-            active_bars = 1
-        else:
-            active_bars = 0
-        
-        # Draw bars
-        for i in range(5):
-            x = start_x + i * (bar_width + bar_spacing)
-            y = base_y - bar_heights[i]
-            
-            if i < active_bars:
-                color = QColor(self.color)
-                if not self.flash_state and self.current_ping is None:
-                    color.setAlpha(80)  # Dim when flashing
-            else:
-                color = QColor("#333333")  # Inactive bars
-            
-            painter.fillRect(QRect(x, y, bar_width, bar_heights[i]), color)
-        
-        # Draw percentage text positioned from right edge
-        text_x = self.width() - 80
-        text_y = base_y - 5
-        
-        status_text = f"{self.current_signal}%"
-        painter.setPen(QColor(self.color))
-        painter.setFont(QFont("Arial", 30))
-        painter.drawText(text_x, text_y, status_text)
-    
-    def get_color_from_ping(self, ping_ms: float = None) -> tuple:
-        """Get color and flash state based on ping quality"""
+class RightStatusWidget(QWidget):
+    """Combined right-side header widget: [BattIcon BattPct GAP WifiBars WifiPct].
+    Battery section is only rendered on Linux (Steam Deck). WiFi is always shown.
+    """
+
+    # ── WiFi colours ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _wifi_color_flash(ping_ms):
         if ping_ms is None:
             return "#FF4444", True
         elif ping_ms < 20:
@@ -143,20 +69,167 @@ class WiFiSignalWidget(QWidget):
             return "#FF8800", False
         else:
             return "#FF4444", False
-    
-    def start_flashing(self):
-        """Start flashing animation"""
-        self.flash_timer.start(500)
-    
-    def stop_flashing(self):
-        """Stop flashing animation"""
+
+    def __init__(self, battery_widget: "SteamDeckBatteryWidget"):
+        super().__init__()
+        self._battery = battery_widget   # shared reference so we can read its state
+
+        # WiFi state
+        self.current_signal = 0
+        self.current_ping = None
+        self.wifi_color = "#44FF44"
+
+        # WiFi flash timer
+        self.flash_timer = QTimer()
+        self.flash_timer.timeout.connect(self._toggle_wifi_flash)
+        self.flash_state = True
+
+        # Fixed height; width set after knowing battery visibility
+        self.setFixedHeight(32)
+        self._recalc_width()
+
+    def _recalc_width(self):
+        """Set widget width based on whether battery section is visible."""
+        if self._battery._visible:
+            self.setFixedWidth(310)   # batt icon+% + gap + wifi bars+%
+        else:
+            self.setFixedWidth(310)   # wifi only, same total space
+
+    # ── Public API (called by DynamicHeader) ─────────────────────────────────
+    def update_display(self, signal_percent: int, ping_ms: float = None):
+        self.current_signal = signal_percent
+        self.current_ping = ping_ms
+        self.wifi_color, should_flash = self._wifi_color_flash(ping_ms)
+        if should_flash:
+            self._start_wifi_flash()
+        else:
+            self._stop_wifi_flash()
+        self.update()
+
+    # ── WiFi flash helpers ────────────────────────────────────────────────────
+    def _start_wifi_flash(self):
+        if not self.flash_timer.isActive():
+            self.flash_timer.start(500)
+
+    def _stop_wifi_flash(self):
         self.flash_timer.stop()
         self.flash_state = True
-    
-    def toggle_flash(self):
-        """Toggle flash state and trigger repaint"""
+
+    def _toggle_wifi_flash(self):
         self.flash_state = not self.flash_state
         self.update()
+
+    # ── Keep legacy callers working ───────────────────────────────────────────
+    def start_flashing(self):
+        self._start_wifi_flash()
+
+    def stop_flashing(self):
+        self._stop_wifi_flash()
+
+    def toggle_flash(self):
+        self._toggle_wifi_flash()
+
+    # ── Paint ────────────────────────────────────────────────────────────────
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        base_y = 28         # text baseline / bar base
+
+        # ── Battery section (Linux / Steam Deck only) ─────────────────────
+        wifi_start_x = 0    # will be pushed right if battery drawn
+
+        if self._battery._visible and self._battery._percent >= 0:
+            batt_color = QColor(self._battery._color)
+            if not self._battery._flash_state:
+                batt_color.setAlpha(80)
+
+            # Small battery body
+            bx, by, bw, bh = 2, 7, 18, 14
+            tip_w, tip_h = 3, 6
+            tip_x = bx + bw
+            tip_y = by + (bh - tip_h) // 2
+
+            painter.setPen(batt_color)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(bx, by, bw, bh)
+
+            painter.setBrush(batt_color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(tip_x, tip_y, tip_w, tip_h)
+
+            fill_w = max(1, int((bw - 4) * self._battery._percent / 100))
+            painter.drawRect(bx + 2, by + 2, fill_w, bh - 4)
+
+            # Battery percentage text
+            painter.setPen(batt_color)
+            painter.setFont(QFont("Arial", 22))
+            batt_text = f"{self._battery._percent}%"
+            fm = painter.fontMetrics()
+            batt_text_w = fm.horizontalAdvance(batt_text)
+            batt_text_x = bx + bw + tip_w + 4
+            painter.drawText(batt_text_x, base_y - 2, batt_text)
+
+            # Gap between battery % and wifi section
+            wifi_start_x = batt_text_x + batt_text_w + 14
+
+        # ── WiFi bars ────────────────────────────────────────────────────────
+        bar_width = 4
+        bar_spacing = 2
+        bar_heights = [10, 15, 20, 25, 30]
+        n_bars = 5
+        bars_total_w = n_bars * bar_width + (n_bars - 1) * bar_spacing
+
+        # WiFi % text width (measure with font)
+        painter.setFont(QFont("Arial", 22))
+        fm = painter.fontMetrics()
+        wifi_text = f"{self.current_signal}%"
+        wifi_text_w = fm.horizontalAdvance(wifi_text)
+
+        # Total wifi section width = bars + small gap + text
+        wifi_section_w = bars_total_w + 6 + wifi_text_w
+
+        # If battery not shown, right-align wifi in the full widget
+        if wifi_start_x == 0:
+            wifi_start_x = w - wifi_section_w - 4
+
+        bars_x = wifi_start_x
+        bars_base_y = base_y
+
+        if self.current_signal >= 95:
+            active_bars = 5
+        elif self.current_signal >= 75:
+            active_bars = 4
+        elif self.current_signal >= 50:
+            active_bars = 3
+        elif self.current_signal >= 25:
+            active_bars = 2
+        elif self.current_signal > 0:
+            active_bars = 1
+        else:
+            active_bars = 0
+
+        for i in range(n_bars):
+            x = bars_x + i * (bar_width + bar_spacing)
+            y = bars_base_y - bar_heights[i]
+            if i < active_bars:
+                c = QColor(self.wifi_color)
+                if not self.flash_state and self.current_ping is None:
+                    c.setAlpha(80)
+            else:
+                c = QColor("#333333")
+            painter.fillRect(QRect(x, y, bar_width, bar_heights[i]), c)
+
+        # WiFi percentage text
+        painter.setPen(QColor(self.wifi_color))
+        painter.setFont(QFont("Arial", 22))
+        wifi_text_x = bars_x + bars_total_w + 6
+        painter.drawText(wifi_text_x, base_y - 2, wifi_text)
+
+    # ── Keep old method name working (called by DynamicHeader.update_wifi) ───
+    def get_color_from_ping(self, ping_ms=None):
+        return self._wifi_color_flash(ping_ms)
 
 
 class SteamDeckBatteryWidget(QWidget):
@@ -350,11 +423,16 @@ class DynamicHeader(QFrame):
         layout.setContentsMargins(10, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Create battery widget first so RightStatusWidget can reference it
+        self.battery_widget = SteamDeckBatteryWidget()
+
         # Status labels
         self.voltage_label = QLabel("🔋 --.-V")
-        self.wifi_widget = WiFiSignalWidget()
-        self.battery_widget = SteamDeckBatteryWidget()
+        self.right_widget = RightStatusWidget(self.battery_widget)
         self.screen_label = QLabel(screen_name)
+
+        # Keep wifi_widget as alias so existing callers (update_wifi_display etc.) still work
+        self.wifi_widget = self.right_widget
 
         # Font styling
         header_font = QFont("Arial", 30)
@@ -364,21 +442,18 @@ class DynamicHeader(QFrame):
         # Center align the screen label
         self.screen_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Widths adapt based on whether Steam Deck battery is available
         self.voltage_label.setFixedWidth(300)
         self.screen_label.setFixedWidth(400)
-        if self.battery_widget._visible:
-            self.battery_widget.setFixedWidth(160)
-            self.wifi_widget.setFixedWidth(150)
-        else:
-            self.battery_widget.setFixedWidth(0)
-            self.wifi_widget.setFixedWidth(310)
+        self.right_widget.setFixedWidth(310)
 
-        # Layout assembly
+        # Battery widget is hidden from layout - its state is read by RightStatusWidget
+        self.battery_widget.setFixedSize(0, 0)
+        self.battery_widget.hide()
+
+        # Layout: voltage | screen name | right status
         layout.addWidget(self.voltage_label)
         layout.addWidget(self.screen_label)
-        layout.addWidget(self.battery_widget)
-        layout.addWidget(self.wifi_widget)
+        layout.addWidget(self.right_widget)
 
         self.setLayout(layout)
 
