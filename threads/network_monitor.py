@@ -189,28 +189,72 @@ class NetworkMonitorThread(QThread):
 
     def get_ping_quality(self) -> Tuple[int, Optional[float]]:
         """Get ping quality and response time to Pi"""
+        result = self._try_icmp_ping()
+        if result[1] is not None:
+            return result
+        # ICMP ping failed (e.g. container permission issue) - fall back to HTTP
+        return self._try_http_ping()
+
+    def _try_icmp_ping(self) -> Tuple[int, Optional[float]]:
+        """Attempt ICMP ping to Pi"""
         try:
-            # Build platform-specific ping command
             ping_count = 3
             if self.platform == "windows":
-                cmd = ['ping', '-n', str(ping_count), '-w', '1000', self.pi_ip]
+                cmd = ['ping', '-n', str(ping_count), '-w', '2000', self.pi_ip]
             else:  # macOS and Linux
-                cmd = ['ping', '-c', str(ping_count), '-W', '1', self.pi_ip]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            
+                cmd = ['ping', '-c', str(ping_count), '-W', '2', self.pi_ip]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+
             if result.returncode == 0:
                 return self._parse_ping_output(result.stdout)
             else:
-                self.logger.debug(f"Ping failed with return code {result.returncode}")
+                self.logger.debug(f"ICMP ping failed (rc={result.returncode}), will try HTTP fallback")
                 return 0, None
-                
+
         except subprocess.TimeoutExpired:
-            self.logger.debug("Ping timeout")
+            self.logger.debug("ICMP ping timeout, will try HTTP fallback")
             return 0, None
         except Exception as e:
-            self.logger.debug(f"Ping test failed: {e}")
+            self.logger.debug(f"ICMP ping error: {e}, will try HTTP fallback")
             return 0, None
+
+    def _try_http_ping(self) -> Tuple[int, Optional[float]]:
+        """HTTP-based connectivity check used when ICMP ping is unavailable"""
+        try:
+            start = time.time()
+            response = requests.get(f"http://{self.pi_ip}:8081/", timeout=3)
+            elapsed_ms = (time.time() - start) * 1000
+
+            if response.status_code < 500:
+                self.logger.debug(f"HTTP ping successful: {elapsed_ms:.1f}ms")
+                if elapsed_ms <= 20:
+                    quality = 100
+                elif elapsed_ms <= 50:
+                    quality = 80
+                elif elapsed_ms <= 100:
+                    quality = 60
+                else:
+                    quality = 20
+                return quality, elapsed_ms
+
+        except requests.exceptions.ConnectionError:
+            self.logger.debug("HTTP ping: connection refused (Pi reachable but port closed)")
+            # Connection refused still means the Pi is reachable - measure RTT
+            try:
+                start = time.time()
+                import socket
+                s = socket.create_connection((self.pi_ip, 8766), timeout=3)
+                elapsed_ms = (time.time() - start) * 1000
+                s.close()
+                self.logger.debug(f"Socket ping to port 8766: {elapsed_ms:.1f}ms")
+                return 80, elapsed_ms
+            except Exception:
+                pass
+        except Exception as e:
+            self.logger.debug(f"HTTP ping failed: {e}")
+
+        return 0, None
 
     def _parse_ping_output(self, output: str) -> Tuple[int, Optional[float]]:
         """Parse ping output to extract timing information"""
@@ -276,15 +320,15 @@ class NetworkMonitorThread(QThread):
     def get_signal_bars(self, percentage: int) -> str:
         """Generate signal bar representation using ASCII characters"""
         if percentage >= 75:
-            return "████"  # 4 bars
+            return "â–ˆâ–ˆâ–ˆâ–ˆ"  # 4 bars
         elif percentage >= 50:
-            return "███▒"  # 3 bars
+            return "â–ˆâ–ˆâ–ˆâ–’"  # 3 bars
         elif percentage >= 25:
-            return "██▒▒"  # 2 bars
+            return "â–ˆâ–ˆâ–’â–’"  # 2 bars
         elif percentage > 0:
-            return "█▒▒▒"  # 1 bar
+            return "â–ˆâ–’â–’â–’"  # 1 bar
         else:
-            return "▒▒▒▒"  # 0 bars
+            return "â–’â–’â–’â–’"  # 0 bars
 
     def request_bandwidth_test(self):
         """Request bandwidth test on next monitoring cycle"""

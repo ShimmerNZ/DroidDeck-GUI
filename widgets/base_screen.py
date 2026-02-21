@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Updated Base Screen Components with WiFi Monitoring
 """
@@ -156,6 +158,119 @@ class WiFiSignalWidget(QWidget):
         self.flash_state = not self.flash_state
         self.update()
 
+
+class SteamDeckBatteryWidget(QWidget):
+    """Widget displaying Steam Deck internal battery percentage with colour coding and low-battery flash"""
+
+    LOW_BATTERY_THRESHOLD = 20
+    CRITICAL_BATTERY_THRESHOLD = 10
+    BATTERY_PATH = "/sys/class/power_supply/BAT0/capacity"
+    CHARGING_PATH = "/sys/class/power_supply/BAT0/status"
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(160, 32)
+        self._percent = -1
+        self._charging = False
+        self._color = "#44FF44"
+        self._flash_state = True
+        self._visible = self._battery_available()
+
+        self._flash_timer = QTimer()
+        self._flash_timer.timeout.connect(self._toggle_flash)
+
+        if self._visible:
+            self._poll_timer = QTimer()
+            self._poll_timer.timeout.connect(self._read_battery)
+            self._poll_timer.start(30000)
+            self._read_battery()
+
+    def _battery_available(self) -> bool:
+        """Check whether a battery sysfs node exists on this platform"""
+        import os
+        return os.path.exists(self.BATTERY_PATH)
+
+    def _read_battery(self):
+        """Read battery capacity and charging state from sysfs"""
+        try:
+            with open(self.BATTERY_PATH, "r") as f:
+                self._percent = int(f.read().strip())
+            try:
+                with open(self.CHARGING_PATH, "r") as f:
+                    self._charging = f.read().strip().lower() in ("charging", "full")
+            except Exception:
+                self._charging = False
+            self._update_state()
+        except Exception:
+            self._percent = -1
+        self.update()
+
+    def _update_state(self):
+        """Set colour and flashing based on current percentage"""
+        if self._charging:
+            self._color = "#44AAFF"
+            self._stop_flash()
+        elif self._percent <= self.CRITICAL_BATTERY_THRESHOLD:
+            self._color = "#FF4444"
+            self._start_flash()
+        elif self._percent <= self.LOW_BATTERY_THRESHOLD:
+            self._color = "#FF8800"
+            self._start_flash()
+        elif self._percent <= 50:
+            self._color = "#FFAA00"
+            self._stop_flash()
+        else:
+            self._color = "#44FF44"
+            self._stop_flash()
+
+    def _start_flash(self):
+        if not self._flash_timer.isActive():
+            self._flash_timer.start(500)
+
+    def _stop_flash(self):
+        self._flash_timer.stop()
+        self._flash_state = True
+
+    def _toggle_flash(self):
+        self._flash_state = not self._flash_state
+        self.update()
+
+    def paintEvent(self, event):
+        """Draw battery icon and percentage"""
+        if not self._visible or self._percent < 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        color = QColor(self._color)
+        if not self._flash_state:
+            color.setAlpha(80)
+
+        # Battery body outline
+        body_x, body_y, body_w, body_h = 2, 6, 22, 18
+        tip_w, tip_h = 4, 8
+        tip_x = body_x + body_w
+        tip_y = body_y + (body_h - tip_h) // 2
+
+        painter.setPen(color)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(body_x, body_y, body_w, body_h)
+
+        # Battery tip
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(tip_x, tip_y, tip_w, tip_h)
+
+        # Fill level
+        fill_w = max(1, int((body_w - 4) * self._percent / 100))
+        painter.drawRect(body_x + 2, body_y + 2, fill_w, body_h - 4)
+
+        # Percentage text
+        painter.setPen(color)
+        painter.setFont(QFont("Arial", 30))
+        painter.drawText(32, 28, f"{self._percent}%")
+
 class DynamicHeader(QFrame):
     """Dynamic header showing system status at top of application"""
     
@@ -175,29 +290,36 @@ class DynamicHeader(QFrame):
 
         # Status labels
         self.voltage_label = QLabel("🔋 --.-V")
-        self.wifi_widget = WiFiSignalWidget()  # Custom WiFi widget
+        self.wifi_widget = WiFiSignalWidget()
+        self.battery_widget = SteamDeckBatteryWidget()
         self.screen_label = QLabel(screen_name)
 
-        # Font styling - all same size
+        # Font styling
         header_font = QFont("Arial", 30)
         self.voltage_label.setFont(header_font)
         self.screen_label.setFont(header_font)
-        
+
         # Center align the screen label
         self.screen_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        # Set fixed widths for proper centering and spacing
-        self.voltage_label.setFixedWidth(300)     # Increased for left section
-        self.screen_label.setFixedWidth(400)      # Center section stays same
-        self.wifi_widget.setFixedWidth(310)       # Increased to match left section
 
-        # Layout assembly with fixed positioning (no stretch)
+        # Widths adapt based on whether Steam Deck battery is available
+        self.voltage_label.setFixedWidth(300)
+        self.screen_label.setFixedWidth(400)
+        if self.battery_widget._visible:
+            self.battery_widget.setFixedWidth(160)
+            self.wifi_widget.setFixedWidth(150)
+        else:
+            self.battery_widget.setFixedWidth(0)
+            self.wifi_widget.setFixedWidth(310)
+
+        # Layout assembly
         layout.addWidget(self.voltage_label)
-        layout.addWidget(self.screen_label) 
+        layout.addWidget(self.screen_label)
+        layout.addWidget(self.battery_widget)
         layout.addWidget(self.wifi_widget)
 
         self.setLayout(layout)
-    
+
     def _setup_network_monitoring(self):
         """Setup WiFi signal monitoring"""
         self.network_monitor = NetworkMonitorThread(pi_ip=self.pi_ip, update_interval=5.0)

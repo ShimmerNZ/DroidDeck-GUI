@@ -55,8 +55,10 @@ class HealthScreen(BaseScreen):
         # Track start time for relative time calculation
         self.start_time = time.time()
         
-        # Initialize network monitoring
-        pi_ip = "10.1.1.230"  # You can move this to config later
+        # Initialize network monitoring using IP from config
+        from core.config_manager import config_manager
+        network_config = config_manager.get_network_config()
+        pi_ip = network_config.get("pi_ip", "10.1.1.230")
         self.network_monitor = NetworkMonitorThread(pi_ip=pi_ip, update_interval=5.0)
         self.network_monitor.wifi_updated.connect(self.update_network_status)
 
@@ -304,7 +306,7 @@ class HealthScreen(BaseScreen):
         label_configs = [
             ("cpu", "CPU: 0%"),
             ("mem", "Memory: 0%"),
-            ("temp", "Temp: 0°C"),
+            ("temp", "Temp: 0Â°C"),
             ("battery", "Battery: 0.0V"),
             ("current_total", "Total Current: 0.0A"),
             ("ping", "Ping: -- ms"),
@@ -363,7 +365,7 @@ class HealthScreen(BaseScreen):
         system_layout.addWidget(self.system_header)
         
         # Bandwidth test button with themed styling
-        self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
+        self.bandwidth_btn = QPushButton("ðŸŒ BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
         self._update_bandwidth_button_style()
@@ -543,7 +545,7 @@ class HealthScreen(BaseScreen):
         
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
-        self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
+        self.bandwidth_btn.setText("ðŸŒ BANDWIDTH TEST")
         
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
@@ -668,7 +670,7 @@ class HealthScreen(BaseScreen):
         
         updates["cpu"] = f"CPU: {cpu}%"
         updates["mem"] = f"Memory: {mem}%"
-        updates["temp"] = f"Temp: {temp}°C"
+        updates["temp"] = f"Temp: {temp}Â°C"
         
         # Total current from A2 sensor
         current_total = data.get("current_total", 0.0)
