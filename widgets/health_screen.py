@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Health Monitoring Screen (Themed)
 Displays system telemetry, battery status, network quality, and performance graphs
@@ -365,7 +367,7 @@ class HealthScreen(BaseScreen):
         system_layout.addWidget(self.system_header)
         
         # Bandwidth test button with themed styling
-        self.bandwidth_btn = QPushButton("ðŸŒ BANDWIDTH TEST")
+        self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
         self._update_bandwidth_button_style()
@@ -545,7 +547,7 @@ class HealthScreen(BaseScreen):
         
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
-        self.bandwidth_btn.setText("ðŸŒ BANDWIDTH TEST")
+        self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
         
 
     def get_voltage_status_text(self, voltage: float) -> tuple:

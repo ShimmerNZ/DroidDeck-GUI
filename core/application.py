@@ -176,6 +176,7 @@ class DroidDeckApplication(QMainWindow):
         # Initialize UI components with Pi IP
         self.header = DynamicHeader("Home", pi_ip=self.pi_ip)
         self.header.setMaximumWidth(1000)
+        self.header.connect_websocket_signals(self.websocket)
         self.stack = QStackedWidget()
         
         time.sleep(0.3)
@@ -408,7 +409,6 @@ class DroidDeckApplication(QMainWindow):
         # Failsafe button with proper sizing and styling
         self.failsafe_button = QPushButton()
         self.failsafe_button.setCheckable(True)
-        self.failsafe_button.setChecked(True)
         
         # Set failsafe button size to match its icon size (300x70 from your code)
         # But let's make it more reasonable for navigation bar
@@ -500,9 +500,7 @@ class DroidDeckApplication(QMainWindow):
                     self.logger.warning(f"Icon not found: {normal_icon_path}")
         
         # Update failsafe button icon with new size
-        is_checked = self.failsafe_button.isChecked()
-        failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=is_checked)
-
+        failsafe_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
         if os.path.exists(failsafe_icon_path):
             self.failsafe_button.setIcon(QIcon(failsafe_icon_path))
             # Use the new smaller size instead of 300x70

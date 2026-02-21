@@ -56,54 +56,38 @@ class RightStatusWidget(QWidget):
     Battery section is only rendered on Linux (Steam Deck). WiFi is always shown.
     """
 
-    # ── WiFi colours ──────────────────────────────────────────────────────────
-    @staticmethod
-    def _wifi_color_flash(ping_ms):
-        if ping_ms is None:
-            return "#FF4444", True
-        elif ping_ms < 20:
-            return "#44FF44", False
-        elif ping_ms < 50:
-            return "#FFAA00", False
-        elif ping_ms < 100:
-            return "#FF8800", False
-        else:
-            return "#FF4444", False
-
     def __init__(self, battery_widget: "SteamDeckBatteryWidget"):
         super().__init__()
         self._battery = battery_widget   # shared reference so we can read its state
 
-        # WiFi state
+        # WiFi / connection state
         self.current_signal = 0
-        self.current_ping = None
-        self.wifi_color = "#44FF44"
+        self.ws_connected = False        # driven by WebSocket signals, not ping
+        self.wifi_color = "#FF4444"
 
         # WiFi flash timer
         self.flash_timer = QTimer()
         self.flash_timer.timeout.connect(self._toggle_wifi_flash)
         self.flash_state = True
 
-        # Fixed height; width set after knowing battery visibility
         self.setFixedHeight(32)
-        self._recalc_width()
+        self.setFixedWidth(310)
 
-    def _recalc_width(self):
-        """Set widget width based on whether battery section is visible."""
-        if self._battery._visible:
-            self.setFixedWidth(310)   # batt icon+% + gap + wifi bars+%
-        else:
-            self.setFixedWidth(310)   # wifi only, same total space
-
-    # ── Public API (called by DynamicHeader) ─────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────
     def update_display(self, signal_percent: int, ping_ms: float = None):
+        """Update WiFi signal strength (ping_ms kept for API compat, ignored)."""
         self.current_signal = signal_percent
-        self.current_ping = ping_ms
-        self.wifi_color, should_flash = self._wifi_color_flash(ping_ms)
-        if should_flash:
-            self._start_wifi_flash()
-        else:
+        self.update()
+
+    def set_websocket_connected(self, connected: bool):
+        """Called by DynamicHeader when WebSocket connects or disconnects."""
+        self.ws_connected = connected
+        if connected:
+            self.wifi_color = "#44FF44"
             self._stop_wifi_flash()
+        else:
+            self.wifi_color = "#FF4444"
+            self._start_wifi_flash()
         self.update()
 
     # ── WiFi flash helpers ────────────────────────────────────────────────────
@@ -168,7 +152,7 @@ class RightStatusWidget(QWidget):
             batt_text = f"{self._battery._percent}%"
             fm = painter.fontMetrics()
             batt_text_w = fm.horizontalAdvance(batt_text)
-            batt_text_x = bx + bw + tip_w + 4
+            batt_text_x = bx + bw + tip_w + 10
             painter.drawText(batt_text_x, base_y - 2, batt_text)
 
             # Gap between battery % and wifi section
@@ -215,7 +199,7 @@ class RightStatusWidget(QWidget):
             y = bars_base_y - bar_heights[i]
             if i < active_bars:
                 c = QColor(self.wifi_color)
-                if not self.flash_state and self.current_ping is None:
+                if not self.flash_state:
                     c.setAlpha(80)
             else:
                 c = QColor("#333333")
@@ -227,9 +211,7 @@ class RightStatusWidget(QWidget):
         wifi_text_x = bars_x + bars_total_w + 6
         painter.drawText(wifi_text_x, base_y - 2, wifi_text)
 
-    # ── Keep old method name working (called by DynamicHeader.update_wifi) ───
-    def get_color_from_ping(self, ping_ms=None):
-        return self._wifi_color_flash(ping_ms)
+
 
 
 class SteamDeckBatteryWidget(QWidget):
@@ -450,9 +432,12 @@ class DynamicHeader(QFrame):
         self.battery_widget.setFixedSize(0, 0)
         self.battery_widget.hide()
 
-        # Layout: voltage | screen name | right status
+        # Layout: voltage | stretch | screen name | stretch | right status
+        # Two stretches keep screen_label centred; right_widget is pinned to the right
         layout.addWidget(self.voltage_label)
+        layout.addStretch(1)
         layout.addWidget(self.screen_label)
+        layout.addStretch(1)
         layout.addWidget(self.right_widget)
 
         self.setLayout(layout)
@@ -463,7 +448,36 @@ class DynamicHeader(QFrame):
         self.network_monitor.wifi_updated.connect(self.update_wifi_display)
         self.network_monitor.start()
         self.logger.info("Network monitoring started for header")
-    
+
+        # Poll WebSocket connection state every 3 seconds as a fallback
+        self._ws_poll_timer = QTimer()
+        self._ws_poll_timer.timeout.connect(self._poll_websocket_state)
+        self._ws_poll_timer.start(3000)
+
+    def connect_websocket_signals(self, websocket):
+        """Wire WebSocket connected/disconnected signals to the WiFi indicator."""
+        if websocket is None:
+            return
+        try:
+            websocket.connected.connect(lambda: self.right_widget.set_websocket_connected(True))
+            websocket.disconnected.connect(lambda: self.right_widget.set_websocket_connected(False))
+            # Set initial state
+            self.right_widget.set_websocket_connected(websocket.is_connected())
+            self._websocket = websocket
+            self.logger.info("WebSocket signals connected to WiFi indicator")
+        except Exception as e:
+            self.logger.warning(f"Could not connect WebSocket signals: {e}")
+
+    def _poll_websocket_state(self):
+        """Periodically sync WiFi indicator with actual WebSocket state."""
+        if hasattr(self, '_websocket') and self._websocket:
+            try:
+                connected = self._websocket.is_connected()
+                if connected != self.right_widget.ws_connected:
+                    self.right_widget.set_websocket_connected(connected)
+            except Exception:
+                pass
+
     def update_voltage(self, voltage: float):
         """Update voltage display with color coding based on level"""
         if voltage < 13.2:
@@ -480,13 +494,12 @@ class DynamicHeader(QFrame):
             self.voltage_label.setStyleSheet("color: white;")
 
     def update_wifi_display(self, signal_percent: int, status_text: str, ping_ms: float):
-        """Update WiFi display with signal bars and ping-based coloring"""
-        self.wifi_widget.update_display(signal_percent, ping_ms if ping_ms > 0 else None)
+        """Update WiFi signal strength display (ping_ms no longer used for status)."""
+        self.wifi_widget.update_display(signal_percent)
 
     def update_wifi(self, percentage: int):
-        """Legacy method for compatibility - now uses signal bars"""
-        # This maintains compatibility with existing code that might call this
-        self.wifi_widget.update_display(percentage, None)
+        """Legacy method for compatibility."""
+        self.wifi_widget.update_display(percentage)
 
     def set_screen_name(self, name: str):
         """Update the current screen name display"""
