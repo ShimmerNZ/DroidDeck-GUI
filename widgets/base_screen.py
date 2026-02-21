@@ -121,16 +121,38 @@ class RightStatusWidget(QWidget):
         w = self.width()
         base_y = 28         # text baseline / bar base
 
-        # ── Battery section (Linux / Steam Deck only) ─────────────────────
-        wifi_start_x = 0    # will be pushed right if battery drawn
+        # ── Measure total content width first so we can right-align everything ──
+        painter.setFont(QFont("Arial", 22))
+        fm = painter.fontMetrics()
 
+        wifi_text = f"{self.current_signal}%"
+        wifi_text_w = fm.horizontalAdvance(wifi_text)
+        bar_width = 4
+        bar_spacing = 2
+        bar_heights = [10, 15, 20, 25, 30]
+        n_bars = 5
+        bars_total_w = n_bars * bar_width + (n_bars - 1) * bar_spacing
+        wifi_section_w = bars_total_w + 6 + wifi_text_w   # bars + gap + text
+
+        batt_section_w = 0
+        if self._battery._visible and self._battery._percent >= 0:
+            batt_text = f"{self._battery._percent}%"
+            batt_text_w = fm.horizontalAdvance(batt_text)
+            batt_icon_w = 18 + 3  # body + tip
+            batt_section_w = batt_icon_w + 10 + batt_text_w + 14  # icon + gap + text + separator gap
+
+        total_w = batt_section_w + wifi_section_w
+        # Start x so content ends 4px from right edge
+        start_x = w - total_w - 4
+
+        # ── Battery section (Linux / Steam Deck only) ─────────────────────
         if self._battery._visible and self._battery._percent >= 0:
             batt_color = QColor(self._battery._color)
             if not self._battery._flash_state:
                 batt_color.setAlpha(80)
 
-            # Small battery body
-            bx, by, bw, bh = 2, 7, 18, 14
+            bx = start_x
+            by, bw, bh = 7, 18, 14
             tip_w, tip_h = 3, 6
             tip_x = bx + bw
             tip_y = by + (bh - tip_h) // 2
@@ -150,36 +172,15 @@ class RightStatusWidget(QWidget):
             painter.setPen(batt_color)
             painter.setFont(QFont("Arial", 22))
             batt_text = f"{self._battery._percent}%"
-            fm = painter.fontMetrics()
-            batt_text_w = fm.horizontalAdvance(batt_text)
             batt_text_x = bx + bw + tip_w + 10
             painter.drawText(batt_text_x, base_y - 2, batt_text)
 
-            # Gap between battery % and wifi section
-            wifi_start_x = batt_text_x + batt_text_w + 14
+            wifi_start_x = start_x + batt_section_w
+        else:
+            wifi_start_x = start_x
 
         # ── WiFi bars ────────────────────────────────────────────────────────
-        bar_width = 4
-        bar_spacing = 2
-        bar_heights = [10, 15, 20, 25, 30]
-        n_bars = 5
-        bars_total_w = n_bars * bar_width + (n_bars - 1) * bar_spacing
-
-        # WiFi % text width (measure with font)
-        painter.setFont(QFont("Arial", 22))
-        fm = painter.fontMetrics()
-        wifi_text = f"{self.current_signal}%"
-        wifi_text_w = fm.horizontalAdvance(wifi_text)
-
-        # Total wifi section width = bars + small gap + text
-        wifi_section_w = bars_total_w + 6 + wifi_text_w
-
-        # If battery not shown, right-align wifi in the full widget
-        if wifi_start_x == 0:
-            wifi_start_x = w - wifi_section_w - 4
-
         bars_x = wifi_start_x
-        bars_base_y = base_y
 
         if self.current_signal >= 95:
             active_bars = 5
@@ -196,7 +197,7 @@ class RightStatusWidget(QWidget):
 
         for i in range(n_bars):
             x = bars_x + i * (bar_width + bar_spacing)
-            y = bars_base_y - bar_heights[i]
+            y = base_y - bar_heights[i]
             if i < active_bars:
                 c = QColor(self.wifi_color)
                 if not self.flash_state:
@@ -402,7 +403,7 @@ class DynamicHeader(QFrame):
     def _setup_ui(self, screen_name: str):
         """Setup header UI components"""
         layout = QHBoxLayout()
-        layout.setContentsMargins(135, 0, 140, 0)   # match pill box inset on background image
+        layout.setContentsMargins(135, 10, 130, 0)   # match pill box inset on background image
         layout.setSpacing(0)
 
         # Create battery widget first so RightStatusWidget can reference it
@@ -423,6 +424,9 @@ class DynamicHeader(QFrame):
 
         # Center align the screen label
         self.screen_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Left-align the voltage label text within its fixed width
+        self.voltage_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.voltage_label.setFixedWidth(300)
         self.screen_label.setFixedWidth(400)
