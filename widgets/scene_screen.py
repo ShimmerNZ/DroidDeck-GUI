@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import json
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -1079,16 +1082,48 @@ class SceneScreen(BaseScreen):
             }}
             QScrollBar:vertical {{
                 background: {dark_bg};
-                width: 16px;
-                border-radius: 8px;
+                width: 22px;
+                margin: 26px 0 26px 0;
+                border-radius: 6px;
             }}
             QScrollBar::handle:vertical {{
                 background: {primary};
-                border-radius: 8px;
+                border-radius: 6px;
                 min-height: 30px;
             }}
             QScrollBar::handle:vertical:hover {{
                 background: {primary_light};
+            }}
+            QScrollBar::add-line:vertical {{
+                background: #3a3a3a;
+                height: 26px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+                border-radius: 4px;
+            }}
+            QScrollBar::sub-line:vertical {{
+                background: #3a3a3a;
+                height: 26px;
+                subcontrol-position: top;
+                subcontrol-origin: margin;
+                border-radius: 4px;
+            }}
+            QScrollBar::up-arrow:vertical {{
+                width: 10px;
+                height: 10px;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-bottom: 10px solid {primary};
+            }}
+            QScrollBar::down-arrow:vertical {{
+                width: 10px;
+                height: 10px;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 10px solid {primary};
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
             }}
         """)
 

@@ -16,7 +16,6 @@ import pyqtgraph as pg
 
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
-from threads.network_monitor import NetworkMonitorThread
 from core.utils import error_boundary
 from widgets.voltage_alert_splash import VoltageAlertSplash
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
@@ -57,12 +56,6 @@ class HealthScreen(BaseScreen):
         # Track start time for relative time calculation
         self.start_time = time.time()
         
-        # Initialize network monitoring using IP from config
-        from core.config_manager import config_manager
-        network_config = config_manager.get_network_config()
-        pi_ip = network_config.get("pi_ip", "10.1.1.230")
-        self.network_monitor = NetworkMonitorThread(pi_ip=pi_ip, update_interval=5.0)
-        self.network_monitor.wifi_updated.connect(self.update_network_status)
 
         
         # Connect WebSocket for telemetry updates
@@ -75,8 +68,6 @@ class HealthScreen(BaseScreen):
         
         self.init_ui()
         
-        # Start network monitoring
-        self.network_monitor.start()
 
         from PyQt6.QtCore import QTimer
         self.startup_timer = QTimer()
@@ -308,10 +299,9 @@ class HealthScreen(BaseScreen):
         label_configs = [
             ("cpu", "CPU: 0%"),
             ("mem", "Memory: 0%"),
-            ("temp", "Temp: 0Â°C"),
+            ("temp", "Temp: 0°C"),
             ("battery", "Battery: 0.0V"),
             ("current_total", "Total Current: 0.0A"),
-            ("ping", "Ping: -- ms"),
             ("adc_info", "ADC: 4-Channel Mode"),
             ("dfplayer", "Audio: Disconnected"),
             ("maestro1", "M1: Disconnected"),
@@ -320,7 +310,7 @@ class HealthScreen(BaseScreen):
         
         for key, text in label_configs:
             label = QLabel(text)
-            label.setFont(QFont("Arial", 15))
+            label.setFont(QFont("Arial", 18))
             self._update_status_label_style(label)
             label.setWordWrap(True)
             self.status_labels[key] = label
@@ -506,33 +496,6 @@ class HealthScreen(BaseScreen):
         )
 
     @error_boundary
-    def update_network_status(self, wifi_percent: int, status_text: str, ping_ms: float):
-        """Update network status display with theme colors"""
-        if ping_ms > 0:
-            ping_text = f"Ping: {ping_ms:.1f}ms"
-            
-            # Color coding based on ping quality using theme colors
-            green = theme_manager.get("green")
-            primary = theme_manager.get("primary_color")
-            red = theme_manager.get("red")
-            
-            if ping_ms < 20:
-                ping_style = f"color: {green}; padding: 2px; background: transparent;"
-            elif ping_ms < 50:
-                ping_style = f"color: {primary}; padding: 2px; background: transparent;"
-            elif ping_ms < 100:
-                ping_style = f"color: {primary}; padding: 2px; background: transparent;"
-            else:
-                ping_style = f"color: {red}; padding: 2px; background: transparent;"
-        else:
-            ping_text = "Ping: timeout"
-            red = theme_manager.get("red")
-            ping_style = f"color: {red}; padding: 2px; font-weight: bold; background: transparent;"
-        
-        self.status_labels["ping"].setText(ping_text)
-        self.status_labels["ping"].setStyleSheet(ping_style)
-
-    @error_boundary
     def start_bandwidth_test(self, checked=False):
         """Start bandwidth test with progress splash screen"""
         # Disable button during test
@@ -672,7 +635,7 @@ class HealthScreen(BaseScreen):
         
         updates["cpu"] = f"CPU: {cpu}%"
         updates["mem"] = f"Memory: {mem}%"
-        updates["temp"] = f"Temp: {temp}Â°C"
+        updates["temp"] = f"Temp: {temp}°C"
         
         # Total current from A2 sensor
         current_total = data.get("current_total", 0.0)
@@ -818,6 +781,4 @@ class HealthScreen(BaseScreen):
             self._active_voltage_splash.close_splash()
             delattr(self, '_active_voltage_splash')
         
-        if hasattr(self, 'network_monitor'):
-            self.network_monitor.stop()
         super().cleanup()

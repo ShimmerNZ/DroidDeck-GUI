@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Complete Controller Configuration Screen
 Fixed maestro detection and servo channel loading issue + Bluetooth controller support
@@ -1136,12 +1138,12 @@ class ControllerConfigScreen(BaseScreen):
         
         # Warning for destructive actions
         if current_action in ["restart_pi", "shutdown_pi"]:
-            warning_label = QLabel("âš ï¸ WARNING: This will affect the entire Raspberry Pi system!")
+            warning_label = QLabel("⚠️ WARNING: This will affect the entire Raspberry Pi system!")
             warning_label.setStyleSheet(f"color: #F44336; padding: 6px; background-color: rgba(244, 67, 54, 0.1); border-radius: 4px; font-size: 10px; font-weight: bold; border: none;")
             warning_label.setWordWrap(True)
             self.params_layout.addWidget(warning_label)
         elif current_action in ["exit_app", "restart_app"]:
-            info_label = QLabel("â„¹ï¸ This action includes a confirmation dialog for safety")
+            info_label = QLabel("ℹ️ This action includes a confirmation dialog for safety")
             info_label.setStyleSheet(f"color: #2196F3; padding: 6px; background-color: rgba(33, 150, 243, 0.1); border-radius: 4px; font-size: 10px; border: none;")
             info_label.setWordWrap(True)
             self.params_layout.addWidget(info_label)
@@ -1150,26 +1152,15 @@ class ControllerConfigScreen(BaseScreen):
         row_data['target_label'].setText(f"→ {action}")
 
     def _load_existing_configuration(self):
-        """Load existing controller configuration on startup - handles both single and multiple mappings"""
+        """Load existing controller configuration on startup"""
         try:
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config and isinstance(config, dict):
                 for control_name, control_config in config.items():
-                    # Handle both list format (multiple mappings) and dict format (single mapping)
-                    if isinstance(control_config, list):
-                        # Multiple mappings for this button
-                        for single_config in control_config:
-                            self._add_mapping_row_from_config(control_name, single_config)
-                    else:
-                        # Single mapping (old format)
-                        self._add_mapping_row_from_config(control_name, control_config)
-                
-                # Sort mappings alphabetically after loading
-                self._rebuild_grid_layout()
+                    self._add_mapping_row_from_config(control_name, control_config)
                 
                 if self.logger:
-                    total_mappings = sum(len(c) if isinstance(c, list) else 1 for c in config.values())
-                    self.logger.info(f"Loaded {total_mappings} controller mappings from {len(config)} buttons")
+                    self.logger.info(f"Loaded {len(config)} existing controller mappings")
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Could not load controller config: {e}")
@@ -1333,7 +1324,7 @@ class ControllerConfigScreen(BaseScreen):
         elif behavior == "toggle_scenes":
             scene1 = config.get('scene_1', '?')
             scene2 = config.get('scene_2', '?')
-            return f"→ {scene1} âŸ· {scene2}"
+            return f"→ {scene1} ⟷ {scene2}"
         elif behavior == "nema_stepper":
             mode = config.get('nema_behavior', 'Not configured')
             min_pos = config.get('min_position', '?')
@@ -1642,7 +1633,7 @@ class ControllerConfigScreen(BaseScreen):
         self.update_parameters_panel_style()
         
         layout = QVBoxLayout(self.parameters_panel)
-        layout.setContentsMargins(6, 12, 6, 12)
+        layout.setContentsMargins(6, 12, 2, 12)
         
         self.params_header = QLabel("BEHAVIOR PARAMETERS")
         self.params_header.setFont(QFont("Arial", 13, QFont.Weight.Bold))
@@ -1783,7 +1774,7 @@ class ControllerConfigScreen(BaseScreen):
         
         # Show warning if conflicts exist
         if row_data.get('conflict_detected', False):
-            warning = QLabel("âš ï¸ Configuration conflict detected. Please resolve before saving.")
+            warning = QLabel("⚠️ Configuration conflict detected. Please resolve before saving.")
             self.update_warning_style(warning)
             warning.setWordWrap(True)
             self.params_layout.addWidget(warning)
@@ -1896,43 +1887,6 @@ class ControllerConfigScreen(BaseScreen):
         # Store the layout for updates
         row_data['servo_list_layout'] = servo_list_layout
         
-        
-        self.params_layout.addSpacing(10)
-        
-        # Trigger mode (axis vs button)
-        mode_combo = QComboBox()
-        mode_combo.addItems(["axis", "button"])
-        mode_combo.setCurrentText(row_data['config'].get('trigger_mode', 'axis'))
-        mode_combo.setStyleSheet(self._get_combo_style())
-        mode_label = QLabel("Control Mode:")
-        mode_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
-        self.params_layout.addWidget(mode_label)
-        self.params_layout.addWidget(mode_combo)
-        self.params_layout.addSpacing(6)
-        
-        # Mode explanation
-        current_mode = row_data['config'].get('trigger_mode', 'axis')
-        if current_mode == 'button':
-            mode_help = QLabel("Button mode: Held = min_pulse position, Released = home")
-        else:
-            mode_help = QLabel("Axis mode: Continuous control from joystick/axis input")
-        grey = theme_manager.get("grey")
-        mode_help.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 9px; border: none; background: transparent;")
-        self.params_layout.addWidget(mode_help)
-        
-        # Store mode help label for updates
-        row_data['mode_help_label'] = mode_help
-        
-        # Update mode help when mode changes
-        def update_mode_help(mode):
-            self._update_row_config(row_data, 'trigger_mode', mode)
-            if mode == 'button':
-                row_data['mode_help_label'].setText("Button mode: Held = min_pulse position, Released = home")
-            else:
-                row_data['mode_help_label'].setText("Axis mode: Continuous control from joystick/axis input")
-        
-        mode_combo.currentTextChanged.connect(update_mode_help)
-        
         # Update target label
         servo_count = len(servos)
         row_data['target_label'].setText(f"→ {servo_count} servo(s)")
@@ -2028,20 +1982,6 @@ class ControllerConfigScreen(BaseScreen):
             servos[index]['invert'] = inverted
             row_data['config']['servos'] = servos
 
-    def _update_multi_servo_min_pulse(self, row_data: Dict, index: int, value: int):
-        """Update the min_pulse for a specific servo in multi-servo config"""
-        servos = row_data['config'].get('servos', [])
-        if index < len(servos):
-            servos[index]['min_pulse'] = value
-            row_data['config']['servos'] = servos
-    
-    def _update_multi_servo_max_pulse(self, row_data: Dict, index: int, value: int):
-        """Update the max_pulse for a specific servo in multi-servo config"""
-        servos = row_data['config'].get('servos', [])
-        if index < len(servos):
-            servos[index]['max_pulse'] = value
-            row_data['config']['servos'] = servos
-
     def _create_toggle_servo_params(self, row_data: Dict):
         """Create parameters for toggle servo behavior"""
         # Header
@@ -2077,12 +2017,11 @@ class ControllerConfigScreen(BaseScreen):
         pos1_spin = QSpinBox()
         pos1_spin.setRange(800, 2200)
         pos1_spin.setValue(row_data['config'].get('position_1', 1000))
-        pos1_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # Remove up/down arrows
-        pos1_spin.setKeyboardTracking(True)  # Update while typing
+        pos1_spin.setSuffix(" μs")
         pos1_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_1', val)
         )
-        label1 = QLabel("Position 1 (μs):")
+        label1 = QLabel("Position 1:")
         label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label1)
         self.params_layout.addWidget(pos1_spin)
@@ -2092,12 +2031,11 @@ class ControllerConfigScreen(BaseScreen):
         pos2_spin = QSpinBox()
         pos2_spin.setRange(800, 2200)
         pos2_spin.setValue(row_data['config'].get('position_2', 2000))
-        pos2_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # Remove up/down arrows
-        pos2_spin.setKeyboardTracking(True)  # Update while typing
+        pos2_spin.setSuffix(" μs")
         pos2_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_2', val)
         )
-        label2 = QLabel("Position 2 (μs):")
+        label2 = QLabel("Position 2:")
         label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label2)
         self.params_layout.addWidget(pos2_spin)
@@ -2115,50 +2053,12 @@ class ControllerConfigScreen(BaseScreen):
         timing_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(timing_label)
         self.params_layout.addWidget(timing_combo)
-        self.params_layout.addSpacing(6)
-        
-        # Trigger mode (toggle vs hold)
-        mode_combo = QComboBox()
-        mode_combo.addItems(["toggle", "hold"])
-        mode_combo.setCurrentText(row_data['config'].get('trigger_mode', 'toggle'))
-        mode_combo.setStyleSheet(self._get_combo_style())
-        mode_label = QLabel("Trigger Mode:")
-        mode_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
-        self.params_layout.addWidget(mode_label)
-        self.params_layout.addWidget(mode_combo)
-        self.params_layout.addSpacing(6)
-        
-        # Mode explanation
-        current_mode = row_data['config'].get('trigger_mode', 'toggle')
-        if current_mode == 'hold':
-            mode_help = QLabel("Hold mode: Held = Position 2, Released = Position 1")
-        else:
-            mode_help = QLabel("Toggle mode: Each press switches between positions")
-        grey = theme_manager.get("grey")
-        mode_help.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 9px; border: none; background: transparent;")
-        self.params_layout.addWidget(mode_help)
-        
-        # Store mode help label for updates
-        row_data['mode_help_label'] = mode_help
-        
-        # Update mode help when mode changes
-        def update_mode_help(mode):
-            self._update_row_config(row_data, 'trigger_mode', mode)
-            if mode == 'hold':
-                row_data['mode_help_label'].setText("Hold mode: Held = Position 2, Released = Position 1")
-            else:
-                row_data['mode_help_label'].setText("Toggle mode: Each press switches between positions")
-        
-        mode_combo.currentTextChanged.connect(update_mode_help)
         
         # Update target label
         target = row_data['config'].get('target', 'Not configured')
         pos1 = row_data['config'].get('position_1', 1000)
         pos2 = row_data['config'].get('position_2', 2000)
-        mode = row_data['config'].get('trigger_mode', 'toggle')
-        mode_str = "hold" if mode == "hold" else "toggle"
-        row_data['target_label'].setText(f"→ {target} ({pos1}↔{pos2}) [{mode_str}]")
-
+        row_data['target_label'].setText(f"→ {target} ({pos1}↔{pos2})")
 
     def _create_joystick_pair_params(self, row_data: Dict):
         """Create parameters for joystick pair behavior"""
@@ -2351,7 +2251,7 @@ class ControllerConfigScreen(BaseScreen):
         
         scene1 = row_data['config'].get('scene_1', '?')
         scene2 = row_data['config'].get('scene_2', '?')
-        row_data['target_label'].setText(f"→ {scene1} âŸ· {scene2}")
+        row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
 
     def _create_nema_stepper_params(self, row_data: Dict):
         """Create streamlined parameters for NEMA stepper behavior"""
@@ -2445,7 +2345,7 @@ class ControllerConfigScreen(BaseScreen):
             ("Min Position:", f"{nema_config.get('min_position', 0.0):.1f} cm"),
             ("Max Position:", f"{nema_config.get('max_position', 20.0):.1f} cm"),
             ("Movement Speed:", f"{nema_config.get('normal_speed', 800)} steps/s"),
-            ("Acceleration:", f"{nema_config.get('acceleration', 800)} steps/sÂ²")
+            ("Acceleration:", f"{nema_config.get('acceleration', 800)} steps/s²")
         ]
         
         for label_text, value_text in config_items:
@@ -2599,7 +2499,7 @@ class ControllerConfigScreen(BaseScreen):
         elif behavior == "toggle_scenes":
             scene1 = row_data['config'].get('scene_1', '?')
             scene2 = row_data['config'].get('scene_2', '?')
-            row_data['target_label'].setText(f"→ {scene1} âŸ· {scene2}")
+            row_data['target_label'].setText(f"→ {scene1} ⟷ {scene2}")
         elif behavior == "nema_stepper":
             mode = row_data['config'].get('nema_behavior', 'Not configured')
             min_pos = row_data['config'].get('min_position', '?')
@@ -2624,40 +2524,33 @@ class ControllerConfigScreen(BaseScreen):
                 child.widget().deleteLater()
 
     def _remove_mapping_row(self, row_index: int):
-        """Remove a mapping row and refresh display"""
+        """Remove a mapping row"""
         if 0 <= row_index < len(self.mapping_rows):
             row_data = self.mapping_rows[row_index]
             control_name = row_data['input_combo'].currentText()
             if control_name != "Select Input...":
                 self.behavior_registry.unregister_mapping(control_name)
             
-            # Remove all widgets for this row
-            widgets_to_remove = ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']
-            for key in widgets_to_remove:
-                if key in row_data:
-                    widget = row_data[key]
-                    self.grid_layout.removeWidget(widget)
-                    widget.deleteLater()
+            for key in ['input_combo', 'behavior_combo', 'target_label']:
+                widget = row_data[key]
+                self.grid_layout.removeWidget(widget)
+                widget.deleteLater()
             
-            # Remove from list
+            actions_widget = row_data['select_btn'].parent()
+            self.grid_layout.removeWidget(actions_widget)
+            actions_widget.deleteLater()
+            
             self.mapping_rows.pop(row_index)
             
-            # Clear selection if this was the selected row
             if self.selected_row_index == row_index:
                 self.selected_row_index = None
                 self._show_no_selection_message()
-            elif self.selected_row_index is not None and self.selected_row_index > row_index:
-                # Adjust selected row index if it's after the removed row
-                self.selected_row_index -= 1
             
-            # Rebuild the entire grid layout
             self._rebuild_grid_layout()
-            
-            # Check for conflicts after removal
             self._check_for_conflicts()
 
     def _rebuild_grid_layout(self):
-        """Rebuild grid layout with correct row indices after removal - now sorts alphabetically"""
+        """Rebuild grid layout with correct row indices after removal"""
         while self.grid_layout.count():
             self.grid_layout.takeAt(0)
             
@@ -2672,27 +2565,8 @@ class ControllerConfigScreen(BaseScreen):
         self.grid_layout.setColumnStretch(2, 3)  # Behavior
         self.grid_layout.setColumnStretch(3, 4)  # Target
         self.grid_layout.setColumnStretch(4, 0)  # Configure button - fixed width
-        
-        # Sort mappings alphabetically by input name
-        self.mapping_rows.sort(key=lambda row: row['input_combo'].currentText())
             
         for row, row_data in enumerate(self.mapping_rows):
-            # Reconnect remove button to correct row index
-            remove_btn = row_data['remove_btn']
-            try:
-                remove_btn.clicked.disconnect()
-            except:
-                pass
-            remove_btn.clicked.connect(lambda checked, r=row: self._remove_mapping_row(r))
-            
-            # Reconnect configure button to correct row index
-            select_btn = row_data['select_btn']
-            try:
-                select_btn.clicked.disconnect()
-            except:
-                pass
-            select_btn.clicked.connect(lambda checked, r=row: self._select_row_for_config(r))
-            
             # Add to grid: remove, input, behavior, target, configure
             self.grid_layout.addWidget(row_data['remove_btn'], row, 0)
             self.grid_layout.addWidget(row_data['input_combo'], row, 1)
@@ -2701,7 +2575,7 @@ class ControllerConfigScreen(BaseScreen):
             self.grid_layout.addWidget(row_data['select_btn'], row, 4)
 
     def _save_all_mappings(self):
-        """Save all controller mappings to configuration - supports multiple mappings per button"""
+        """Save all controller mappings to configuration"""
         conflicts_exist = any(row['conflict_detected'] for row in self.mapping_rows)
         if conflicts_exist:
             QMessageBox.warning(self, "Conflicts Detected", 
@@ -2715,24 +2589,10 @@ class ControllerConfigScreen(BaseScreen):
             behavior = row_data['behavior_combo'].currentText()
             
             if control_name != "Select Input..." and behavior != "Select Behavior...":
-                config_entry = {
+                controller_config[control_name] = {
                     'behavior': behavior,
                     **row_data['config']
                 }
-                
-                # Support multiple mappings per button
-                if control_name in controller_config:
-                    # Already have mapping(s) for this button
-                    existing = controller_config[control_name]
-                    if isinstance(existing, list):
-                        # Already a list, append to it
-                        existing.append(config_entry)
-                    else:
-                        # Single dict, convert to list
-                        controller_config[control_name] = [existing, config_entry]
-                else:
-                    # First mapping for this button - store as list for consistency
-                    controller_config[control_name] = [config_entry]
         
         try:
             config_manager.save_config("resources/configs/controller_config.json", controller_config)
@@ -2745,21 +2605,14 @@ class ControllerConfigScreen(BaseScreen):
             else:
                 self.logger.warning("WebSocket not connected - controller config not synced to backend")
 
-            # Count total mappings
-            total_mappings = sum(len(configs) if isinstance(configs, list) else 1 
-                               for configs in controller_config.values())
-            QMessageBox.information(self, "Saved", 
-                                  f"Saved {total_mappings} controller mapping(s) for {len(controller_config)} button(s).")
+            QMessageBox.information(self, "Saved", f"Saved {len(controller_config)} controller mappings.")
             
             # Update behavior registry
-            for control_name, configs in controller_config.items():
-                # Handle both list and single dict formats
-                config_list = configs if isinstance(configs, list) else [configs]
-                for config in config_list:
-                    self.behavior_registry.register_mapping(control_name, config['behavior'], config)
+            for control_name, config in controller_config.items():
+                self.behavior_registry.register_mapping(control_name, config['behavior'], config)
             
             if self.logger:
-                self.logger.info(f"Saved {total_mappings} controller mappings for {len(controller_config)} buttons")
+                self.logger.info(f"Saved {len(controller_config)} controller mappings")
                 
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save controller mappings: {e}")
@@ -2961,7 +2814,58 @@ class ControllerConfigScreen(BaseScreen):
     def update_scroll_area_style(self):
         """Update scroll area styling"""
         expanded_bg = theme_manager.get("expanded_bg")
-        self.scroll_area.setStyleSheet(f"border: 1px solid #555; background-color: {expanded_bg};")
+        primary = theme_manager.get("primary_color")
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                border: 1px solid #555;
+                background-color: {expanded_bg};
+            }}
+            QScrollBar:vertical {{
+                background: #2a2a2a;
+                width: 18px;
+                margin: 22px 0 22px 0;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {primary};
+                min-height: 30px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #ffcc44;
+            }}
+            QScrollBar::add-line:vertical {{
+                background: #3a3a3a;
+                height: 22px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+                border-radius: 3px;
+            }}
+            QScrollBar::sub-line:vertical {{
+                background: #3a3a3a;
+                height: 22px;
+                subcontrol-position: top;
+                subcontrol-origin: margin;
+                border-radius: 3px;
+            }}
+            QScrollBar::up-arrow:vertical {{
+                width: 10px;
+                height: 10px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-bottom: 8px solid {primary};
+            }}
+            QScrollBar::down-arrow:vertical {{
+                width: 10px;
+                height: 10px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 8px solid {primary};
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
 
     def update_params_header_style(self):
         """Update parameters header styling"""
