@@ -646,7 +646,7 @@ class EnhancedSceneRow(QWidget):
         self.update_combo_style(self.audio_file_combo)
         
         self.audio_cb.stateChanged.connect(
-            lambda state: self.audio_file_combo.setEnabled(state == Qt.CheckState.Checked)
+            lambda state: self.audio_file_combo.setEnabled(state == Qt.CheckState.Checked.value)
         )
         self.audio_cb.stateChanged.connect(self.update_indicators)
         
@@ -677,7 +677,7 @@ class EnhancedSceneRow(QWidget):
         self.update_combo_style(self.bottango_combo)
         
         self.script_cb.stateChanged.connect(
-            lambda state: self.bottango_combo.setEnabled(state == Qt.CheckState.Checked)
+            lambda state: self.bottango_combo.setEnabled(state == Qt.CheckState.Checked.value)
         )
         self.script_cb.stateChanged.connect(self.update_indicators)
         
