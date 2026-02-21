@@ -402,7 +402,7 @@ class DynamicHeader(QFrame):
     def _setup_ui(self, screen_name: str):
         """Setup header UI components"""
         layout = QHBoxLayout()
-        layout.setContentsMargins(10, 0, 0, 0)
+        layout.setContentsMargins(135, 0, 140, 0)   # match pill box inset on background image
         layout.setSpacing(0)
 
         # Create battery widget first so RightStatusWidget can reference it

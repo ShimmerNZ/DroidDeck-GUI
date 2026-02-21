@@ -175,7 +175,7 @@ class DroidDeckApplication(QMainWindow):
         
         # Initialize UI components with Pi IP
         self.header = DynamicHeader("Home", pi_ip=self.pi_ip)
-        self.header.setMaximumWidth(1000)
+        self.header.setFixedWidth(1280)
         self.header.connect_websocket_signals(self.websocket)
         self.stack = QStackedWidget()
         
@@ -460,8 +460,8 @@ class DroidDeckApplication(QMainWindow):
         # Header container
         header_container = QWidget()
         header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.addWidget(self.header)
-        header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_container.setLayout(header_layout)
         
         layout.addWidget(header_container)
