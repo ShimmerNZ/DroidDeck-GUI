@@ -889,14 +889,15 @@ class EnhancedSceneRow(QWidget):
     def update_bottango_scenes(self, bottango_scenes):
         """Update the Bottango scenes dropdown with new scenes"""
         self.bottango_scenes = bottango_scenes
-        current_selection = self.bottango_combo.currentText()
+        # Prefer scene_data as the source of truth, fall back to what the combo shows
+        target_selection = self.scene_data.get("bottango_scene", "") or self.bottango_combo.currentText()
         self.bottango_combo.clear()
         
         scene_names = [scene["name"] for scene in bottango_scenes]
         if scene_names:
             self.bottango_combo.addItems(scene_names)
-            if current_selection in scene_names:
-                self.bottango_combo.setCurrentText(current_selection)
+            if target_selection in scene_names:
+                self.bottango_combo.setCurrentText(target_selection)
         else:
             self.bottango_combo.addItem("No scenes available")
     
