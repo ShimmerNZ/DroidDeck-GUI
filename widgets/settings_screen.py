@@ -1441,7 +1441,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"🔍 {category}:")
+            result_lines.append(f"📋 {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1454,9 +1454,9 @@ class SettingsScreen(BaseScreen):
                     elif status == 'warning':
                         icon = "⚠️"
                     elif status == 'info':
-                        icon = "✅️"
+                        icon = "ℹ️"
                     else:
-                        icon = "✗"
+                        icon = "❌"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")

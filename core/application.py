@@ -345,7 +345,17 @@ class DroidDeckApplication(QMainWindow):
         ws_url = config_manager.get_websocket_url()
         if not ws_url.startswith("ws://"):
             ws_url = f"ws://{ws_url}"
-        return WebSocketManager(ws_url)
+        ws = WebSocketManager(ws_url)
+        # Request failsafe state from backend every time we (re)connect
+        ws.connected.connect(self._request_failsafe_state)
+        return ws
+
+    def _request_failsafe_state(self):
+        """Ask backend for current failsafe state - called on every (re)connect."""
+        if hasattr(self, 'websocket'):
+            self.websocket.send_command("get_failsafe_state")
+            if hasattr(self, 'logger'):
+                self.logger.info("Requested failsafe state sync from backend")
     
     def _setup_memory_management(self):
         """Setup periodic memory cleanup"""
@@ -548,8 +558,16 @@ class DroidDeckApplication(QMainWindow):
     @error_boundary
     def _toggle_failsafe(self, checked):
         """Toggle failsafe state and send to backend with themed icons"""
-        # Update button icon based on state
-        if checked:
+        self._apply_failsafe_ui(checked)
+        # Send command to backend
+        self.websocket.send_command("failsafe", state=checked)
+        if hasattr(self, 'logger'):
+            self.logger.info(f"Failsafe toggled: {checked}")
+
+    def _apply_failsafe_ui(self, active: bool):
+        """Update failsafe button appearance without sending to backend.
+        Called both from user interaction and from backend sync messages."""
+        if active:
             pressed_icon_path = theme_manager.get_icon_path("failsafe", pressed=True)
             if os.path.exists(pressed_icon_path):
                 self.failsafe_button.setIcon(QIcon(pressed_icon_path))
@@ -557,22 +575,31 @@ class DroidDeckApplication(QMainWindow):
             normal_icon_path = theme_manager.get_icon_path("failsafe", pressed=False)
             if os.path.exists(normal_icon_path):
                 self.failsafe_button.setIcon(QIcon(normal_icon_path))
-        
-        # Send command to backend
-        self.websocket.send_command("failsafe", state=checked)
-        if hasattr(self, 'logger'):
-            self.logger.info(f"Failsafe toggled: {checked}")
+        # Block signals so setting checked state doesn't fire _toggle_failsafe again
+        self.failsafe_button.blockSignals(True)
+        self.failsafe_button.setChecked(active)
+        self.failsafe_button.blockSignals(False)
     
     def _update_header_from_telemetry(self, message: str):
-        """Update header voltage from telemetry data"""
+        """Update header voltage from telemetry, and handle failsafe state sync"""
         try:
             import json
             data = json.loads(message)
-            if data.get("type") == "telemetry":
+            msg_type = data.get("type")
+
+            if msg_type == "telemetry":
                 voltage = data.get("battery_voltage", 0.0)
                 if voltage > 0:
                     self.header.update_voltage(voltage)
-                
+
+            elif msg_type == "failsafe_state":
+                # Backend is telling us the authoritative failsafe state -
+                # update the button without sending anything back
+                active = data.get("failsafe_active", True)
+                self._apply_failsafe_ui(active)
+                if hasattr(self, 'logger'):
+                    self.logger.info(f"Failsafe state synced from backend: {active}")
+
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Header update error: {e}")
