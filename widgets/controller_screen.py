@@ -715,18 +715,19 @@ class ControllerConfigScreen(BaseScreen):
         theme_manager.register_callback(self.update_theme)
 
     def _detect_maestros(self):
-        """Request maestro detection to get available channels"""
+        """Request maestro detection and controller config from backend"""
         if self.websocket and self.websocket.is_connected():
             self.send_websocket_message("get_maestro_info", maestro=1)
             self.send_websocket_message("get_maestro_info", maestro=2)
+            self.send_websocket_message("get_controller_config")
             self.request_controller_info()
-            self.logger.info("Requesting maestro detection for controller config")
+            self.logger.info("Requesting maestro detection and controller config from backend")
         else:
-            self.logger.warning("WebSocket not connected - using fallback channel list")
+            self.logger.warning("WebSocket not connected - loading config from local file")
             QTimer.singleShot(2000, self._load_existing_configuration)
             return
 
-        # Hard fallback: if maestro info never arrives, load config with defaults
+        # Hard fallback: if backend never responds, try loading from local file
         QTimer.singleShot(4000, self._ensure_config_loaded)
 
     def _ensure_config_loaded(self):
@@ -747,6 +748,8 @@ class ControllerConfigScreen(BaseScreen):
                 self._handle_maestro_info(msg)
             elif msg_type == "controller_info":
                 self.handle_controller_info_response(msg)
+            elif msg_type == "controller_config_data":
+                self._load_config_from_backend_response(msg.get("config", {}))
             elif msg_type == "controller_input":
                 # This is already handled by handle_controller_input
                 pass
@@ -1217,6 +1220,34 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.info("Requested controller info from backend")
 
+    def _refresh_from_backend(self):
+        """Refresh controller status and reload config from backend"""
+        self.request_controller_info()
+        if self.websocket and self.websocket.is_connected():
+            self.send_websocket_message("get_controller_config")
+            if self.logger:
+                self.logger.info("Requested controller config from backend")
+        else:
+            self.logger.warning("WebSocket not connected - cannot refresh from backend")
+
+    def _load_config_from_backend_response(self, config: dict):
+        """Populate the mapping grid from config data received from backend"""
+        if not config:
+            self.logger.warning("Received empty controller config from backend")
+            return
+
+        self._config_loaded = True
+
+        # Clear existing rows
+        while self.mapping_rows:
+            self._remove_mapping_row(0)
+
+        # Rebuild from received config
+        for control_name, control_config in config.items():
+            self._add_mapping_row_from_config(control_name, control_config)
+
+        self.logger.info(f"Loaded {len(config)} controller mappings from backend")
+
     def handle_controller_info_response(self, data: Dict):
         """Handle controller info response from backend"""
         try:
@@ -1388,7 +1419,7 @@ class ControllerConfigScreen(BaseScreen):
             }
             QPushButton:hover { background-color: #777777; }
         """)
-        self.refresh_btn.clicked.connect(self.request_controller_info)
+        self.refresh_btn.clicked.connect(self._refresh_from_backend)
         
         status_header_layout.addWidget(self.calibration_button)
         status_header_layout.addWidget(self.status_button)  
