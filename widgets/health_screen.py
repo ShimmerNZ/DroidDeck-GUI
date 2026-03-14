@@ -74,6 +74,11 @@ class HealthScreen(BaseScreen):
         self.startup_timer.timeout.connect(self._check_and_enable_alerts)
         self.startup_timer.start(500)  # Check every 500ms
 
+        # Periodic timer to poll system_status (for serial FPS stats)
+        self.status_poll_timer = QTimer()
+        self.status_poll_timer.timeout.connect(self._request_system_status)
+        self.status_poll_timer.start(2000)  # Poll every 2 seconds
+
     def _check_and_enable_alerts(self):
         """Check if application is ready and enable voltage alerts"""
         try:
@@ -305,7 +310,11 @@ class HealthScreen(BaseScreen):
             ("adc_info", "ADC: 4-Channel Mode"),
             ("dfplayer", "Audio: Disconnected"),
             ("maestro1", "M1: Disconnected"),
-            ("maestro2", "M2: Disconnected")
+            ("maestro2", "M2: Disconnected"),
+            ("serial_fps", "Mixer: --Hz"),
+            ("blend_ms", "Blend: --ms"),
+            ("serial_cmds", "Cmds/s: --"),
+            ("active_ch", "Active Ch: --"),
         ]
         
         for key, text in label_configs:
@@ -559,6 +568,13 @@ class HealthScreen(BaseScreen):
         return status, color
 
     @error_boundary
+    def _request_system_status(self):
+        """Poll backend for system_status to update serial FPS stats"""
+        try:
+            self.send_websocket_message("system_status")
+        except Exception:
+            pass
+
     def handle_telemetry(self, message: str):
         """Process incoming telemetry data and update displays"""
         current_time = time.time()
@@ -569,12 +585,55 @@ class HealthScreen(BaseScreen):
         
         try:
             data = json.loads(message)
-            if data.get("type") != "telemetry":
+            msg_type = data.get("type")
+
+            # Accept both telemetry and system_status message types
+            if msg_type not in ("telemetry", "system_status"):
                 return
+
+            # Normalise system_status into the same flat shape as telemetry
+            if msg_type == "system_status":
+                hw = data.get("hardware", {})
+                m1 = hw.get("maestro1", {})
+                m2 = hw.get("maestro2", {})
+                data = {
+                    "type": "telemetry",
+                    "cpu": data.get("cpu", "--"),
+                    "memory": data.get("memory", "--"),
+                    "temperature": data.get("temperature", "--"),
+                    "battery_voltage": data.get("battery_voltage", 0.0),
+                    "current_left_track": data.get("current_left_track", 0.0),
+                    "current_right_track": data.get("current_right_track", 0.0),
+                    "current_total": data.get("current_total", 0.0),
+                    "adc_available": data.get("adc_available", False),
+                    "audio_system": data.get("audio_system", {}),
+                    "maestro1": {
+                        "connected": m1.get("connected", False),
+                        "channel_count": m1.get("channel_count", 0),
+                        "error_flags": m1.get("error_flags", {"has_errors": False}),
+                    },
+                    "maestro2": {
+                        "connected": m2.get("connected", False),
+                        "channel_count": m2.get("channel_count", 0),
+                        "error_flags": m2.get("error_flags", {"has_errors": False}),
+                    },
+                    # Mixer stats pass through unchanged
+                    "serial_fps": data.get("serial_fps"),
+                    "blend_ms": data.get("blend_ms"),
+                    "serial_cmds_sec": data.get("serial_cmds_sec"),
+                    "active_channels": data.get("active_channels"),
+                }
             
             self.logger.debug("Processing telemetry data")
-                
-          # Emit signals for thread-safe updates
+
+            # system_status only carries mixer stats — skip graph/voltage updates
+            # to avoid injecting zeros into the graph data
+            if msg_type == "system_status":
+                self.status_update_signal.emit(data)
+                self.last_telemetry_update = current_time
+                return
+
+            # Emit signals for thread-safe updates
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
             
             if battery_voltage > 0:
@@ -685,6 +744,39 @@ class HealthScreen(BaseScreen):
             self.status_labels["maestro1"].setStyleSheet(m1_style)
         if "maestro2" in self.status_labels:
             self.status_labels["maestro2"].setStyleSheet(m2_style)
+
+        # Motion mixer serial performance
+        serial_fps = data.get('serial_fps')
+        blend_ms = data.get('blend_ms')
+        serial_cmds = data.get('serial_cmds_sec')
+        active_ch = data.get('active_channels')
+
+        if serial_fps is not None:
+            target_hz = 50.0
+            if serial_fps >= target_hz * 0.9:
+                fps_style = f"color: {green}; padding: 1px; background: transparent;"
+            elif serial_fps >= target_hz * 0.7:
+                fps_style = "color: orange; padding: 1px; background: transparent;"
+            else:
+                fps_style = f"color: {red}; padding: 1px; background: transparent;"
+            self.status_labels["serial_fps"].setText(f"Mixer: {serial_fps}Hz")
+            self.status_labels["serial_fps"].setStyleSheet(fps_style)
+
+        if blend_ms is not None:
+            if blend_ms < 5.0:
+                bms_style = f"color: {green}; padding: 1px; background: transparent;"
+            elif blend_ms < 15.0:
+                bms_style = "color: orange; padding: 1px; background: transparent;"
+            else:
+                bms_style = f"color: {red}; padding: 1px; background: transparent;"
+            self.status_labels["blend_ms"].setText(f"Blend: {blend_ms}ms")
+            self.status_labels["blend_ms"].setStyleSheet(bms_style)
+
+        if serial_cmds is not None:
+            self.status_labels["serial_cmds"].setText(f"Cmds/s: {serial_cmds}")
+
+        if active_ch is not None:
+            self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
 
     def _update_graphs(self):
         """Update telemetry graphs with current data"""

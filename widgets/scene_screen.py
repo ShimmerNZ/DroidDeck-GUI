@@ -889,15 +889,19 @@ class EnhancedSceneRow(QWidget):
     def update_bottango_scenes(self, bottango_scenes):
         """Update the Bottango scenes dropdown with new scenes"""
         self.bottango_scenes = bottango_scenes
-        # Prefer scene_data as the source of truth, fall back to what the combo shows
-        target_selection = self.scene_data.get("bottango_scene", "") or self.bottango_combo.currentText()
+        current_selection = self.bottango_combo.currentText()
+        # Also check the original saved value — combo may show wrong text if it
+        # was built before the scene list arrived (race condition on refresh)
+        saved_selection = self.scene_data.get("bottango_scene", "")
         self.bottango_combo.clear()
-        
+
         scene_names = [scene["name"] for scene in bottango_scenes]
         if scene_names:
             self.bottango_combo.addItems(scene_names)
-            if target_selection in scene_names:
-                self.bottango_combo.setCurrentText(target_selection)
+            # Prefer the saved value, fall back to whatever was showing
+            target = saved_selection if saved_selection in scene_names else current_selection
+            if target in scene_names:
+                self.bottango_combo.setCurrentText(target)
         else:
             self.bottango_combo.addItem("No scenes available")
     
@@ -1477,6 +1481,25 @@ class SceneScreen(BaseScreen):
                     error = msg.get("error", "Unknown error")
                     QMessageBox.critical(self, "Error", f"Failed to save to backend: {error}")
                     self.update_status("Save failed", red)
+
+            elif msg_type == "bottango_import_complete":
+                converted = msg.get("converted", 0)
+                bottango_scenes = msg.get("bottango_scenes", [])
+                error = msg.get("error")
+                if error:
+                    self.update_status(f"Import failed: {error}", red)
+                elif converted > 0:
+                    if bottango_scenes:
+                        self.bottango_scenes = bottango_scenes
+                        for row in self.scene_rows:
+                            row.update_bottango_scenes(bottango_scenes)
+                    self.update_status(f"Imported {converted} scene(s)", green)
+                else:
+                    if bottango_scenes:
+                        self.bottango_scenes = bottango_scenes
+                        for row in self.scene_rows:
+                            row.update_bottango_scenes(bottango_scenes)
+                    self.update_status(f"No new files to import ({len(bottango_scenes)} scene(s) available)", green)
                     
         except Exception as e:
             red = theme_manager.get("red")
@@ -1561,9 +1584,11 @@ class SceneScreen(BaseScreen):
         for row in self.scene_rows:
             row.setParent(None)
         self.scene_rows.clear()
-        
+
+        sorted_scenes = sorted(self.scenes_data, key=lambda s: s.get("label", "").lower())
+
         # Create new enhanced rows with proper parent reference
-        for i, scene_data in enumerate(self.scenes_data):
+        for i, scene_data in enumerate(sorted_scenes):
             scene_row = EnhancedSceneRow(scene_data, self.audio_files, self.bottango_scenes, i, self)
             self.scene_rows.append(scene_row)
             # Insert before the stretch
