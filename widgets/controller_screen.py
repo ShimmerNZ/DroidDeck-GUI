@@ -1141,13 +1141,20 @@ class ControllerConfigScreen(BaseScreen):
         try:
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config and isinstance(config, dict):
+                loaded = 0
                 for control_name, control_config in config.items():
-                    if not isinstance(control_config, dict):
-                        self.logger.warning(f"Skipping '{control_name}': expected dict, got {type(control_config).__name__}")
-                        continue
-                    self._add_mapping_row_from_config(control_name, control_config)
+                    if isinstance(control_config, list):
+                        for single_config in control_config:
+                            if isinstance(single_config, dict):
+                                self._add_mapping_row_from_config(control_name, single_config)
+                                loaded += 1
+                    elif isinstance(control_config, dict):
+                        self._add_mapping_row_from_config(control_name, control_config)
+                        loaded += 1
+                    else:
+                        self.logger.warning(f"Skipping '{control_name}': unexpected type {type(control_config).__name__}")
                 if self.logger:
-                    self.logger.info(f"Loaded {len(config)} existing controller mappings")
+                    self.logger.info(f"Loaded {loaded} existing controller mappings")
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Could not load controller config: {e}")
@@ -2622,22 +2629,24 @@ class ControllerConfigScreen(BaseScreen):
         """Save all controller mappings to configuration"""
         conflicts_exist = any(row['conflict_detected'] for row in self.mapping_rows)
         if conflicts_exist:
-            QMessageBox.warning(self, "Conflicts Detected", 
+            QMessageBox.warning(self, "Conflicts Detected",
                               "Please resolve all joystick conflicts before saving.")
             return
-        
+
+        # Build config in list format to support multiple mappings per input
         controller_config = {}
-        
+
         for row_data in self.mapping_rows:
             control_name = row_data['input_combo'].currentText()
             behavior = row_data['behavior_combo'].currentText()
-            
+
             if control_name != "Select Input..." and behavior != "Select Behavior...":
-                controller_config[control_name] = {
-                    'behavior': behavior,
-                    **row_data['config']
-                }
-        
+                entry = {'behavior': behavior, **row_data['config']}
+                if control_name in controller_config:
+                    controller_config[control_name].append(entry)
+                else:
+                    controller_config[control_name] = [entry]
+
         try:
             config_manager.save_config("resources/configs/controller_config.json", controller_config)
             if self.websocket and self.websocket.is_connected():
@@ -2649,19 +2658,19 @@ class ControllerConfigScreen(BaseScreen):
             else:
                 self.logger.warning("WebSocket not connected - controller config not synced to backend")
 
-            QMessageBox.information(self, "Saved", f"Saved {len(controller_config)} controller mappings.")
-            
+            total_rows = sum(len(v) for v in controller_config.values())
+            QMessageBox.information(self, "Saved", f"Saved {total_rows} mappings across {len(controller_config)} inputs.")
+
             # Update behavior registry
-            for control_name, config in controller_config.items():
-                self.behavior_registry.register_mapping(control_name, config['behavior'], config)
-            
-            if self.logger:
-                self.logger.info(f"Saved {len(controller_config)} controller mappings")
-                
+            for control_name, entries in controller_config.items():
+                for entry in entries:
+                    self.behavior_registry.register_mapping(control_name, entry['behavior'], entry)
+
+            self.logger.info(f"Saved {total_rows} controller mappings")
+
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save controller mappings: {e}")
-            if self.logger:
-                self.logger.error(f"Failed to save controller mappings: {e}")
+            self.logger.error(f"Failed to save controller mappings: {e}")
 
     @error_boundary
     def handle_controller_input(self, message):
