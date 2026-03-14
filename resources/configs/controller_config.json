@@ -216,13 +216,15 @@
       "behavior": "toggle_servo",
       "target": "m1_ch3",
       "position_1": 1308,
-      "position_2": 1580
+      "position_2": 1580,
+      "trigger_mode": "hold"
     },
     {
       "behavior": "toggle_servo",
       "target": "m1_ch2",
       "position_1": 1625,
-      "position_2": 2080
+      "position_2": 2080,
+      "trigger_mode": "hold"
     }
   ],
   "shoulder_right": [
