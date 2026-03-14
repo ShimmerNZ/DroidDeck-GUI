@@ -710,6 +710,7 @@ class ControllerConfigScreen(BaseScreen):
         self.maestro_channel_counts = {1: 0, 2: 0}
         self.maestro_connected = {1: False, 2: False}
         self._config_loaded = False
+        self._loading_config = False
 
         super().__init__(websocket)
         theme_manager.register_callback(self.update_theme)
@@ -743,7 +744,7 @@ class ControllerConfigScreen(BaseScreen):
             self.handle_controller_input_for_status(message)
             msg = json.loads(message)
             msg_type = msg.get("type")
-            
+
             if msg_type == "maestro_info":
                 self._handle_maestro_info(msg)
             elif msg_type == "controller_info":
@@ -751,14 +752,13 @@ class ControllerConfigScreen(BaseScreen):
             elif msg_type == "controller_config_data":
                 self._load_config_from_backend_response(msg.get("config", {}))
             elif msg_type == "controller_input":
-                # This is already handled by handle_controller_input
                 pass
             elif msg_type == "system_control_command":
                 self._handle_system_control_command(msg)
-                
+
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Error handling WebSocket message: {e}")
+                self.logger.error(f"Error handling WebSocket message: {e}", exc_info=True)
 
     def _handle_system_control_command(self, msg):
         """Handle system control commands routed from backend"""
@@ -1020,18 +1020,36 @@ class ControllerConfigScreen(BaseScreen):
         self.behavior_registry = BehaviorHandlerRegistry(
             websocket_sender=self.send_websocket_message,
             logger=self.logger,
-            app_instance=app_instance  # Pass app instance
+            app_instance=app_instance
         )
         
         self._load_predefined_options()
         self._init_ui()
         
-        # Request maestro detection before loading config
-        QTimer.singleShot(1000, self._detect_maestros)
-        
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_controller_input)
             self.websocket.textMessageReceived.connect(self.handle_websocket_message)
+            # Request config immediately if already connected, otherwise wait for connection
+            if self.websocket.is_connected():
+                QTimer.singleShot(500, self._request_config_from_backend)
+            else:
+                self.websocket.connected.connect(self._on_websocket_connected)
+
+        # Hard fallback: if backend never responds, try loading from local file
+        QTimer.singleShot(5000, self._ensure_config_loaded)
+
+    def _on_websocket_connected(self):
+        """Called when websocket connection is established"""
+        self.logger.info("WebSocket connected - requesting controller config")
+        QTimer.singleShot(300, self._request_config_from_backend)
+
+    def _request_config_from_backend(self):
+        """Request maestro info and controller config from backend"""
+        self.send_websocket_message("get_maestro_info", maestro=1)
+        self.send_websocket_message("get_maestro_info", maestro=2)
+        self.send_websocket_message("get_controller_config")
+        self.request_controller_info()
+        self.logger.info("Requested controller config from backend")
 
 
     def _create_system_control_params(self, row_data: Dict):
@@ -1124,8 +1142,10 @@ class ControllerConfigScreen(BaseScreen):
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config and isinstance(config, dict):
                 for control_name, control_config in config.items():
+                    if not isinstance(control_config, dict):
+                        self.logger.warning(f"Skipping '{control_name}': expected dict, got {type(control_config).__name__}")
+                        continue
                     self._add_mapping_row_from_config(control_name, control_config)
-                
                 if self.logger:
                     self.logger.info(f"Loaded {len(config)} existing controller mappings")
         except Exception as e:
@@ -1134,6 +1154,8 @@ class ControllerConfigScreen(BaseScreen):
 
     def update_available_inputs(self, controller_type: str, available_inputs: list):
         """Update available inputs based on connected controller type"""
+        if self._loading_config:
+            return
         if controller_type.lower() in ['wii', 'wiimote', 'nintendo']:
             self.current_inputs = available_inputs if available_inputs else self.wii_inputs
             controller_name = "Wii Remote"
@@ -1221,10 +1243,11 @@ class ControllerConfigScreen(BaseScreen):
                 self.logger.info("Requested controller info from backend")
 
     def _refresh_from_backend(self):
-        """Refresh controller status and reload config from backend"""
-        self.request_controller_info()
+        """Refresh controller config from backend, then update controller status"""
         if self.websocket and self.websocket.is_connected():
             self.send_websocket_message("get_controller_config")
+            # Delay status request so it doesn't race with config load
+            QTimer.singleShot(1000, self.request_controller_info)
             if self.logger:
                 self.logger.info("Requested controller config from backend")
         else:
@@ -1237,16 +1260,46 @@ class ControllerConfigScreen(BaseScreen):
             return
 
         self._config_loaded = True
+        self._loading_config = True
 
-        # Clear existing rows
-        while self.mapping_rows:
-            self._remove_mapping_row(0)
+        try:
+            self._clear_all_rows()
 
-        # Rebuild from received config
-        for control_name, control_config in config.items():
-            self._add_mapping_row_from_config(control_name, control_config)
+            loaded = 0
+            for control_name, control_config in config.items():
+                # Backend uses list format (multiple mappings per input)
+                if isinstance(control_config, list):
+                    for single_config in control_config:
+                        if isinstance(single_config, dict):
+                            self._add_mapping_row_from_config(control_name, single_config)
+                            loaded += 1
+                elif isinstance(control_config, dict):
+                    self._add_mapping_row_from_config(control_name, control_config)
+                    loaded += 1
+                else:
+                    self.logger.warning(f"Skipping '{control_name}': unexpected type {type(control_config).__name__}")
 
-        self.logger.info(f"Loaded {len(config)} controller mappings from backend")
+            self.logger.info(f"Loaded {loaded} controller mappings from backend")
+        except Exception as e:
+            self.logger.error(f"Error loading config from backend: {e}", exc_info=True)
+        finally:
+            self._loading_config = False
+
+    def _clear_all_rows(self):
+        """Remove all mapping rows and reset grid state cleanly"""
+        for i, row_data in enumerate(self.mapping_rows):
+            control_name = row_data['input_combo'].currentText()
+            if control_name != "Select Input...":
+                self.behavior_registry.unregister_mapping(control_name)
+            for key in ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']:
+                widget = row_data[key]
+                self.grid_layout.removeWidget(widget)
+                widget.hide()
+                widget.setParent(None)
+
+        self.mapping_rows.clear()
+        self.selected_row_index = None
+        self._show_no_selection_message()
 
     def handle_controller_info_response(self, data: Dict):
         """Handle controller info response from backend"""
@@ -2525,22 +2578,18 @@ class ControllerConfigScreen(BaseScreen):
             control_name = row_data['input_combo'].currentText()
             if control_name != "Select Input...":
                 self.behavior_registry.unregister_mapping(control_name)
-            
-            for key in ['input_combo', 'behavior_combo', 'target_label']:
+
+            for key in ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']:
                 widget = row_data[key]
                 self.grid_layout.removeWidget(widget)
-                widget.deleteLater()
-            
-            actions_widget = row_data['select_btn'].parent()
-            self.grid_layout.removeWidget(actions_widget)
-            actions_widget.deleteLater()
-            
+                widget.setParent(None)
+
             self.mapping_rows.pop(row_index)
-            
+
             if self.selected_row_index == row_index:
                 self.selected_row_index = None
                 self._show_no_selection_message()
-            
+
             self._rebuild_grid_layout()
             self._check_for_conflicts()
 
