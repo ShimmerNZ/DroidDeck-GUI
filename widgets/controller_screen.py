@@ -2039,20 +2039,44 @@ class ControllerConfigScreen(BaseScreen):
 
     def _create_toggle_servo_params(self, row_data: Dict):
         """Create parameters for toggle servo behavior"""
-        # Header
         header = QLabel("Toggle Servo Configuration")
         header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         primary_color = theme_manager.get("primary_color")
         header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; margin-bottom: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(header)
-        
+
         control_name = row_data['input_combo'].currentText()
-        if control_name != "Select Input...":
-            axis_info = QLabel(f"Press {control_name} to toggle between two positions")
-            grey = theme_manager.get("grey")
-            axis_info.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
-            self.params_layout.addWidget(axis_info)
-        
+        grey = theme_manager.get("grey")
+
+        # Mode description label - updated when mode changes
+        mode_desc = QLabel()
+        mode_desc.setWordWrap(True)
+        mode_desc.setStyleSheet(f"color: {grey}; font-style: italic; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_desc)
+
+        def update_mode_desc(mode):
+            if mode == 'hold':
+                mode_desc.setText(f"Hold {control_name}: moves to Position 2. Release: returns to Position 1.")
+            else:
+                mode_desc.setText(f"Press {control_name} to toggle between two positions.")
+
+        # Trigger mode (hold vs toggle)
+        mode_label = QLabel("Trigger Mode:")
+        mode_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
+        self.params_layout.addWidget(mode_label)
+
+        mode_combo = QComboBox()
+        mode_combo.addItems(["toggle", "hold"])
+        current_mode = row_data['config'].get('trigger_mode', 'toggle')
+        mode_combo.setCurrentText(current_mode)
+        mode_combo.setStyleSheet(self._get_combo_style())
+        mode_combo.currentTextChanged.connect(lambda text: self._update_row_config(row_data, 'trigger_mode', text))
+        mode_combo.currentTextChanged.connect(update_mode_desc)
+        self.params_layout.addWidget(mode_combo)
+        self.params_layout.addSpacing(6)
+
+        update_mode_desc(current_mode)
+
         # Servo selector
         servo_combo = QComboBox()
         servo_combo.addItems(["Select Servo..."] + self.servo_channels)
@@ -2067,7 +2091,7 @@ class ControllerConfigScreen(BaseScreen):
         self.params_layout.addWidget(label)
         self.params_layout.addWidget(servo_combo)
         self.params_layout.addSpacing(6)
-        
+
         # Position 1
         pos1_spin = QSpinBox()
         pos1_spin.setRange(800, 2200)
@@ -2076,12 +2100,12 @@ class ControllerConfigScreen(BaseScreen):
         pos1_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_1', val)
         )
-        label1 = QLabel("Position 1:")
+        label1 = QLabel("Position 1 (default/released):")
         label1.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label1)
         self.params_layout.addWidget(pos1_spin)
         self.params_layout.addSpacing(6)
-        
+
         # Position 2
         pos2_spin = QSpinBox()
         pos2_spin.setRange(800, 2200)
@@ -2090,13 +2114,13 @@ class ControllerConfigScreen(BaseScreen):
         pos2_spin.valueChanged.connect(
             lambda val: self._update_row_config(row_data, 'position_2', val)
         )
-        label2 = QLabel("Position 2:")
+        label2 = QLabel("Position 2 (active/held):")
         label2.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(label2)
         self.params_layout.addWidget(pos2_spin)
         self.params_layout.addSpacing(6)
-        
-        # Trigger timing
+
+        # Trigger timing - only relevant for toggle mode
         timing_combo = QComboBox()
         timing_combo.addItems(["on_press", "on_release"])
         timing_combo.setCurrentText(row_data['config'].get('trigger_timing', 'on_press'))
@@ -2104,11 +2128,11 @@ class ControllerConfigScreen(BaseScreen):
             lambda text: self._update_row_config(row_data, 'trigger_timing', text)
         )
         timing_combo.setStyleSheet(self._get_combo_style())
-        timing_label = QLabel("Trigger When:")
+        timing_label = QLabel("Toggle Trigger (toggle mode only):")
         timing_label.setStyleSheet("color: white; padding: 3px 0px; font-size: 10px; border: none; background: transparent;")
         self.params_layout.addWidget(timing_label)
         self.params_layout.addWidget(timing_combo)
-        
+
         # Update target label
         target = row_data['config'].get('target', 'Not configured')
         pos1 = row_data['config'].get('position_1', 1000)
