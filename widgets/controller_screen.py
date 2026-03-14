@@ -714,46 +714,6 @@ class ControllerConfigScreen(BaseScreen):
         super().__init__(websocket)
         theme_manager.register_callback(self.update_theme)
 
-    def _init_ui(self):
-        """Initialize the UI layout with proper padding"""
-        main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(100, 25, 40, 15)
-
-        # Main content - no more separate status frame
-        config_section = self._create_config_section()
-        main_layout.addWidget(config_section, stretch=3)
-        
-        params_section = self._create_parameters_section()  
-        main_layout.addWidget(params_section, stretch=1)
-        
-        # Create overall layout - just the main layout, no status bar
-        self.setLayout(main_layout)
-        QTimer.singleShot(1000, self.request_controller_info)
-
-    def _setup_screen(self):
-        """Initialize controller configuration screen with maestro detection"""
-        self.setFixedWidth(1200)
-        
-        # Get app instance for system control
-        from PyQt6.QtWidgets import QApplication
-        app_instance = QApplication.instance()
-        
-        self.behavior_registry = BehaviorHandlerRegistry(
-            websocket_sender=self.send_websocket_message,
-            logger=self.logger,
-            app_instance=app_instance  # Pass app instance
-        )
-        
-        self._load_predefined_options()
-        self._init_ui()
-        
-        # Request maestro detection before loading config
-        QTimer.singleShot(1000, self._detect_maestros)
-        
-        if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_controller_input)
-            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
-
     def _detect_maestros(self):
         """Request maestro detection to get available channels"""
         if self.websocket and self.websocket.is_connected():
@@ -763,10 +723,18 @@ class ControllerConfigScreen(BaseScreen):
             self.logger.info("Requesting maestro detection for controller config")
         else:
             self.logger.warning("WebSocket not connected - using fallback channel list")
-            # Use fallback then load existing config
             QTimer.singleShot(2000, self._load_existing_configuration)
+            return
 
-    # Add this to your controller_screen.py handle_websocket_message method
+        # Hard fallback: if maestro info never arrives, load config with defaults
+        QTimer.singleShot(4000, self._ensure_config_loaded)
+
+    def _ensure_config_loaded(self):
+        """Load config with fallback channels if maestro info never arrived"""
+        if not self._config_loaded:
+            self.logger.warning("Maestro info not received - loading config with fallback channels")
+            self._config_loaded = True
+            self._load_existing_configuration()
 
     def handle_websocket_message(self, message):
         """Handle WebSocket messages including maestro detection and system control commands"""
@@ -782,7 +750,7 @@ class ControllerConfigScreen(BaseScreen):
             elif msg_type == "controller_input":
                 # This is already handled by handle_controller_input
                 pass
-            elif msg_type == "system_control_command":  # ADD THIS
+            elif msg_type == "system_control_command":
                 self._handle_system_control_command(msg)
                 
         except Exception as e:
@@ -1038,8 +1006,6 @@ class ControllerConfigScreen(BaseScreen):
             except Exception:
                 self.scene_names = ["Happy", "Sad", "Curious", "Excited", "Alert"]
 
-# Update the ControllerConfigScreen._setup_screen method to pass app instance:
-
     def _setup_screen(self):
         """Initialize controller configuration screen with maestro detection"""
         self.setFixedWidth(1200)
@@ -1064,8 +1030,6 @@ class ControllerConfigScreen(BaseScreen):
             self.websocket.textMessageReceived.connect(self.handle_controller_input)
             self.websocket.textMessageReceived.connect(self.handle_websocket_message)
 
-
-    # Update the parameter creation to show which actions are handled where:
 
     def _create_system_control_params(self, row_data: Dict):
         """Create parameters for system control behavior"""
@@ -1330,7 +1294,7 @@ class ControllerConfigScreen(BaseScreen):
             min_pos = config.get('min_position', '?')
             max_pos = config.get('max_position', '?')
             return f"→ NEMA {mode}: {min_pos}-{max_pos}cm"
-        elif behavior == "system_control":  # ADD THIS
+        elif behavior == "system_control":
             action = config.get('system_action', 'Not configured')
             return f"→ {action}"
         else:
@@ -2505,7 +2469,7 @@ class ControllerConfigScreen(BaseScreen):
             min_pos = row_data['config'].get('min_position', '?')
             max_pos = row_data['config'].get('max_position', '?')
             row_data['target_label'].setText(f"→ NEMA {mode}: {min_pos}-{max_pos}cm")
-        elif behavior == "system_control":  # ADD THIS
+        elif behavior == "system_control":
             action = row_data['config'].get('system_action', 'Not configured')
             row_data['target_label'].setText(f"→ {action}")
 
