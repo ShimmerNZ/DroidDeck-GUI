@@ -21,7 +21,6 @@ from widgets.voltage_alert_splash import VoltageAlertSplash
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
 
 
-
 class HealthScreen(BaseScreen):
     """System health monitoring with telemetry graphs and status displays"""
     
@@ -307,10 +306,9 @@ class HealthScreen(BaseScreen):
             ("dfplayer", "Audio: Disconnected"),
             ("maestro1", "M1: Disconnected"),
             ("maestro2", "M2: Disconnected"),
-            ("serial_fps", "Mixer: --Hz"),
-            ("blend_ms", "Blend: --ms"),
-            ("serial_cmds", "Cmds/s: --"),
-            ("active_ch", "Active Ch: --"),
+            ("camera", "Camera: Offline"),
+            ("controller", "Controller: None"),
+            ("system_state", "State: Normal"),
         ]
         
         for key, text in label_configs:
@@ -584,10 +582,6 @@ class HealthScreen(BaseScreen):
                 # stale "Disconnected/Simulated" values between real telemetry packets.
                 hw = data.get("hardware", {})
                 mixer_data = {
-                    "serial_fps":       data.get("serial_fps"),
-                    "blend_ms":         data.get("blend_ms"),
-                    "serial_cmds_sec":  data.get("serial_cmds_sec"),
-                    "active_channels":  data.get("active_channels"),
                     # Carry forward last known connection state so labels don't reset
                     "maestro1":         hw.get("maestro1", getattr(self, "_last_m1", {})),
                     "maestro2":         hw.get("maestro2", getattr(self, "_last_m2", {})),
@@ -655,14 +649,17 @@ class HealthScreen(BaseScreen):
         
         updates = {}
         
-        # Basic system stats
-        cpu = data.get("cpu", "--")
-        mem = data.get("memory", "--")
-        temp = data.get("temperature", "--")
-        
-        updates["cpu"] = f"CPU: {cpu}%"
-        updates["mem"] = f"Memory: {mem}%"
-        updates["temp"] = f"Temp: {temp}°C"
+        # Basic system stats - skip update if value is missing to avoid flickering
+        cpu = data.get("cpu")
+        mem = data.get("memory")
+        temp = data.get("temperature")
+
+        if cpu is not None and cpu != "--":
+            updates["cpu"] = f"CPU: {cpu}%"
+        if mem is not None and mem != "--":
+            updates["mem"] = f"Memory: {mem}%"
+        if temp is not None and temp != "--":
+            updates["temp"] = f"Temp: {temp}°C"
         
         # Total current from A2 sensor
         current_total = data.get("current_total", 0.0)
@@ -702,49 +699,56 @@ class HealthScreen(BaseScreen):
             updates["maestro2"] = "M2: Disconnected"
             m2_style = f"color: {red}; padding: 1px; background: transparent;"
         
-        # Update all text labels
+
+
+        # Camera proxy status
+        camera_proxy = data.get("camera_proxy", {})
+        if camera_proxy.get("running"):
+            updates["camera"] = "Camera: Streaming"
+            camera_style = f"color: {green}; padding: 1px; background: transparent;"
+        else:
+            updates["camera"] = "Camera: Offline"
+            camera_style = f"color: {red}; padding: 1px; background: transparent;"
+
+        # Controller status
+        controller = data.get("controller", {})
+        if controller.get("connected"):
+            ctrl_type = controller.get("controller_type", "Unknown")
+            calibrated = "Cal" if controller.get("calibrated") else "Uncal"
+            updates["controller"] = f"Controller: {ctrl_type} ({calibrated})"
+            ctrl_style = f"color: {green}; padding: 1px; background: transparent;"
+        else:
+            updates["controller"] = "Controller: None"
+            ctrl_style = f"color: {red}; padding: 1px; background: transparent;"
+
+        # System state
+        system_state = data.get("system_state", "")
+        if system_state == "failsafe":
+            updates["system_state"] = "State: FAILSAFE"
+            state_style = f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
+        elif system_state == "normal":
+            updates["system_state"] = "State: Normal"
+            state_style = f"color: {green}; padding: 1px; background: transparent;"
+        else:
+            updates["system_state"] = f"State: {system_state.title()}" if system_state else "State: --"
+            state_style = f"color: {green}; padding: 1px; background: transparent;"
+
+        # Apply text updates
         for key, text in updates.items():
             if key in self.status_labels:
                 self.status_labels[key].setText(text)
-        
-        # Apply styles
+
+        # Apply individual styles
         if "maestro1" in self.status_labels:
             self.status_labels["maestro1"].setStyleSheet(m1_style)
         if "maestro2" in self.status_labels:
             self.status_labels["maestro2"].setStyleSheet(m2_style)
-
-        # Motion mixer serial performance
-        serial_fps = data.get('serial_fps')
-        blend_ms = data.get('blend_ms')
-        serial_cmds = data.get('serial_cmds_sec')
-        active_ch = data.get('active_channels')
-
-        if serial_fps is not None:
-            target_hz = 50.0
-            if serial_fps >= target_hz * 0.9:
-                fps_style = f"color: {green}; padding: 1px; background: transparent;"
-            elif serial_fps >= target_hz * 0.7:
-                fps_style = "color: orange; padding: 1px; background: transparent;"
-            else:
-                fps_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["serial_fps"].setText(f"Mixer: {serial_fps}Hz")
-            self.status_labels["serial_fps"].setStyleSheet(fps_style)
-
-        if blend_ms is not None:
-            if blend_ms < 5.0:
-                bms_style = f"color: {green}; padding: 1px; background: transparent;"
-            elif blend_ms < 15.0:
-                bms_style = "color: orange; padding: 1px; background: transparent;"
-            else:
-                bms_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["blend_ms"].setText(f"Blend: {blend_ms}ms")
-            self.status_labels["blend_ms"].setStyleSheet(bms_style)
-
-        if serial_cmds is not None:
-            self.status_labels["serial_cmds"].setText(f"Cmds/s: {serial_cmds}")
-
-        if active_ch is not None:
-            self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
+        if "camera" in self.status_labels:
+            self.status_labels["camera"].setStyleSheet(camera_style)
+        if "controller" in self.status_labels:
+            self.status_labels["controller"].setStyleSheet(ctrl_style)
+        if "system_state" in self.status_labels:
+            self.status_labels["system_state"].setStyleSheet(state_style)
 
     def _update_graphs(self):
         """Update telemetry graphs with current data"""
