@@ -723,11 +723,17 @@ class CameraFeedScreen(BaseScreen):
         self.video_label.setText("Connecting to camera...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Stats display
-        self.stats_label = QLabel("Stream Stats: Initializing...")
+        # Stream stats (updated by image thread)
+        self.stats_label = QLabel("Stream: Initializing...")
         self._update_stats_label_style()
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.stats_label.setFixedWidth(640)
+
+        # ESP32 hardware stats (updated by 5s poll)
+        self.esp32_stats_label = QLabel("ESP32: --")
+        self._update_stats_label_style_for(self.esp32_stats_label)
+        self.esp32_stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.esp32_stats_label.setFixedWidth(640)
 
         # Create control buttons
         self.setup_control_buttons()
@@ -752,9 +758,12 @@ class CameraFeedScreen(BaseScreen):
         """)
 
     def _update_stats_label_style(self):
+        self._update_stats_label_style_for(self.stats_label)
+
+    def _update_stats_label_style_for(self, label):
         grey = theme_manager.get("grey")
         grey_light = theme_manager.get("grey_light")
-        self.stats_label.setStyleSheet(f"""
+        label.setStyleSheet(f"""
             border: 1px solid {grey};
             border-radius: 4px;
             padding: 1px;
@@ -855,6 +864,7 @@ class CameraFeedScreen(BaseScreen):
         video_layout.setContentsMargins(0, 15, 0, 0)
         video_layout.addWidget(self.video_label)
         video_layout.addWidget(self.stats_label)
+        video_layout.addWidget(self.esp32_stats_label)
 
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(20, 15, 0, 0)
@@ -886,6 +896,8 @@ class CameraFeedScreen(BaseScreen):
         try:
             self._update_video_label_style()
             self._update_stats_label_style()
+            if hasattr(self, "esp32_stats_label"):
+                self._update_stats_label_style_for(self.esp32_stats_label)
             self._update_stream_button_style()
             self._update_tracking_button_style()
             self.logger.info(f"Camera screen updated for theme: {theme_manager.get_display_name()}")
@@ -899,7 +911,7 @@ class CameraFeedScreen(BaseScreen):
         
         if self.streaming_enabled:
             self.logger.info("Starting camera stream")
-            self.stats_label.setText("Stream Stats: Starting stream...")
+            self.stats_label.setText("Stream: Starting...")
             
             # FIXED: Tell image processor to start connecting
             if hasattr(self, 'image_thread'):
@@ -919,7 +931,7 @@ class CameraFeedScreen(BaseScreen):
                 self.stats_label.setText(f"Stream Error: {str(e)[:50]}")
         else:
             self.logger.info("Stopping camera stream")
-            self.stats_label.setText("Stream Stats: Stopping stream...")
+            self.stats_label.setText("Stream: Stopping...")
 
             # Disable tracking when stream stops
             if self.tracking_enabled:
@@ -966,12 +978,12 @@ class CameraFeedScreen(BaseScreen):
                     self.tracking_button.setEnabled(is_streaming)
 
                 if is_streaming and is_active:
-                    self.stats_label.setText("Stream Stats: Stream active")
+                    self.stats_label.setText("Stream: Active")
                     # FIXED: Tell image processor to start if proxy is active
                     if hasattr(self, 'image_thread'):
                         self.image_thread.start_connecting()
                 else:
-                    self.stats_label.setText("Stream Stats: Stream inactive")
+                    self.stats_label.setText("Stream: Inactive")
                     
             else:
                 self.logger.warning(f"Stream status check failed: HTTP {response.status_code}")
@@ -1014,22 +1026,19 @@ class CameraFeedScreen(BaseScreen):
 
 
     def update_stats(self, stats_dict):
-        """FIXED: Update statistics display with better formatting"""
+        """Update stream stats label from image thread"""
         try:
             if isinstance(stats_dict, dict):
                 fps = stats_dict.get('fps', 0)
-                frame_count = stats_dict.get('frame_count', 0)
                 running = stats_dict.get('running', False)
-                
                 if running:
-                    self.stats_label.setText(f"Stream Stats: {fps:.1f} FPS, {frame_count} frames")
+                    self.stats_label.setText(f"Stream: {fps:.1f} FPS")
                 else:
-                    self.stats_label.setText("Stream Stats: Not running")
+                    self.stats_label.setText("Stream: Not running")
             else:
-                self.stats_label.setText(f"Stream Stats: {stats_dict}")
+                self.stats_label.setText(f"Stream: {stats_dict}")
         except Exception as e:
             self.logger.error(f"Stats update error: {e}")
-            self.stats_label.setText("Stream Stats: Error")
 
     def _handle_gesture_detection(self, gesture_type):
         """
@@ -1100,24 +1109,19 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def _poll_esp32_status(self):
-        """Fetch ESP32 hardware status from proxy and update stats label"""
+        """Fetch ESP32 hardware status from proxy and update ESP32 stats label"""
         try:
             response = requests.get(
                 f"{self.camera_proxy_base_url}/camera/status", timeout=2
             )
             if response.status_code == 200:
                 s = response.json()
-                rssi      = s.get("rssi", "--")
-                heap_kb   = s.get("free_heap", 0) // 1024
-                psram_kb  = s.get("free_psram", 0) // 1024
-                frames    = s.get("frames_sent", "--")
-                cpu_mhz   = s.get("cpu_mhz", "--")
-                streaming = s.get("streaming", False)
-                state_txt = "Streaming" if streaming else "Idle"
-                self.stats_label.setText(
-                    f"ESP32: {state_txt} | RSSI {rssi}dBm | "
-                    f"Heap {heap_kb}KB | PSRAM {psram_kb}KB | "
-                    f"Frames {frames} | CPU {cpu_mhz}MHz"
+                rssi     = s.get("rssi", "--")
+                heap_kb  = s.get("free_heap", 0) // 1024
+                psram_kb = s.get("free_psram", 0) // 1024
+                cpu_mhz  = s.get("cpu_mhz", "--")
+                self.esp32_stats_label.setText(
+                    f"ESP32: RSSI {rssi}dBm | Heap {heap_kb}KB | PSRAM {psram_kb}KB | CPU {cpu_mhz}MHz"
                 )
         except Exception:
             pass  # Keep last good value if poll fails
