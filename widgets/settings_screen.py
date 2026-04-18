@@ -1459,7 +1459,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â {category}:")
+            result_lines.append(f"  {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1468,13 +1468,13 @@ class SettingsScreen(BaseScreen):
                     message = result['message']
                     
                     if status == 'success':
-                        icon = "ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦"
+                        icon = "✅"
                     elif status == 'warning':
-                        icon = "ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â"
+                        icon = "⚠️"
                     elif status == 'info':
-                        icon = "ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¹ÃƒÂ¯Ã‚Â¸Ã‚Â"
+                        icon = "ℹ️"
                     else:
-                        icon = "ÃƒÂ¢Ã‚ÂÃ…â€™"
+                        icon = "❌"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")
@@ -1483,9 +1483,9 @@ class SettingsScreen(BaseScreen):
         
         # Add summary
         if overall_success:
-            result_lines.append("Ã°Å¸Å½â€° All critical tests passed! Your network configuration looks good.")
+            result_lines.append("✅ All critical tests passed! Your network configuration looks good.")
         else:
-            result_lines.append("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Some tests failed. Please check the issues above and verify your network configuration.")
+            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
         
         # Show results in appropriate dialog type
         result_text = "\n".join(result_lines)
@@ -1525,7 +1525,7 @@ class SettingsScreen(BaseScreen):
             QMessageBox.warning(
                 self,
                 "Invalid Settings",
-                "Please correct the following errors:\n\n" + "\n".join(f"Ã¢â‚¬Â¢ {e}" for e in errors)
+                "Please correct the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
             )
             return False
         return True

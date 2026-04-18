@@ -293,7 +293,7 @@ class ServoConfigScreen(BaseScreen):
             # Update UI if NEMA is currently selected
             if self.current_controller == 2 and hasattr(self, 'test_sweep_btn'):
                 if sweeping:
-                    self.test_sweep_btn.setText("â¸ STOP SWEEP")
+                    self.test_sweep_btn.setText("⏸ STOP SWEEP")
                     self.test_sweep_btn.setChecked(True)
                     self.update_status(f"NEMA sweep active: {self.nema_config['min_position']:.1f} → {self.nema_config['max_position']:.1f} cm")
                 else:
@@ -1337,7 +1337,7 @@ class ServoConfigScreen(BaseScreen):
         control_buttons_layout = QHBoxLayout()
         
         # Home button
-        self.home_btn = QPushButton("ðŸ  HOME")
+        self.home_btn = QPushButton("🏠 HOME")
         self.home_btn.setFixedHeight(40)
         self.home_btn.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.home_btn.clicked.connect(self.home_nema_stepper)
@@ -2474,7 +2474,7 @@ class ServoConfigScreen(BaseScreen):
         self.send_websocket_message("servo_request_config", 
                                     maestro=maestro_num)
         
-        self.update_status(f"🔄 Requesting config from backend for Maestro {maestro_num}...")
+        self.update_status(f"Requesting config from backend for Maestro {maestro_num}...")
         self.logger.info(f"Requesting servo config from backend for Maestro {maestro_num}")
 
     def update_config(self, config_dict: Dict[str, Any]) -> bool:

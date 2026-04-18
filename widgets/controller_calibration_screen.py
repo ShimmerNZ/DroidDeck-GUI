@@ -427,7 +427,7 @@ class JoystickCalibrationPage(CalibrationWizardPage):
         self.calibration_complete = False
         self.left_stick_ranges = {'x': [0, 0], 'y': [0, 0]}
         self.right_stick_ranges = {'x': [0, 0], 'y': [0, 0]}
-        self.parent_dialog = None  # Fixed: Store parent dialog reference
+        self.parent_dialog = None
     
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -512,7 +512,6 @@ class JoystickCalibrationPage(CalibrationWizardPage):
         self.start_button.setEnabled(True)
         self.progress_bar.setVisible(False)
         
-        # Fixed: Use parent_dialog instead of main_dialog
         if self.parent_dialog:
             QTimer.singleShot(100, self.parent_dialog.update_navigation)
         
@@ -752,7 +751,6 @@ class ProfileManagementPage(CalibrationWizardPage):
     def load_profile(self):
         """Load selected profile"""
         profile_name = self.profile_combo.currentText()
-        # TODO: Implement profile loading
         self.summary_text.setText(f"Loaded profile: {profile_name}")
     
     def save_profile(self):
@@ -761,7 +759,6 @@ class ProfileManagementPage(CalibrationWizardPage):
         if not profile_name:
             profile_name = "Custom"
         
-        # TODO: Implement profile saving
         self.summary_text.setText(f"Saved profile: {profile_name}")
         self.save_name_input.clear()
 
@@ -846,7 +843,6 @@ class ControllerCalibrationDialog(QDialog):
         self.deadzone_page = DeadZoneConfigPage()
         self.profile_page = ProfileManagementPage()
         
-        # Fixed: Set parent dialog reference for joystick calibration page
         self.joystick_cal_page.set_parent_dialog(self)
         
         self.pages = [

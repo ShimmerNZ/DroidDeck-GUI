@@ -46,10 +46,6 @@ class HealthScreen(BaseScreen):
         self.setFixedWidth(1180)
         self.startup_complete = False
         
-        # Rate limiting for telemetry updates
-        self.last_telemetry_update = 0
-        self.telemetry_update_interval = 0.25
-        
         # Voltage alarm state tracking
         self.last_voltage_alarm = None
         
@@ -577,87 +573,59 @@ class HealthScreen(BaseScreen):
 
     def handle_telemetry(self, message: str):
         """Process incoming telemetry data and update displays"""
-        current_time = time.time()
-        
-        # Rate limiting
-        if current_time - self.last_telemetry_update < self.telemetry_update_interval:
-            return
-        
         try:
             data = json.loads(message)
             msg_type = data.get("type")
 
-            # Accept both telemetry and system_status message types
-            if msg_type not in ("telemetry", "system_status"):
-                return
-
-            # Normalise system_status into the same flat shape as telemetry
             if msg_type == "system_status":
+                # Extract only mixer performance stats from system_status polls.
+                # Do not touch graph data or connection labels — system_status does
+                # not carry ADC/voltage/maestro state, so merging it would flash
+                # stale "Disconnected/Simulated" values between real telemetry packets.
                 hw = data.get("hardware", {})
-                m1 = hw.get("maestro1", {})
-                m2 = hw.get("maestro2", {})
-                data = {
-                    "type": "telemetry",
-                    "cpu": data.get("cpu", "--"),
-                    "memory": data.get("memory", "--"),
-                    "temperature": data.get("temperature", "--"),
-                    "battery_voltage": data.get("battery_voltage", 0.0),
-                    "current_left_track": data.get("current_left_track", 0.0),
-                    "current_right_track": data.get("current_right_track", 0.0),
-                    "current_total": data.get("current_total", 0.0),
-                    "adc_available": data.get("adc_available", False),
-                    "audio_system": data.get("audio_system", {}),
-                    "maestro1": {
-                        "connected": m1.get("connected", False),
-                        "channel_count": m1.get("channel_count", 0),
-                        "error_flags": m1.get("error_flags", {"has_errors": False}),
-                    },
-                    "maestro2": {
-                        "connected": m2.get("connected", False),
-                        "channel_count": m2.get("channel_count", 0),
-                        "error_flags": m2.get("error_flags", {"has_errors": False}),
-                    },
-                    # Mixer stats pass through unchanged
-                    "serial_fps": data.get("serial_fps"),
-                    "blend_ms": data.get("blend_ms"),
-                    "serial_cmds_sec": data.get("serial_cmds_sec"),
-                    "active_channels": data.get("active_channels"),
+                mixer_data = {
+                    "serial_fps":       data.get("serial_fps"),
+                    "blend_ms":         data.get("blend_ms"),
+                    "serial_cmds_sec":  data.get("serial_cmds_sec"),
+                    "active_channels":  data.get("active_channels"),
+                    # Carry forward last known connection state so labels don't reset
+                    "maestro1":         hw.get("maestro1", getattr(self, "_last_m1", {})),
+                    "maestro2":         hw.get("maestro2", getattr(self, "_last_m2", {})),
+                    "adc_available":    getattr(self, "_last_adc_available", False),
+                    "audio_system":     getattr(self, "_last_audio_system", {}),
+                    "cpu":              data.get("cpu", "--"),
+                    "memory":           data.get("memory", "--"),
+                    "temperature":      data.get("temperature", "--"),
+                    "current_total":    data.get("current_total", 0.0),
                 }
-            
-            self.logger.debug("Processing telemetry data")
-
-            # system_status only carries mixer stats — skip graph/voltage updates
-            # to avoid injecting zeros into the graph data
-            if msg_type == "system_status":
-                self.status_update_signal.emit(data)
-                self.last_telemetry_update = current_time
+                self.status_update_signal.emit(mixer_data)
                 return
 
-            # Emit signals for thread-safe updates
+            if msg_type != "telemetry":
+                return
+
+            # Cache connection/ADC state so system_status polls can carry it forward
+            self._last_m1 = data.get("maestro1", {})
+            self._last_m2 = data.get("maestro2", {})
+            self._last_adc_available = data.get("adc_available", False)
+            self._last_audio_system = data.get("audio_system", {})
+
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
-            
+
             if battery_voltage > 0:
                 self.voltage_update_signal.emit(battery_voltage)
-            
-            # Emit status updates
+
             self.status_update_signal.emit(data)
-            
-            current_a0 = data.get("current_left_track",0.0)
-            current_a1 = data.get("current_right_track",0.0)
-            current_a2 = data.get("current_total",0.0)
-             
+
+            current_time = time.time()
             relative_time = current_time - self.start_time
-            
             self.battery_voltage_data.append(float(battery_voltage))
-            self.current_a0_data.append(float(current_a0))
-            self.current_a1_data.append(float(current_a1))
-            self.current_a2_data.append(float(current_a2))
+            self.current_a0_data.append(float(data.get("current_left_track", 0.0)))
+            self.current_a1_data.append(float(data.get("current_right_track", 0.0)))
+            self.current_a2_data.append(float(data.get("current_total", 0.0)))
             self.time_data.append(relative_time)
-            
-            # Update graphs
+
             self._update_graphs()
-            
-            self.last_telemetry_update = current_time
 
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON decode failed: {e}")

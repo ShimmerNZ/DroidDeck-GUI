@@ -320,15 +320,15 @@ class NetworkMonitorThread(QThread):
     def get_signal_bars(self, percentage: int) -> str:
         """Generate signal bar representation using ASCII characters"""
         if percentage >= 75:
-            return "â–ˆâ–ˆâ–ˆâ–ˆ"  # 4 bars
+            return "████"  # 4 bars
         elif percentage >= 50:
-            return "â–ˆâ–ˆâ–ˆâ–’"  # 3 bars
+            return "███░"  # 3 bars
         elif percentage >= 25:
-            return "â–ˆâ–ˆâ–’â–’"  # 2 bars
+            return "██░░"  # 2 bars
         elif percentage > 0:
-            return "â–ˆâ–’â–’â–’"  # 1 bar
+            return "█░░░"  # 1 bar
         else:
-            return "â–’â–’â–’â–’"  # 0 bars
+            return "░░░░"  # 0 bars
 
     def request_bandwidth_test(self):
         """Request bandwidth test on next monitoring cycle"""
