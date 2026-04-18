@@ -1,6 +1,6 @@
 {
   "current": {
-    "esp32_cam_url": "http://10.1.1.203:81/stream",
+    "esp32_cam_url": "http://10.1.1.211:81/stream",
     "camera_proxy_url": "http://10.1.1.236:8081/stream",
     "control_websocket_url": "ws://10.1.1.236:8766",
     "debug_level": "ERROR",

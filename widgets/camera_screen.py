@@ -276,8 +276,8 @@ class CameraControlsWidget(QWidget):
         xclk_label.setFixedWidth(80)
 
         self.xclk_slider = QSlider(Qt.Orientation.Horizontal)
-        self.xclk_slider.setRange(1, 40)  # Adjust min/max as needed for your hardware
-        self.xclk_slider.setValue(16)     # Default value
+        self.xclk_slider.setRange(10, 20)
+        self.xclk_slider.setValue(16)
         self.xclk_slider.setFixedWidth(160)
         self._update_slider_style(self.xclk_slider)
 

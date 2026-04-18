@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Settings Screen (Themed)
 """
@@ -1331,8 +1329,28 @@ class SettingsScreen(BaseScreen):
                     "set_system_volume",
                     volume=volume_val
                 )
+
+                # Send camera URL update to backend so proxy reconnects to new address
+                esp32_url = self.network_inputs["esp32_url"].text().strip()
+                if esp32_url:
+                    self.logger.info(f"Sending camera URL update to backend: {esp32_url}")
+                    self.send_websocket_message(
+                        "update_camera_url",
+                        esp32_url=esp32_url
+                    )
+
+                # Apply debug level changes live on the backend
+                self.send_websocket_message(
+                    "update_debug_levels",
+                    debug_level=self.debug_combos["debug_combo"].currentText(),
+                    module_debug={
+                        "camera": self.debug_combos["camera_debug_combo"].currentText(),
+                        "servo":  self.debug_combos["servo_debug_combo"].currentText(),
+                        "network": self.debug_combos["network_debug_combo"].currentText(),
+                    }
+                )
             else:
-                self.logger.warning("WebSocket not available - volume update not sent to backend")
+                self.logger.warning("WebSocket not available - settings not sent to backend")
 
             QMessageBox.information(
                 self,
@@ -1441,7 +1459,7 @@ class SettingsScreen(BaseScreen):
         overall_success = True
         
         for category, test_keys in test_categories:
-            result_lines.append(f"📋 {category}:")
+            result_lines.append(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â {category}:")
             
             for key in test_keys:
                 if key in results:
@@ -1450,13 +1468,13 @@ class SettingsScreen(BaseScreen):
                     message = result['message']
                     
                     if status == 'success':
-                        icon = "✅"
+                        icon = "ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦"
                     elif status == 'warning':
-                        icon = "⚠️"
+                        icon = "ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â"
                     elif status == 'info':
-                        icon = "ℹ️"
+                        icon = "ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¹ÃƒÂ¯Ã‚Â¸Ã‚Â"
                     else:
-                        icon = "❌"
+                        icon = "ÃƒÂ¢Ã‚ÂÃ…â€™"
                         overall_success = False
                     
                     result_lines.append(f"  {icon} {message}")
@@ -1465,9 +1483,9 @@ class SettingsScreen(BaseScreen):
         
         # Add summary
         if overall_success:
-            result_lines.append("🎉 All critical tests passed! Your network configuration looks good.")
+            result_lines.append("Ã°Å¸Å½â€° All critical tests passed! Your network configuration looks good.")
         else:
-            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
+            result_lines.append("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Some tests failed. Please check the issues above and verify your network configuration.")
         
         # Show results in appropriate dialog type
         result_text = "\n".join(result_lines)
@@ -1507,7 +1525,7 @@ class SettingsScreen(BaseScreen):
             QMessageBox.warning(
                 self,
                 "Invalid Settings",
-                "Please correct the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
+                "Please correct the following errors:\n\n" + "\n".join(f"Ã¢â‚¬Â¢ {e}" for e in errors)
             )
             return False
         return True
