@@ -314,7 +314,7 @@ class CameraControlsWidget(QWidget):
             "CIF(400x296)", "VGA(640x480)", "SVGA(800x600)", "XGA(1024x768)",
             "SXGA(1280x1024)", "UXGA(1600x1200)"
         ])
-        self.resolution_combo.setCurrentIndex(5)  # VGA
+        self.resolution_combo.setCurrentIndex(6)  # SVGA
         self.resolution_combo.setFont(QFont("Arial", 11))
         self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
@@ -325,7 +325,7 @@ class CameraControlsWidget(QWidget):
 
         # Slider controls
         slider_controls = [
-            ("Quality:", 4, 63, 12, "quality"),
+            ("Quality:", 4, 63, 10, "quality"),
             ("Brightness:", -2, 2, 0, "brightness"),
             ("Contrast:", -2, 2, 0, "contrast"),
             ("Saturation:", -2, 2, 0, "saturation")
@@ -361,6 +361,7 @@ class CameraControlsWidget(QWidget):
             lambda checked: self.settings_debouncer.update_setting("v_flip", checked)
         )
         self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
+        self.v_flip_btn.setChecked(True)  # Default: vertical mirror on
 
         mirror_layout.addWidget(mirror_label)
         mirror_layout.addWidget(self.h_mirror_btn)
@@ -669,16 +670,18 @@ class CameraControlsWidget(QWidget):
 
     @error_boundary
     def reset_to_defaults(self):
-        """Reset all settings to default values"""
+        """Reset all settings to default values and send to ESP32"""
         self.settings_debouncer.clear_pending()
-        
+
         defaults = {
-            "xclk_freq": 16, "resolution": 5, "quality": 12,
+            "xclk_freq": 16, "resolution": 6, "quality": 10,
             "brightness": 0, "contrast": 0, "saturation": 0,
-            "h_mirror": False, "v_flip": False
+            "h_mirror": False, "v_flip": True
         }
 
-        # Update UI controls
+        # Suppress signals while updating UI so each control change
+        # doesn't queue a separate debounced request
+        self.initializing = True
         self.xclk_slider.setValue(defaults["xclk_freq"])
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
         self.sliders["quality"].setValue(defaults["quality"])
@@ -687,16 +690,18 @@ class CameraControlsWidget(QWidget):
         self.sliders["saturation"].setValue(defaults["saturation"])
         self.h_mirror_btn.setChecked(defaults["h_mirror"])
         self.v_flip_btn.setChecked(defaults["v_flip"])
+        self.initializing = False
 
-        # Send defaults immediately
+        # Send all defaults in a single request
         try:
             self._update_status_display("Resetting to defaults...", "#FFAA00")
-            response = requests.post(f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3)
+            response = requests.post(
+                f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3
+            )
             if response.status_code == 200:
                 self._update_status_display("Reset to defaults", "#44FF44")
-                self.current_settings = defaults
-                self.settings_debouncer.clear_pending()
-                self.logger.info("Reset camera settings to defaults")
+                self.current_settings = defaults.copy()
+                self.logger.info("Camera settings reset to defaults")
             else:
                 self._update_status_display("Reset failed", "#FF4444")
                 self.logger.error(f"Reset failed: HTTP {response.status_code}")
