@@ -862,6 +862,7 @@ class CameraFeedScreen(BaseScreen):
         """Layout with video display left and controls right"""
         video_layout = QVBoxLayout()
         video_layout.setContentsMargins(0, 15, 0, 0)
+        video_layout.setSpacing(0)
         video_layout.addWidget(self.video_label)
         video_layout.addWidget(self.stats_label)
         video_layout.addWidget(self.esp32_stats_label)
