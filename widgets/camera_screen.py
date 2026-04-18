@@ -12,7 +12,7 @@ from collections import deque
 from typing import Dict, Any, Callable
 
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QCheckBox, QWidget, QSizePolicy
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap
@@ -253,7 +253,7 @@ class CameraControlsWidget(QWidget):
         self.status_label.setStyleSheet(f"color: {grey_light}; border: none; padding: 3px; text-align: center;")
 
     def _create_esp32_section(self):
-        """Create ESP32 camera settings section"""
+        """Create ESP32 camera settings section with touch-friendly +/- controls"""
         esp32_frame = QWidget()
         esp32_frame.setObjectName("esp32Frame")
         self._update_section_frame_style(esp32_frame)
@@ -261,61 +261,28 @@ class CameraControlsWidget(QWidget):
         esp32_layout.setContentsMargins(12, 8, 12, 22)
         esp32_layout.setSpacing(8)
 
-        # Section header
         self.esp32_header = QLabel("ESP32 SETTINGS")
         self.esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_section_header_style(self.esp32_header)
         esp32_layout.addWidget(self.esp32_header)
 
-        # Add this after your other controls in _create_esp32_section
-        xclk_layout = QHBoxLayout()
-        xclk_label = QLabel("X CLK:")
-        xclk_label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(xclk_label)
-        xclk_label.setFixedWidth(80)
-
-        self.xclk_slider = QSlider(Qt.Orientation.Horizontal)
-        self.xclk_slider.setRange(10, 20)
-        self.xclk_slider.setValue(16)
-        self.xclk_slider.setFixedWidth(160)
-        self._update_slider_style(self.xclk_slider)
-
-        self.xclk_value_label = QLabel(str(16))
-        self.xclk_value_label.setFont(QFont("Arial", 12))
-        self._update_value_label_style(self.xclk_value_label)
-        self.xclk_value_label.setFixedWidth(30)
-        self.xclk_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Connect slider to update value label and send debounced setting
-        self.xclk_slider.valueChanged.connect(lambda val: self.xclk_value_label.setText(str(val)))
-        self.xclk_slider.valueChanged.connect(lambda val: self._handle_setting_change("xclk_freq", val))
-
-        xclk_layout = QHBoxLayout()
-        xclk_layout.setSpacing(8)
-        xclk_layout.addWidget(xclk_label)
-        xclk_layout.addWidget(self.xclk_slider)
-        xclk_layout.addWidget(self.xclk_value_label)
-        xclk_layout.addStretch()
-        esp32_layout.addLayout(xclk_layout)
-
-
-
-        # Resolution control
+        # Resolution — combo box, large enough to tap
         res_layout = QHBoxLayout()
         res_label = QLabel("Resolution:")
         res_label.setFont(QFont("Arial", 12))
         self._update_control_label_style(res_label)
-        res_label.setFixedWidth(80)
+        res_label.setFixedWidth(100)
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItems([
-            "QQVGA(160x120)", "QCIF(176x144)", "HQVGA(240x176)", "QVGA(320x240)",
-            "CIF(400x296)", "VGA(640x480)", "SVGA(800x600)", "XGA(1024x768)",
-            "SXGA(1280x1024)", "UXGA(1600x1200)"
+            "QQVGA 160x120", "QCIF 176x144", "HQVGA 240x176", "QVGA 320x240",
+            "CIF 400x296", "VGA 640x480", "SVGA 800x600", "XGA 1024x768",
+            "SXGA 1280x1024", "UXGA 1600x1200"
         ])
         self.resolution_combo.setCurrentIndex(6)  # SVGA
-        self.resolution_combo.setFont(QFont("Arial", 11))
+        self.resolution_combo.setFont(QFont("Arial", 13))
+        self.resolution_combo.setMinimumHeight(40)
         self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
 
@@ -323,54 +290,102 @@ class CameraControlsWidget(QWidget):
         res_layout.addWidget(self.resolution_combo)
         esp32_layout.addLayout(res_layout)
 
-        # Slider controls
-        slider_controls = [
-            ("Quality:", 4, 63, 10, "quality"),
-            ("Brightness:", -2, 2, 0, "brightness"),
-            ("Contrast:", -2, 2, 0, "contrast"),
-            ("Saturation:", -2, 2, 0, "saturation")
+        # +/- stepper controls: (label, min, max, default, setting_name)
+        stepper_controls = [
+            ("Quality:",    4, 25,  10, "quality"),
+            ("Brightness:", -2, 2,   0, "brightness"),
+            ("Contrast:",   -2, 2,   0, "contrast"),
+            ("Saturation:", -2, 2,   0, "saturation"),
+            ("X CLK:",      10, 20, 16, "xclk_freq"),
         ]
 
-        self.sliders = {}
-        for label_text, min_val, max_val, default_val, setting_name in slider_controls:
-            slider, layout = self.create_slider_control(label_text, min_val, max_val, default_val, setting_name)
-            self.sliders[setting_name] = slider
-            esp32_layout.addLayout(layout)
+        self.steppers = {}
+        for label_text, min_val, max_val, default_val, setting_name in stepper_controls:
+            row, value_label = self._create_stepper_control(
+                label_text, min_val, max_val, default_val, setting_name
+            )
+            self.steppers[setting_name] = value_label
+            esp32_layout.addLayout(row)
 
-        # Mirror controls
+        # Mirror toggle buttons — large tap targets
         mirror_layout = QHBoxLayout()
         mirror_label = QLabel("Mirror:")
         mirror_label.setFont(QFont("Arial", 12))
         self._update_control_label_style(mirror_label)
-        mirror_label.setFixedWidth(80)
+        mirror_label.setFixedWidth(100)
 
-        self.h_mirror_btn = QPushButton("Horizontal")
+        self.h_mirror_btn = QPushButton("H-Mirror")
         self.h_mirror_btn.setCheckable(True)
-        self.h_mirror_btn.setFixedSize(100, 30)
-        self.h_mirror_btn.setFont(QFont("Arial", 11))
+        self.h_mirror_btn.setMinimumHeight(44)
+        self.h_mirror_btn.setFont(QFont("Arial", 12))
         self.h_mirror_btn.clicked.connect(
-            lambda checked: self.settings_debouncer.update_setting("h_mirror", checked)
+            lambda checked: self._handle_setting_change("h_mirror", checked)
         )
         self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
-        self.v_flip_btn = QPushButton("Vertical")
+        self.v_flip_btn = QPushButton("V-Flip")
         self.v_flip_btn.setCheckable(True)
-        self.v_flip_btn.setFixedSize(100, 30)
-        self.v_flip_btn.setFont(QFont("Arial", 11))
+        self.v_flip_btn.setChecked(True)
+        self.v_flip_btn.setMinimumHeight(44)
+        self.v_flip_btn.setFont(QFont("Arial", 12))
         self.v_flip_btn.clicked.connect(
-            lambda checked: self.settings_debouncer.update_setting("v_flip", checked)
+            lambda checked: self._handle_setting_change("v_flip", checked)
         )
         self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
-        self.v_flip_btn.setChecked(True)  # Default: vertical mirror on
 
         mirror_layout.addWidget(mirror_label)
         mirror_layout.addWidget(self.h_mirror_btn)
         mirror_layout.addWidget(self.v_flip_btn)
-        mirror_layout.addStretch()
         esp32_layout.addLayout(mirror_layout)
 
         esp32_frame.setLayout(esp32_layout)
         return esp32_frame
+
+    def _create_stepper_control(self, label_text, min_val, max_val, default_val, setting_name):
+        """Create a touch-friendly +/- stepper row for a camera setting"""
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        label = QLabel(label_text)
+        label.setFont(QFont("Arial", 12))
+        self._update_control_label_style(label)
+        label.setFixedWidth(100)
+
+        minus_btn = QPushButton("−")
+        minus_btn.setFixedSize(44, 44)
+        minus_btn.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        minus_btn.setStyleSheet(self._get_stepper_button_style())
+
+        value_label = QLabel(str(default_val))
+        value_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self._update_value_label_style(value_label)
+        value_label.setFixedWidth(48)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value_label.setProperty("min_val", min_val)
+        value_label.setProperty("max_val", max_val)
+        value_label.setProperty("setting_name", setting_name)
+
+        plus_btn = QPushButton("+")
+        plus_btn.setFixedSize(44, 44)
+        plus_btn.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        plus_btn.setStyleSheet(self._get_stepper_button_style())
+
+        def step(delta):
+            current = int(value_label.text())
+            new_val = max(min_val, min(max_val, current + delta))
+            if new_val != current:
+                value_label.setText(str(new_val))
+                self._handle_setting_change(setting_name, new_val)
+
+        minus_btn.clicked.connect(lambda: step(-1))
+        plus_btn.clicked.connect(lambda: step(1))
+
+        row.addWidget(label)
+        row.addWidget(minus_btn)
+        row.addWidget(value_label)
+        row.addWidget(plus_btn)
+        row.addStretch()
+        return row, value_label
 
     def _handle_setting_change(self, setting_name, value):
         """Handle setting changes, but only if not initializing"""
@@ -432,42 +447,28 @@ class CameraControlsWidget(QWidget):
         actions_frame.setLayout(actions_layout)
         return actions_frame
 
-    def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name):
-        """Create a slider control with debounced updates"""
-        layout = QHBoxLayout()
-        layout.setSpacing(8)
 
-        label = QLabel(label_text)
-        label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(label)
-        label.setFixedWidth(80)
-
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(min_val, max_val)
-        slider.setValue(default_val)
-        slider.setFixedWidth(160)
-        self._update_slider_style(slider)
-
-        value_label = QLabel(str(default_val))
-        value_label.setFont(QFont("Arial", 12))
-        self._update_value_label_style(value_label)
-        value_label.setFixedWidth(30)
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        setattr(self, f'{setting_name}_value_label', value_label)
-
-        # Connect slider to update value label and debounced setting
-        slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
-        slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val)) 
-        
-        layout.addWidget(label)
-        layout.addWidget(slider)
-        layout.addWidget(value_label)
-        layout.addStretch()
-        return slider, layout
 
     # Style update methods (keeping these for theme support)
     def _get_base_button_style(self) -> str:
         return theme_manager.get_button_style("default")
+
+    def _get_stepper_button_style(self) -> str:
+        primary_color = theme_manager.get("primary_color")
+        return f"""
+        QPushButton {{
+            background-color: #2a2a2a;
+            color: {primary_color};
+            border: 2px solid {primary_color};
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+        }}
+        QPushButton:pressed {{
+            background-color: {primary_color};
+            color: black;
+        }}
+        """
 
     def _get_yellow_checked_style(self) -> str:
         primary_color = theme_manager.get("primary_color")
@@ -521,24 +522,6 @@ class CameraControlsWidget(QWidget):
             }
         """)
 
-    def _update_slider_style(self, slider):
-        primary_color = theme_manager.get("primary_color")
-        slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{
-                border: 1px solid #555;
-                height: 6px;
-                background: #333;
-                border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {primary_color};
-                border: 1px solid {primary_color};
-                width: 16px; height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
-            }}
-        """)
-
     def _update_value_label_style(self, label):
         primary_color = theme_manager.get("primary_color")
         label.setStyleSheet(f"border: none; color: {primary_color};")
@@ -546,44 +529,26 @@ class CameraControlsWidget(QWidget):
     def _on_theme_changed(self):
         """Handle theme changes"""
         try:
-            # Update main panel styling
             self._update_panel_style()
             self._update_header_style()
             self._update_status_label_style()
-            
-            # Update section headers
+
             if hasattr(self, 'esp32_header'):
                 self._update_section_header_style(self.esp32_header)
             if hasattr(self, 'actions_header'):
                 self._update_section_header_style(self.actions_header)
-                
-            # Update all value labels (this is what's missing!)
-            if hasattr(self, 'xclk_value_label'):
-                self._update_value_label_style(self.xclk_value_label)
-            
-            # Update all slider value labels
-            for setting_name, slider in getattr(self, 'sliders', {}).items():
-                # Find the associated value label - they should be stored during creation
-                if hasattr(self, f'{setting_name}_value_label'):
-                    value_label = getattr(self, f'{setting_name}_value_label')
-                    self._update_value_label_style(value_label)
-            
-            # Update mirror buttons to use current theme colors instead of hardcoded yellow
+
+            for value_label in getattr(self, 'steppers', {}).values():
+                self._update_value_label_style(value_label)
+
             if hasattr(self, 'h_mirror_btn'):
                 self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
             if hasattr(self, 'v_flip_btn'):
                 self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
-                
-            # Update combobox styling
+
             if hasattr(self, 'resolution_combo'):
                 self._update_combobox_style(self.resolution_combo)
-                
-            # Update all sliders
-            if hasattr(self, 'xclk_slider'):
-                self._update_slider_style(self.xclk_slider)
-            for slider in getattr(self, 'sliders', {}).values():
-                self._update_slider_style(slider)
-                
+
         except Exception as e:
             self.logger.error(f"Error updating camera controls theme: {e}")
 
@@ -599,18 +564,18 @@ class CameraControlsWidget(QWidget):
                 # Update UI controls
                 if "resolution" in settings:
                     self.resolution_combo.setCurrentIndex(settings["resolution"])
-                if "quality" in settings and "quality" in self.sliders:
-                    self.sliders["quality"].setValue(settings["quality"])
-                if "brightness" in settings and "brightness" in self.sliders:
-                    self.sliders["brightness"].setValue(settings["brightness"])
-                if "contrast" in settings and "contrast" in self.sliders:
-                    self.sliders["contrast"].setValue(settings["contrast"])
-                if "saturation" in settings and "saturation" in self.sliders:
-                    self.sliders["saturation"].setValue(settings["saturation"])
+                if "quality" in settings and "quality" in self.steppers:
+                    self.steppers["quality"].setText(str(settings["quality"]))
+                if "brightness" in settings and "brightness" in self.steppers:
+                    self.steppers["brightness"].setText(str(settings["brightness"]))
+                if "contrast" in settings and "contrast" in self.steppers:
+                    self.steppers["contrast"].setText(str(settings["contrast"]))
+                if "saturation" in settings and "saturation" in self.steppers:
+                    self.steppers["saturation"].setText(str(settings["saturation"]))
                 if "h_mirror" in settings:
                     self.h_mirror_btn.setChecked(settings["h_mirror"])
-                if "xclk_freq" in settings:
-                    self.xclk_slider.setValue(settings["xclk_freq"])
+                if "xclk_freq" in settings and "xclk_freq" in self.steppers:
+                    self.steppers["xclk_freq"].setText(str(settings["xclk_freq"]))
                 if "v_flip" in settings:
                     self.v_flip_btn.setChecked(settings["v_flip"])
 
@@ -682,12 +647,12 @@ class CameraControlsWidget(QWidget):
         # Suppress signals while updating UI so each control change
         # doesn't queue a separate debounced request
         self.initializing = True
-        self.xclk_slider.setValue(defaults["xclk_freq"])
+        self.steppers["xclk_freq"].setText(str(defaults["xclk_freq"]))
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
-        self.sliders["quality"].setValue(defaults["quality"])
-        self.sliders["brightness"].setValue(defaults["brightness"])
-        self.sliders["contrast"].setValue(defaults["contrast"])
-        self.sliders["saturation"].setValue(defaults["saturation"])
+        self.steppers["quality"].setText(str(defaults["quality"]))
+        self.steppers["brightness"].setText(str(defaults["brightness"]))
+        self.steppers["contrast"].setText(str(defaults["contrast"]))
+        self.steppers["saturation"].setText(str(defaults["saturation"]))
         self.h_mirror_btn.setChecked(defaults["h_mirror"])
         self.v_flip_btn.setChecked(defaults["v_flip"])
         self.initializing = False
