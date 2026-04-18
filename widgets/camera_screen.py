@@ -191,12 +191,12 @@ class CameraControlsWidget(QWidget):
         self._update_panel_style()
 
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(15, 10, 15, 15)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 8, 12, 8)
+        main_layout.setSpacing(6)
 
         # Header
         self.header = QLabel("CAMERA SETTINGS")
-        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.header.setFont(QFont("Arial", 15, QFont.Weight.Bold))
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_header_style()
         main_layout.addWidget(self.header)
@@ -204,7 +204,6 @@ class CameraControlsWidget(QWidget):
         # ESP32 settings section
         esp32_section = self._create_esp32_section()
         main_layout.addWidget(esp32_section)
-        main_layout.addSpacing(10)
 
         # Actions section
         actions_section = self._create_actions_section()
@@ -241,9 +240,9 @@ class CameraControlsWidget(QWidget):
                 border: none;
                 background-color: rgba(0, 0, 0, 0.9);
                 color: {primary_color};
-                padding: 8px;
+                padding: 5px;
                 border-radius: 6px;
-                margin-bottom: 5px;
+                margin-bottom: 2px;
             }}
         """)
 
@@ -258,21 +257,15 @@ class CameraControlsWidget(QWidget):
         esp32_frame.setObjectName("esp32Frame")
         self._update_section_frame_style(esp32_frame)
         esp32_layout = QVBoxLayout()
-        esp32_layout.setContentsMargins(12, 8, 12, 22)
-        esp32_layout.setSpacing(8)
-
-        self.esp32_header = QLabel("ESP32 SETTINGS")
-        self.esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self.esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.esp32_header)
-        esp32_layout.addWidget(self.esp32_header)
+        esp32_layout.setContentsMargins(10, 6, 10, 8)
+        esp32_layout.setSpacing(5)
 
         # Resolution — combo box, large enough to tap
         res_layout = QHBoxLayout()
         res_label = QLabel("Resolution:")
-        res_label.setFont(QFont("Arial", 12))
+        res_label.setFont(QFont("Arial", 11))
         self._update_control_label_style(res_label)
-        res_label.setFixedWidth(100)
+        res_label.setFixedWidth(90)
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItems([
@@ -281,8 +274,8 @@ class CameraControlsWidget(QWidget):
             "SXGA 1280x1024", "UXGA 1600x1200"
         ])
         self.resolution_combo.setCurrentIndex(6)  # SVGA
-        self.resolution_combo.setFont(QFont("Arial", 13))
-        self.resolution_combo.setMinimumHeight(40)
+        self.resolution_combo.setFont(QFont("Arial", 12))
+        self.resolution_combo.setMinimumHeight(34)
         self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
 
@@ -309,14 +302,14 @@ class CameraControlsWidget(QWidget):
         # Mirror toggle buttons — large tap targets
         mirror_layout = QHBoxLayout()
         mirror_label = QLabel("Mirror:")
-        mirror_label.setFont(QFont("Arial", 12))
+        mirror_label.setFont(QFont("Arial", 11))
         self._update_control_label_style(mirror_label)
-        mirror_label.setFixedWidth(100)
+        mirror_label.setFixedWidth(90)
 
         self.h_mirror_btn = QPushButton("H-Mirror")
         self.h_mirror_btn.setCheckable(True)
-        self.h_mirror_btn.setMinimumHeight(44)
-        self.h_mirror_btn.setFont(QFont("Arial", 12))
+        self.h_mirror_btn.setMinimumHeight(36)
+        self.h_mirror_btn.setFont(QFont("Arial", 11))
         self.h_mirror_btn.clicked.connect(
             lambda checked: self._handle_setting_change("h_mirror", checked)
         )
@@ -325,8 +318,8 @@ class CameraControlsWidget(QWidget):
         self.v_flip_btn = QPushButton("V-Flip")
         self.v_flip_btn.setCheckable(True)
         self.v_flip_btn.setChecked(True)
-        self.v_flip_btn.setMinimumHeight(44)
-        self.v_flip_btn.setFont(QFont("Arial", 12))
+        self.v_flip_btn.setMinimumHeight(36)
+        self.v_flip_btn.setFont(QFont("Arial", 11))
         self.v_flip_btn.clicked.connect(
             lambda checked: self._handle_setting_change("v_flip", checked)
         )
@@ -343,30 +336,30 @@ class CameraControlsWidget(QWidget):
     def _create_stepper_control(self, label_text, min_val, max_val, default_val, setting_name):
         """Create a touch-friendly +/- stepper row for a camera setting"""
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(4)
 
         label = QLabel(label_text)
-        label.setFont(QFont("Arial", 12))
+        label.setFont(QFont("Arial", 11))
         self._update_control_label_style(label)
-        label.setFixedWidth(100)
+        label.setFixedWidth(90)
 
         minus_btn = QPushButton("−")
-        minus_btn.setFixedSize(44, 44)
-        minus_btn.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        minus_btn.setFixedSize(40, 36)
+        minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         minus_btn.setStyleSheet(self._get_stepper_button_style())
 
         value_label = QLabel(str(default_val))
-        value_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        value_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self._update_value_label_style(value_label)
-        value_label.setFixedWidth(48)
+        value_label.setFixedWidth(40)
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         value_label.setProperty("min_val", min_val)
         value_label.setProperty("max_val", max_val)
         value_label.setProperty("setting_name", setting_name)
 
         plus_btn = QPushButton("+")
-        plus_btn.setFixedSize(44, 44)
-        plus_btn.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        plus_btn.setFixedSize(40, 36)
+        plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         plus_btn.setStyleSheet(self._get_stepper_button_style())
 
         def step(delta):
@@ -403,42 +396,37 @@ class CameraControlsWidget(QWidget):
         actions_frame.setObjectName("actionsFrame")
         self._update_section_frame_style(actions_frame)
         actions_layout = QVBoxLayout()
-        actions_layout.setContentsMargins(12, 8, 12, 12)
-        actions_layout.setSpacing(8)
+        actions_layout.setContentsMargins(10, 6, 10, 8)
+        actions_layout.setSpacing(6)
 
-        self.actions_header = QLabel("ACTIONS")
-        self.actions_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self.actions_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.actions_header)
-        actions_layout.addWidget(self.actions_header)
-
-        # Reset button
+        # Reset button — full width
         self.reset_btn = QPushButton("RESET TO DEFAULTS")
-        self.reset_btn.setFont(QFont("Arial", 12))
+        self.reset_btn.setFont(QFont("Arial", 11))
+        self.reset_btn.setMinimumHeight(36)
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         self.reset_btn.setStyleSheet(self._get_base_button_style())
         actions_layout.addWidget(self.reset_btn)
 
-        # Toggle buttons row
+        # Stream + Track side by side
         toggles_row = QHBoxLayout()
-        toggles_row.setSpacing(10)
+        toggles_row.setSpacing(6)
 
-        # Stream button
         self.stream_button.setText("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
-        self.stream_button.setMinimumHeight(40)
+        self.stream_button.setMinimumHeight(44)
         self.stream_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.stream_button.setFont(QFont("Arial", 11))
         self.stream_button.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
         toggles_row.addWidget(self.stream_button, stretch=1)
 
-        # Track button
         self.track_button.setText("Track Person")
         self.track_button.setCheckable(True)
         self.track_button.setChecked(False)
         self.track_button.setEnabled(False)
-        self.track_button.setMinimumHeight(40)
+        self.track_button.setMinimumHeight(44)
         self.track_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.track_button.setFont(QFont("Arial", 11))
         self.track_button.setStyleSheet(self._get_base_button_style() + self._get_green_checked_style())
         toggles_row.addWidget(self.track_button, stretch=1)
 
@@ -531,11 +519,6 @@ class CameraControlsWidget(QWidget):
             self._update_panel_style()
             self._update_header_style()
             self._update_status_label_style()
-
-            if hasattr(self, 'esp32_header'):
-                self._update_section_header_style(self.esp32_header)
-            if hasattr(self, 'actions_header'):
-                self._update_section_header_style(self.actions_header)
 
             for value_label in getattr(self, 'steppers', {}).values():
                 self._update_value_label_style(value_label)
