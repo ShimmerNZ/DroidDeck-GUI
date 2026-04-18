@@ -306,9 +306,7 @@ class HealthScreen(BaseScreen):
             ("dfplayer", "Audio: Disconnected"),
             ("maestro1", "M1: Disconnected"),
             ("maestro2", "M2: Disconnected"),
-            ("camera", "Camera: Offline"),
-            ("controller", "Controller: None"),
-            ("system_state", "State: Normal"),
+
         ]
         
         for key, text in label_configs:
@@ -700,39 +698,6 @@ class HealthScreen(BaseScreen):
             m2_style = f"color: {red}; padding: 1px; background: transparent;"
         
 
-
-        # Camera proxy status
-        camera_proxy = data.get("camera_proxy", {})
-        if camera_proxy.get("running"):
-            updates["camera"] = "Camera: Streaming"
-            camera_style = f"color: {green}; padding: 1px; background: transparent;"
-        else:
-            updates["camera"] = "Camera: Offline"
-            camera_style = f"color: {red}; padding: 1px; background: transparent;"
-
-        # Controller status
-        controller = data.get("controller", {})
-        if controller.get("connected"):
-            ctrl_type = controller.get("controller_type", "Unknown")
-            calibrated = "Cal" if controller.get("calibrated") else "Uncal"
-            updates["controller"] = f"Controller: {ctrl_type} ({calibrated})"
-            ctrl_style = f"color: {green}; padding: 1px; background: transparent;"
-        else:
-            updates["controller"] = "Controller: None"
-            ctrl_style = f"color: {red}; padding: 1px; background: transparent;"
-
-        # System state
-        system_state = data.get("system_state", "")
-        if system_state == "failsafe":
-            updates["system_state"] = "State: FAILSAFE"
-            state_style = f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
-        elif system_state == "normal":
-            updates["system_state"] = "State: Normal"
-            state_style = f"color: {green}; padding: 1px; background: transparent;"
-        else:
-            updates["system_state"] = f"State: {system_state.title()}" if system_state else "State: --"
-            state_style = f"color: {green}; padding: 1px; background: transparent;"
-
         # Apply text updates
         for key, text in updates.items():
             if key in self.status_labels:
@@ -743,12 +708,7 @@ class HealthScreen(BaseScreen):
             self.status_labels["maestro1"].setStyleSheet(m1_style)
         if "maestro2" in self.status_labels:
             self.status_labels["maestro2"].setStyleSheet(m2_style)
-        if "camera" in self.status_labels:
-            self.status_labels["camera"].setStyleSheet(camera_style)
-        if "controller" in self.status_labels:
-            self.status_labels["controller"].setStyleSheet(ctrl_style)
-        if "system_state" in self.status_labels:
-            self.status_labels["system_state"].setStyleSheet(state_style)
+
 
     def _update_graphs(self):
         """Update telemetry graphs with current data"""
