@@ -296,7 +296,6 @@ class CameraControlsWidget(QWidget):
             ("Brightness:", -2, 2,   0, "brightness"),
             ("Contrast:",   -2, 2,   0, "contrast"),
             ("Saturation:", -2, 2,   0, "saturation"),
-            ("X CLK:",      10, 20, 16, "xclk_freq"),
         ]
 
         self.steppers = {}
@@ -574,8 +573,6 @@ class CameraControlsWidget(QWidget):
                     self.steppers["saturation"].setText(str(settings["saturation"]))
                 if "h_mirror" in settings:
                     self.h_mirror_btn.setChecked(settings["h_mirror"])
-                if "xclk_freq" in settings and "xclk_freq" in self.steppers:
-                    self.steppers["xclk_freq"].setText(str(settings["xclk_freq"]))
                 if "v_flip" in settings:
                     self.v_flip_btn.setChecked(settings["v_flip"])
 
@@ -639,7 +636,7 @@ class CameraControlsWidget(QWidget):
         self.settings_debouncer.clear_pending()
 
         defaults = {
-            "xclk_freq": 16, "resolution": 6, "quality": 10,
+            "resolution": 6, "quality": 10,
             "brightness": 0, "contrast": 0, "saturation": 0,
             "h_mirror": False, "v_flip": True
         }
@@ -647,7 +644,6 @@ class CameraControlsWidget(QWidget):
         # Suppress signals while updating UI so each control change
         # doesn't queue a separate debounced request
         self.initializing = True
-        self.steppers["xclk_freq"].setText(str(defaults["xclk_freq"]))
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
         self.steppers["quality"].setText(str(defaults["quality"]))
         self.steppers["brightness"].setText(str(defaults["brightness"]))
@@ -726,9 +722,15 @@ class CameraFeedScreen(BaseScreen):
         # Build UI
         self.init_ui()
 
-        # FIXED: Start processing and check initial status
+        # Start processing and check initial status
         self.image_thread.start_processing()
         self.check_stream_status()
+
+        # Poll camera/status every 5s to surface ESP32 hardware stats
+        from PyQt6.QtCore import QTimer
+        self.esp32_status_timer = QTimer()
+        self.esp32_status_timer.timeout.connect(self._poll_esp32_status)
+        self.esp32_status_timer.start(5000)
 
     def init_ui(self):
         # Video display
@@ -1113,8 +1115,34 @@ class CameraFeedScreen(BaseScreen):
 
         self.send_websocket_message("tracking", state=self.tracking_enabled)
 
+    @error_boundary
+    def _poll_esp32_status(self):
+        """Fetch ESP32 hardware status from proxy and update stats label"""
+        try:
+            response = requests.get(
+                f"{self.camera_proxy_base_url}/camera/status", timeout=2
+            )
+            if response.status_code == 200:
+                s = response.json()
+                rssi      = s.get("rssi", "--")
+                heap_kb   = s.get("free_heap", 0) // 1024
+                psram_kb  = s.get("free_psram", 0) // 1024
+                frames    = s.get("frames_sent", "--")
+                cpu_mhz   = s.get("cpu_mhz", "--")
+                streaming = s.get("streaming", False)
+                state_txt = "Streaming" if streaming else "Idle"
+                self.stats_label.setText(
+                    f"ESP32: {state_txt} | RSSI {rssi}dBm | "
+                    f"Heap {heap_kb}KB | PSRAM {psram_kb}KB | "
+                    f"Frames {frames} | CPU {cpu_mhz}MHz"
+                )
+        except Exception:
+            pass  # Keep last good value if poll fails
+
     def cleanup(self):
         """Cleanup camera screen resources"""
+        if hasattr(self, 'esp32_status_timer'):
+            self.esp32_status_timer.stop()
         if hasattr(self, 'image_thread'):
             self.image_thread.stop_processing()
         
