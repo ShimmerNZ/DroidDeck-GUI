@@ -592,6 +592,12 @@ class DroidDeckApplication(QMainWindow):
                 if voltage > 0:
                     self.header.update_voltage(voltage)
 
+                estimate = data.get("battery_estimate")
+                if estimate and hasattr(self.header, "update_runtime"):
+                    mins = estimate.get("estimated_minutes_remaining", 0.0)
+                    confidence = estimate.get("confidence", "warming_up")
+                    self.header.update_runtime(mins, confidence)
+
             elif msg_type == "failsafe_state":
                 # Backend is telling us the authoritative failsafe state -
                 # update the button without sending anything back

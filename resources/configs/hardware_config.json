@@ -1,0 +1,12 @@
+{
+  "hardware": {
+    "audio": {
+      "volume": 0.4
+    },
+    "battery": {
+      "capacity_mah": 72000,
+      "cell_count": 4,
+      "chemistry": "LiPo"
+    }
+  }
+}

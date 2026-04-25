@@ -484,17 +484,42 @@ class DynamicHeader(QFrame):
 
     def update_voltage(self, voltage: float):
         """Update voltage display with color coding based on level"""
+        self._last_voltage = voltage
+        self._refresh_voltage_label()
+
+    def update_runtime(self, minutes_remaining: float, confidence: str):
+        """Update the run-time estimate shown alongside voltage in the header."""
+        self._runtime_minutes = minutes_remaining
+        self._runtime_confidence = confidence
+        self._refresh_voltage_label()
+
+    def _refresh_voltage_label(self):
+        """Rebuild the voltage label text from stored voltage and runtime values."""
+        voltage = getattr(self, '_last_voltage', None)
+        if voltage is None:
+            return
+
+        mins = getattr(self, '_runtime_minutes', None)
+        confidence = getattr(self, '_runtime_confidence', '')
+
+        if mins is not None and confidence != 'warming_up' and mins > 0:
+            runtime_str = f"  ~{mins:.0f}m"
+        else:
+            runtime_str = ""
+
+        label_text = f"🔋 {voltage:.2f}V{runtime_str}"
+
         if voltage < 13.2:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+            self.voltage_label.setText(label_text)
             self.voltage_label.setStyleSheet("color: #FF4444; font-weight: bold;")
         elif voltage < 14.0:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+            self.voltage_label.setText(label_text)
             self.voltage_label.setStyleSheet("color: #FFAA00; font-weight: bold;")
         elif voltage > 14.0:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+            self.voltage_label.setText(label_text)
             self.voltage_label.setStyleSheet("color: #44FF44;")
         else:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+            self.voltage_label.setText(label_text)
             self.voltage_label.setStyleSheet("color: white;")
 
     def update_wifi_display(self, signal_percent: int, status_text: str, ping_ms: float):
