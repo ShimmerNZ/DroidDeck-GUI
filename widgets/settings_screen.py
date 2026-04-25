@@ -395,7 +395,7 @@ class UpdateThread(QThread):
             self.progress_updated.emit("Installing update...")
             self._update_files(source_dir, self.app_root)
             
-            self.update_completed.emit(True, "Update completed successfully! Please restart the application.")
+            self.update_completed.emit(True, "Update installed successfully. Restart DroidDeck to apply the changes.")
             
         except requests.exceptions.RequestException as e:
             self.update_completed.emit(False, f"Download failed: {str(e)}")
@@ -412,35 +412,43 @@ class UpdateThread(QThread):
                     pass  # Ignore cleanup errors
     
     def _update_files(self, source_dir: Path, target_dir: Path):
-        """Copy files from source to target, protecting config files"""
+        """Copy files from source to target.
+
+        Protected config files are only skipped if they already exist on disk —
+        if a config is missing (e.g. new install or new config added in an update)
+        it will be installed from the downloaded defaults.
+        """
+        installed_configs = []
         for item in source_dir.rglob('*'):
             if item.is_file():
-                # Get relative path from source
                 rel_path = item.relative_to(source_dir)
                 target_path = target_dir / rel_path
-                
-                # Check if this file is protected
+
                 if self._is_protected(rel_path):
-                    continue  # Skip protected files
-                
-                # Create parent directory if needed
+                    if target_path.exists():
+                        continue  # Existing config — leave the user's version alone
+                    else:
+                        installed_configs.append(str(rel_path))
+                        # Fall through to copy — installs missing default config
+
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # Copy file
                 try:
                     shutil.copy2(item, target_path)
                 except Exception as e:
-                    # Log but don't fail on individual file errors
                     print(f"Warning: Could not update {rel_path}: {e}")
-    
+
+        if installed_configs:
+            self.progress_updated.emit(
+                f"Installed {len(installed_configs)} missing config(s): "
+                + ", ".join(installed_configs)
+            )
+
     def _is_protected(self, rel_path: Path) -> bool:
-        """Check if a file path should be protected from updates"""
+        """Return True if this path is a protected config file."""
         path_str = str(rel_path).replace('\\', '/')
-        
         for protected in self.PROTECTED_PATHS:
             if path_str.startswith(protected) or path_str == protected:
                 return True
-        
         return False
 
 
@@ -1624,20 +1632,33 @@ class SettingsScreen(BaseScreen):
     
     def _on_update_complete(self, success: bool, message: str):
         """Handle update completion"""
-        # Close progress dialog
         if hasattr(self, 'update_progress'):
             self.update_progress.close()
         
-        # Show result message
         if success:
-            QMessageBox.information(
+            reply = QMessageBox.question(
                 self,
                 "Update Complete",
-                message
+                f"{message}\n\nRestart DroidDeck now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
             )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._restart_application()
         else:
+            QMessageBox.warning(self, "Update Failed", message)
+
+    def _restart_application(self):
+        """Restart DroidDeck in-place by re-executing the current process."""
+        try:
+            self.logger.info("Restarting DroidDeck after update...")
+            # Give Qt a moment to finish any pending events before we replace the process
+            QApplication.processEvents()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            self.logger.error(f"Restart failed: {e}")
             QMessageBox.warning(
                 self,
-                "Update Failed",
-                message
+                "Restart Failed",
+                f"Could not restart automatically: {e}\n\nPlease close and reopen DroidDeck manually."
             )
