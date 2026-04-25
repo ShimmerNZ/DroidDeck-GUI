@@ -545,15 +545,15 @@ class HealthScreen(BaseScreen):
                 # stale "Disconnected/Simulated" values between real telemetry packets.
                 hw = data.get("hardware", {})
                 mixer_data = {
-                    "maestro1":        hw.get("maestro1", getattr(self, "_last_m1", {})),
-                    "maestro2":        hw.get("maestro2", getattr(self, "_last_m2", {})),
-                    "adc_available":   getattr(self, "_last_adc_available", False),
-                    "audio_system":    getattr(self, "_last_audio_system", {}),
-                    "cpu":             data.get("cpu", "--"),
-                    "memory":          data.get("memory", "--"),
-                    "temperature":     data.get("temperature", "--"),
-                    "current_total":   data.get("current_total", 0.0),
-                    "battery_estimate": getattr(self, "_last_battery_estimate", None),
+                    "maestro1":         hw.get("maestro1", getattr(self, "_last_m1", {})),
+                    "maestro2":         hw.get("maestro2", getattr(self, "_last_m2", {})),
+                    "adc_available":    getattr(self, "_last_adc_available", False),
+                    "audio_system":     getattr(self, "_last_audio_system", {}),
+                    "cpu":              data.get("cpu", "--"),
+                    "memory":           data.get("memory", "--"),
+                    "temperature":      data.get("temperature", "--"),
+                    "current_total":    data.get("current_total", 0.0),
+                    "battery_estimate": data.get("battery_estimate"),
                 }
                 self.status_update_signal.emit(mixer_data)
                 return
@@ -566,7 +566,6 @@ class HealthScreen(BaseScreen):
             self._last_m2 = data.get("maestro2", {})
             self._last_adc_available = data.get("adc_available", False)
             self._last_audio_system = data.get("audio_system", {})
-            self._last_battery_estimate = data.get("battery_estimate", None)
 
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
 

@@ -581,13 +581,13 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.blockSignals(False)
     
     def _update_header_from_telemetry(self, message: str):
-        """Update header voltage from telemetry, and handle failsafe state sync"""
+        """Update header voltage and runtime from backend messages"""
         try:
             import json
             data = json.loads(message)
             msg_type = data.get("type")
 
-            if msg_type == "telemetry":
+            if msg_type == "system_status":
                 voltage = data.get("battery_voltage", 0.0)
                 if voltage > 0:
                     self.header.update_voltage(voltage)
