@@ -7,6 +7,7 @@ Displays system telemetry, battery status, network quality, and performance grap
 
 import json
 import time
+import requests
 from collections import deque
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget, 
                             QGridLayout, QMessageBox, QPushButton, QGroupBox)
@@ -16,6 +17,7 @@ import pyqtgraph as pg
 
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
+from core.config_manager import config_manager
 from core.utils import error_boundary
 from widgets.voltage_alert_splash import VoltageAlertSplash
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
@@ -73,6 +75,16 @@ class HealthScreen(BaseScreen):
         self.status_poll_timer = QTimer()
         self.status_poll_timer.timeout.connect(self._request_system_status)
         self.status_poll_timer.start(2000)  # Poll every 2 seconds
+
+        # Camera proxy URL for RSSI polling
+        wave_config = config_manager.get_wave_config()
+        raw_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
+        self._camera_proxy_base = raw_url.replace("/stream", "")
+
+        # Poll ESP32 RSSI every 10 seconds
+        self.rssi_poll_timer = QTimer()
+        self.rssi_poll_timer.timeout.connect(self._poll_camera_rssi)
+        self.rssi_poll_timer.start(10000)
 
     def _check_and_enable_alerts(self):
         """Check if application is ready and enable voltage alerts"""
@@ -304,6 +316,7 @@ class HealthScreen(BaseScreen):
             ("current_total", "Total Current: 0.0A"),
             ("adc_info", "ADC: 4-Channel Mode"),
             ("dfplayer", "Audio: Disconnected"),
+            ("camera_rssi", "Camera WiFi: --"),
             ("maestro1", "M1: Disconnected"),
             ("maestro2", "M2: Disconnected"),
 
@@ -798,8 +811,35 @@ class HealthScreen(BaseScreen):
         
         return f"{voltage_trend} | Est. Capacity: {capacity}"
 
+    @error_boundary
+    def _poll_camera_rssi(self):
+        """Poll ESP32 RSSI from camera proxy status endpoint"""
+        try:
+            response = requests.get(f"{self._camera_proxy_base}/camera/status", timeout=2)
+            if response.status_code == 200:
+                rssi = response.json().get("rssi", "--")
+                if "camera_rssi" in self.status_labels:
+                    green = theme_manager.get("green")
+                    red = theme_manager.get("red")
+                    if isinstance(rssi, (int, float)):
+                        style = f"color: {green}; padding: 1px; background: transparent;"
+                        if rssi < -75:
+                            style = "color: orange; padding: 1px; background: transparent;"
+                        elif rssi < -85:
+                            style = f"color: {red}; padding: 1px; background: transparent;"
+                        self.status_labels["camera_rssi"].setText(f"Camera WiFi: {rssi}dBm")
+                    else:
+                        self.status_labels["camera_rssi"].setText("Camera WiFi: --")
+                        style = f"color: {green}; padding: 1px; background: transparent;"
+                    self.status_labels["camera_rssi"].setStyleSheet(style)
+        except Exception:
+            pass  # Keep last value if poll fails
+
     def cleanup(self):
         """Cleanup health screen resources"""
+        if hasattr(self, 'rssi_poll_timer'):
+            self.rssi_poll_timer.stop()
+
         # Close any active voltage splash
         if hasattr(self, '_active_voltage_splash'):
             self._active_voltage_splash.close_splash()

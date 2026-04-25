@@ -216,7 +216,7 @@
       "behavior": "toggle_servo",
       "target": "m1_ch3",
       "position_1": 1308,
-      "position_2": 1580,
+      "position_2": 1600,
       "trigger_mode": "hold"
     },
     {

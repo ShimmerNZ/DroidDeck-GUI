@@ -192,7 +192,7 @@ class CameraControlsWidget(QWidget):
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(12, 8, 12, 8)
-        main_layout.setSpacing(6)
+        main_layout.setSpacing(8)
 
         # Header
         self.header = QLabel("CAMERA SETTINGS")
@@ -257,8 +257,8 @@ class CameraControlsWidget(QWidget):
         esp32_frame.setObjectName("esp32Frame")
         self._update_section_frame_style(esp32_frame)
         esp32_layout = QVBoxLayout()
-        esp32_layout.setContentsMargins(10, 6, 10, 8)
-        esp32_layout.setSpacing(5)
+        esp32_layout.setContentsMargins(12, 10, 12, 12)
+        esp32_layout.setSpacing(8)
 
         # Resolution — combo box, large enough to tap
         res_layout = QHBoxLayout()
@@ -308,7 +308,8 @@ class CameraControlsWidget(QWidget):
 
         self.h_mirror_btn = QPushButton("H-Mirror")
         self.h_mirror_btn.setCheckable(True)
-        self.h_mirror_btn.setMinimumHeight(36)
+        self.h_mirror_btn.setMinimumHeight(40)
+        self.h_mirror_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.h_mirror_btn.setFont(QFont("Arial", 11))
         self.h_mirror_btn.clicked.connect(
             lambda checked: self._handle_setting_change("h_mirror", checked)
@@ -318,7 +319,8 @@ class CameraControlsWidget(QWidget):
         self.v_flip_btn = QPushButton("V-Flip")
         self.v_flip_btn.setCheckable(True)
         self.v_flip_btn.setChecked(True)
-        self.v_flip_btn.setMinimumHeight(36)
+        self.v_flip_btn.setMinimumHeight(40)
+        self.v_flip_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.v_flip_btn.setFont(QFont("Arial", 11))
         self.v_flip_btn.clicked.connect(
             lambda checked: self._handle_setting_change("v_flip", checked)
@@ -344,21 +346,23 @@ class CameraControlsWidget(QWidget):
         label.setFixedWidth(90)
 
         minus_btn = QPushButton("−")
-        minus_btn.setFixedSize(40, 36)
+        minus_btn.setMinimumSize(44, 40)
+        minus_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         minus_btn.setStyleSheet(self._get_stepper_button_style())
 
         value_label = QLabel(str(default_val))
         value_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self._update_value_label_style(value_label)
-        value_label.setFixedWidth(40)
+        value_label.setFixedWidth(52)
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         value_label.setProperty("min_val", min_val)
         value_label.setProperty("max_val", max_val)
         value_label.setProperty("setting_name", setting_name)
 
         plus_btn = QPushButton("+")
-        plus_btn.setFixedSize(40, 36)
+        plus_btn.setMinimumSize(44, 40)
+        plus_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         plus_btn.setStyleSheet(self._get_stepper_button_style())
 
@@ -373,10 +377,10 @@ class CameraControlsWidget(QWidget):
         plus_btn.clicked.connect(lambda: step(1))
 
         row.addWidget(label)
+        row.addStretch()
         row.addWidget(minus_btn)
         row.addWidget(value_label)
         row.addWidget(plus_btn)
-        row.addStretch()
         return row, value_label
 
     def _handle_setting_change(self, setting_name, value):
@@ -396,8 +400,8 @@ class CameraControlsWidget(QWidget):
         actions_frame.setObjectName("actionsFrame")
         self._update_section_frame_style(actions_frame)
         actions_layout = QVBoxLayout()
-        actions_layout.setContentsMargins(10, 6, 10, 8)
-        actions_layout.setSpacing(6)
+        actions_layout.setContentsMargins(12, 10, 12, 12)
+        actions_layout.setSpacing(8)
 
         # Reset button — full width
         self.reset_btn = QPushButton("RESET TO DEFAULTS")
@@ -709,11 +713,6 @@ class CameraFeedScreen(BaseScreen):
         self.image_thread.start_processing()
         self.check_stream_status()
 
-        # Poll camera/status every 5s to surface ESP32 hardware stats
-        from PyQt6.QtCore import QTimer
-        self.esp32_status_timer = QTimer()
-        self.esp32_status_timer.timeout.connect(self._poll_esp32_status)
-        self.esp32_status_timer.start(5000)
 
     def init_ui(self):
         # Video display
@@ -729,11 +728,6 @@ class CameraFeedScreen(BaseScreen):
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.stats_label.setFixedWidth(640)
 
-        # ESP32 hardware stats (updated by 5s poll)
-        self.esp32_stats_label = QLabel("ESP32: --")
-        self._update_stats_label_style_for(self.esp32_stats_label)
-        self.esp32_stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.esp32_stats_label.setFixedWidth(640)
 
         # Create control buttons
         self.setup_control_buttons()
@@ -862,10 +856,8 @@ class CameraFeedScreen(BaseScreen):
         """Layout with video display left and controls right"""
         video_layout = QVBoxLayout()
         video_layout.setContentsMargins(0, 15, 0, 0)
-        video_layout.setSpacing(0)
         video_layout.addWidget(self.video_label)
         video_layout.addWidget(self.stats_label)
-        video_layout.addWidget(self.esp32_stats_label)
 
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(20, 15, 0, 0)
@@ -897,8 +889,6 @@ class CameraFeedScreen(BaseScreen):
         try:
             self._update_video_label_style()
             self._update_stats_label_style()
-            if hasattr(self, "esp32_stats_label"):
-                self._update_stats_label_style_for(self.esp32_stats_label)
             self._update_stream_button_style()
             self._update_tracking_button_style()
             self.logger.info(f"Camera screen updated for theme: {theme_manager.get_display_name()}")
@@ -1108,29 +1098,10 @@ class CameraFeedScreen(BaseScreen):
 
         self.send_websocket_message("tracking", state=self.tracking_enabled)
 
-    @error_boundary
-    def _poll_esp32_status(self):
-        """Fetch ESP32 hardware status from proxy and update ESP32 stats label"""
-        try:
-            response = requests.get(
-                f"{self.camera_proxy_base_url}/camera/status", timeout=2
-            )
-            if response.status_code == 200:
-                s = response.json()
-                rssi     = s.get("rssi", "--")
-                heap_kb  = s.get("free_heap", 0) // 1024
-                psram_kb = s.get("free_psram", 0) // 1024
-                cpu_mhz  = s.get("cpu_mhz", "--")
-                self.esp32_stats_label.setText(
-                    f"ESP32: RSSI {rssi}dBm | Heap {heap_kb}KB | PSRAM {psram_kb}KB | CPU {cpu_mhz}MHz"
-                )
-        except Exception:
-            pass  # Keep last good value if poll fails
+
 
     def cleanup(self):
         """Cleanup camera screen resources"""
-        if hasattr(self, 'esp32_status_timer'):
-            self.esp32_status_timer.stop()
         if hasattr(self, 'image_thread'):
             self.image_thread.stop_processing()
         

@@ -9,129 +9,129 @@
     "max_position": 13.0
   },
   "m2_ch0": {
-    "home": 1500,
+    "home": 1400,
     "accel": 0,
-    "min": 992,
+    "min": 800,
     "max": 2000,
-    "name": "Left Arm Raise"
+    "name": "L Arm Raise"
   },
   "m2_ch1": {
-    "home": 1500,
+    "home": 1400,
     "accel": 0,
-    "min": 992,
+    "min": 800,
     "max": 2000,
-    "name": "Right Arm Raise"
+    "name": "R Arm Raise"
   },
   "m2_ch2": {
-    "home": 1500,
-    "min": 992,
-    "max": 2000,
+    "home": 1200,
+    "min": 1104,
+    "max": 1424,
     "name": "Neck Raise"
   },
   "m2_ch3": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch4": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch5": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch6": {
-    "home": 1500,
-    "min": 1600,
+    "home": 2200,
+    "min": 1408,
     "max": 2200,
     "name": "Left Eyelid"
   },
   "m2_ch7": {
-    "home": 1500,
+    "home": 800,
     "min": 800,
-    "max": 1200,
+    "max": 1599,
     "name": "Right Eyelid"
   },
   "m2_ch8": {
-    "home": 1500,
+    "home": 2000,
     "min": 992,
     "max": 2000,
     "name": "Left Focus"
   },
   "m2_ch9": {
-    "home": 1500,
+    "home": 2000,
     "min": 992,
     "max": 2000,
     "name": "Right Focus"
   },
   "m2_ch10": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch11": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch12": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": "Left Track"
   },
   "m2_ch13": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": "Right Track"
   },
   "m2_ch14": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch15": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch16": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch17": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch18": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch19": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
   },
   "m2_ch20": {
-    "home": 1500,
+    "home": 992,
     "min": 992,
     "max": 2000,
     "name": ""
@@ -162,27 +162,27 @@
     "name": "L Wrist"
   },
   "m1_ch0": {
-    "home": 1261,
-    "min": 992,
-    "max": 2000,
+    "home": 1099,
+    "min": 848,
+    "max": 1472,
     "name": "Head Tilt"
   },
   "m1_ch1": {
-    "home": 1500,
+    "home": 1544,
     "min": 992,
-    "max": 2000,
+    "max": 2096,
     "name": "Head Pan"
   },
   "m1_ch2": {
-    "home": 1500,
-    "min": 992,
-    "max": 2000,
+    "home": 1739,
+    "min": 1376,
+    "max": 2200,
     "name": "Left Eye Tilt"
   },
   "m1_ch3": {
-    "home": 1500,
-    "min": 992,
-    "max": 2000,
+    "home": 1231,
+    "min": 800,
+    "max": 1600,
     "name": "Right Eye Tilt"
   },
   "m1_ch4": {
