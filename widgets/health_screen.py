@@ -7,6 +7,7 @@ Displays system telemetry, battery status, network quality, and performance grap
 
 import json
 import time
+import requests
 from collections import deque
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget, 
                             QGridLayout, QMessageBox, QPushButton, QGroupBox)
@@ -16,10 +17,10 @@ import pyqtgraph as pg
 
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
+from core.config_manager import config_manager
 from core.utils import error_boundary
 from widgets.voltage_alert_splash import VoltageAlertSplash
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
-
 
 
 class HealthScreen(BaseScreen):
@@ -46,17 +47,11 @@ class HealthScreen(BaseScreen):
         self.setFixedWidth(1180)
         self.startup_complete = False
         
-        # Rate limiting for telemetry updates
-        self.last_telemetry_update = 0
-        self.telemetry_update_interval = 0.25
-        
         # Voltage alarm state tracking
         self.last_voltage_alarm = None
         
         # Track start time for relative time calculation
         self.start_time = time.time()
-        
-
         
         # Connect WebSocket for telemetry updates
         if self.websocket:
@@ -67,7 +62,6 @@ class HealthScreen(BaseScreen):
         self.status_update_signal.connect(self._update_status_displays)
         
         self.init_ui()
-        
 
         from PyQt6.QtCore import QTimer
         self.startup_timer = QTimer()
@@ -79,27 +73,32 @@ class HealthScreen(BaseScreen):
         self.status_poll_timer.timeout.connect(self._request_system_status)
         self.status_poll_timer.start(2000)  # Poll every 2 seconds
 
+        # Camera proxy URL for RSSI polling
+        wave_config = config_manager.get_wave_config()
+        raw_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
+        self._camera_proxy_base = raw_url.replace("/stream", "")
+
+        # Poll ESP32 RSSI every 10 seconds
+        self.rssi_poll_timer = QTimer()
+        self.rssi_poll_timer.timeout.connect(self._poll_camera_rssi)
+        self.rssi_poll_timer.start(10000)
+
     def _check_and_enable_alerts(self):
         """Check if application is ready and enable voltage alerts"""
         try:
-            # Check multiple conditions for application readiness
             app_ready = False
             
             if (hasattr(self, 'parent') and self.parent() and 
                 hasattr(self.parent(), 'isVisible') and 
                 self.parent().isVisible()):
-                
-                # Additional check - make sure we're not in startup/loading screen
-                # You can add more specific checks here based on your app structure
                 app_ready = True
             
             if app_ready:
                 self.voltage_alerts_enabled = True
-                self.startup_complete = True  # Set both flags
+                self.startup_complete = True
                 self.startup_timer.stop()
                 self.logger.info("Voltage alerts enabled - application fully loaded")
             else:
-                # Keep checking but add a maximum timeout
                 if not hasattr(self, '_startup_check_count'):
                     self._startup_check_count = 0
                 
@@ -113,7 +112,6 @@ class HealthScreen(BaseScreen):
         except Exception as e:
             self.logger.warning(f"Error checking application state: {e}")
 
-
     def _enable_voltage_alerts(self):
         """Enable voltage alerts after startup is complete"""
         self.startup_complete = True
@@ -121,19 +119,13 @@ class HealthScreen(BaseScreen):
 
     def check_voltage_alarms(self, voltage: float):
         """Check and display voltage alarms when thresholds are crossed"""
-        # Simple flag check at the start
         if not getattr(self, 'voltage_alerts_enabled', False):
-            return  # Skip all voltage alerts until enabled
+            return
         
     def init_ui(self):
         """Initialize health monitoring UI with graphs and status displays"""
-        # Main graph for battery voltage and current
         self.setup_telemetry_graph()
-        
-        # Status display labels
         self.setup_status_displays()
-        
-        # Layout assembly with styled control panel
         self.setup_layout()
     
     def setup_telemetry_graph(self):
@@ -150,7 +142,6 @@ class HealthScreen(BaseScreen):
         self.graph_widget.setLimits(yMin=0, yMax=20)
         self.graph_widget.setMouseEnabled(x=False, y=False)
         
-        # Add legend
         self.graph_widget.addLegend(offset=(10, 20))
         self.graph_widget.getPlotItem().setContentsMargins(15, 15, 15, 15)
         
@@ -162,7 +153,6 @@ class HealthScreen(BaseScreen):
         self.current_a2_data = deque(maxlen=self.max_data_points)
         self.time_data = deque(maxlen=self.max_data_points)
         
-        # Voltage curve (primary Y-axis) - use theme green
         green = theme_manager.get("green")
         self.voltage_curve = self.graph_widget.plot(
             pen=pg.mkPen(color=green, width=4),
@@ -180,10 +170,8 @@ class HealthScreen(BaseScreen):
         self.current_view.setYRange(0, 70)  
         self.current_view.setLimits(yMin=-5, yMax=100)
         
-        # Link the views
         self.graph_widget.getPlotItem().getViewBox().sigResized.connect(self.update_views)
         
-        # Current plots with theme colors
         primary = theme_manager.get("primary_color")
         primary_light = theme_manager.get("primary_light")
         
@@ -201,7 +189,7 @@ class HealthScreen(BaseScreen):
         )
         self.current_view.addItem(self.current_a1_plot)
 
-        orange = "#FF8C00"  # Orange color for electronics
+        orange = "#FF8C00"
         self.current_a2_plot = pg.PlotCurveItem(
             pen=pg.mkPen(color=orange, width=3), 
             name="Electronics Current",
@@ -209,7 +197,6 @@ class HealthScreen(BaseScreen):
         )
         self.current_view.addItem(self.current_a2_plot)
         
-        # Add current items to legend
         legend = self.graph_widget.addLegend(offset=(30, 30))
         legend.addItem(self.current_a0_plot, "Left Track (A0)")
         legend.addItem(self.current_a1_plot, "Right Track (A1)")
@@ -226,7 +213,6 @@ class HealthScreen(BaseScreen):
 
     def _create_control_panel(self):
         """Create the themed health monitoring control panel"""
-        # Main panel with theme styling
         control_panel = QWidget()
         control_panel.setFixedWidth(340)
         self._update_control_panel_style(control_panel)
@@ -235,20 +221,17 @@ class HealthScreen(BaseScreen):
         panel_layout.setContentsMargins(15, 5, 15, 15)
         panel_layout.setSpacing(15)
         
-        # Header with theme styling
         self.header = QLabel("SYSTEM HEALTH")
         self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_header_style()
         panel_layout.addWidget(self.header)
         
-        # Status display section
         status_section = self._create_status_display_section()
         panel_layout.addWidget(status_section)
         
         panel_layout.addSpacing(10)
         
-        # System controls section
         system_section = self._create_system_controls_section()
         panel_layout.addWidget(system_section)
         
@@ -293,29 +276,24 @@ class HealthScreen(BaseScreen):
         status_layout.setContentsMargins(12, 8, 12, 18)
         status_layout.setSpacing(4)
         
-        # Status header
         self.status_header = QLabel("STATUS")
         self.status_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.status_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_section_header_style(self.status_header)
         status_layout.addWidget(self.status_header)
         
-        # Create status labels within the panel
         label_configs = [
-            ("cpu", "CPU: 0%"),
-            ("mem", "Memory: 0%"),
-            ("temp", "Temp: 0°C"),
-            ("battery", "Battery: 0.0V"),
-            ("runtime", "Runtime: --m remaining"),
-            ("current_total", "Total Current: 0.0A"),
-            ("adc_info", "ADC: 4-Channel Mode"),
-            ("dfplayer", "Audio: Disconnected"),
-            ("maestro1", "M1: Disconnected"),
-            ("maestro2", "M2: Disconnected"),
-            ("serial_fps", "Mixer: --Hz"),
-            ("blend_ms", "Blend: --ms"),
-            ("serial_cmds", "Cmds/s: --"),
-            ("active_ch", "Active Ch: --"),
+            ("cpu",          "CPU: 0%"),
+            ("mem",          "Memory: 0%"),
+            ("temp",         "Temp: 0°C"),
+            ("battery",      "Battery: 0.0V"),
+            ("runtime",      "Runtime: --m remaining"),
+            ("current_total","Total Current: 0.0A"),
+            ("adc_info",     "ADC: 4-Channel Mode"),
+            ("dfplayer",     "Audio: Disconnected"),
+            ("camera_rssi",  "Camera WiFi: --"),
+            ("maestro1",     "M1: Disconnected"),
+            ("maestro2",     "M2: Disconnected"),
         ]
         
         for key, text in label_configs:
@@ -359,14 +337,12 @@ class HealthScreen(BaseScreen):
         system_layout.setContentsMargins(12, 8, 12, 12)
         system_layout.setSpacing(6)
         
-        # System header
         self.system_header = QLabel("NETWORK")
         self.system_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.system_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_section_header_style(self.system_header)
         system_layout.addWidget(self.system_header)
         
-        # Bandwidth test button with themed styling
         self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
@@ -421,16 +397,13 @@ class HealthScreen(BaseScreen):
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
         try:
-            # Update control panel
             if hasattr(self, 'control_panel'):
                 self._update_control_panel_style(self.control_panel)
             if hasattr(self, 'header'):
                 self._update_header_style()
             
-            # Update graph theme
             self._update_graph_theme()
             
-            # Update graph plot colors
             if hasattr(self, 'voltage_curve'):
                 green = theme_manager.get("green")
                 self.voltage_curve.setPen(pg.mkPen(color=green, width=4))
@@ -438,19 +411,17 @@ class HealthScreen(BaseScreen):
             if hasattr(self, 'current_a0_plot') and hasattr(self, 'current_a1_plot'):
                 primary = theme_manager.get("primary_color")
                 primary_light = theme_manager.get("primary_light")
-                orange = "#FF8C00"  # Orange color for electronics
+                orange = "#FF8C00"
                 self.current_a0_plot.setPen(pg.mkPen(color=primary, width=3))
                 self.current_a1_plot.setPen(pg.mkPen(color=primary_light, width=3))
                 if hasattr(self, 'current_a2_plot'):
                     self.current_a2_plot.setPen(pg.mkPen(color=orange, width=3))
 
-            # Update status section
             if hasattr(self, 'status_frame'):
                 self._update_status_frame_style()
             if hasattr(self, 'status_header'):
                 self._update_section_header_style(self.status_header)
             
-            # Update system section
             if hasattr(self, 'system_frame'):
                 self._update_system_frame_style()
             if hasattr(self, 'system_header'):
@@ -458,11 +429,9 @@ class HealthScreen(BaseScreen):
             if hasattr(self, 'bandwidth_btn'):
                 self._update_bandwidth_button_style()
             
-            # Update all status labels
             for label in self.status_labels.values():
                 self._update_status_label_style(label)
             
-            # Update graph frame
             if hasattr(self, 'graph_frame'):
                 panel_bg = theme_manager.get("panel_bg")
                 self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
@@ -476,24 +445,19 @@ class HealthScreen(BaseScreen):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(98, 19, 15, 6)
         
-        # Graph container - full height with theme styling
         self.graph_frame = QFrame()
-        primary = theme_manager.get("primary_color")
         panel_bg = theme_manager.get("panel_bg")
         self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
         graph_layout = QVBoxLayout(self.graph_frame)
         graph_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Graph sizing - larger and full height
         self.graph_widget.setFixedWidth(690)
-        self.graph_widget.setFixedHeight(455)  # Increased height
+        self.graph_widget.setFixedHeight(455)
         
         graph_layout.addWidget(self.graph_widget)
         
-        # Create styled control panel
         control_panel = self._create_control_panel()
         
-        # Add to main layout
         main_layout.addWidget(self.graph_frame)
         main_layout.addWidget(control_panel)
         
@@ -508,20 +472,14 @@ class HealthScreen(BaseScreen):
     @error_boundary
     def start_bandwidth_test(self, checked=False):
         """Start bandwidth test with progress splash screen"""
-        # Disable button during test
         self.bandwidth_btn.setEnabled(False)
         self.bandwidth_btn.setText("TESTING...")
         
-        # Determine camera proxy URL (you can adjust this based on your config)
-        camera_proxy_url = "http://10.1.1.230:8081"  # Or get from your config
-        
-        # Show the bandwidth test splash screen
+        camera_proxy_url = "http://10.1.1.230:8081"
         results = show_bandwidth_test_splash(self, camera_proxy_url)
         
-        # Re-enable button
         self.bandwidth_btn.setEnabled(True)
         self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
-        
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
         """Get voltage status with theme color coding"""
@@ -547,13 +505,11 @@ class HealthScreen(BaseScreen):
         if not maestro_data or not maestro_data.get('connected', False):
             return f"{maestro_name}: Disconnected", f"color: {red}; background: transparent;"
         
-        # Extract detailed status
         channels = maestro_data.get('channel_count', 0)
         error_flags = maestro_data.get('error_flags', {})
         script_status = maestro_data.get('script_status', {}).get('status', 'unknown')
         moving = maestro_data.get('moving', False)
         
-        # Check for errors
         has_errors = error_flags.get('has_errors', False)
         if has_errors:
             error_details = error_flags.get('details', {})
@@ -578,87 +534,54 @@ class HealthScreen(BaseScreen):
 
     def handle_telemetry(self, message: str):
         """Process incoming telemetry data and update displays"""
-        current_time = time.time()
-        
-        # Rate limiting
-        if current_time - self.last_telemetry_update < self.telemetry_update_interval:
-            return
-        
         try:
             data = json.loads(message)
             msg_type = data.get("type")
 
-            # Accept both telemetry and system_status message types
-            if msg_type not in ("telemetry", "system_status"):
-                return
-
-            # Normalise system_status into the same flat shape as telemetry
             if msg_type == "system_status":
+                # Extract only mixer performance stats from system_status polls.
+                # Do not touch graph data or connection labels — system_status does
+                # not carry ADC/voltage/maestro state, so merging it would flash
+                # stale "Disconnected/Simulated" values between real telemetry packets.
                 hw = data.get("hardware", {})
-                m1 = hw.get("maestro1", {})
-                m2 = hw.get("maestro2", {})
-                data = {
-                    "type": "telemetry",
-                    "cpu": data.get("cpu", "--"),
-                    "memory": data.get("memory", "--"),
-                    "temperature": data.get("temperature", "--"),
-                    "battery_voltage": data.get("battery_voltage", 0.0),
-                    "current_left_track": data.get("current_left_track", 0.0),
-                    "current_right_track": data.get("current_right_track", 0.0),
+                mixer_data = {
+                    "maestro1":      hw.get("maestro1", getattr(self, "_last_m1", {})),
+                    "maestro2":      hw.get("maestro2", getattr(self, "_last_m2", {})),
+                    "adc_available": getattr(self, "_last_adc_available", False),
+                    "audio_system":  getattr(self, "_last_audio_system", {}),
+                    "cpu":           data.get("cpu", "--"),
+                    "memory":        data.get("memory", "--"),
+                    "temperature":   data.get("temperature", "--"),
                     "current_total": data.get("current_total", 0.0),
-                    "adc_available": data.get("adc_available", False),
-                    "audio_system": data.get("audio_system", {}),
-                    "maestro1": {
-                        "connected": m1.get("connected", False),
-                        "channel_count": m1.get("channel_count", 0),
-                        "error_flags": m1.get("error_flags", {"has_errors": False}),
-                    },
-                    "maestro2": {
-                        "connected": m2.get("connected", False),
-                        "channel_count": m2.get("channel_count", 0),
-                        "error_flags": m2.get("error_flags", {"has_errors": False}),
-                    },
-                    # Mixer stats pass through unchanged
-                    "serial_fps": data.get("serial_fps"),
-                    "blend_ms": data.get("blend_ms"),
-                    "serial_cmds_sec": data.get("serial_cmds_sec"),
-                    "active_channels": data.get("active_channels"),
                 }
-            
-            self.logger.debug("Processing telemetry data")
-
-            # system_status only carries mixer stats — skip graph/voltage updates
-            # to avoid injecting zeros into the graph data
-            if msg_type == "system_status":
-                self.status_update_signal.emit(data)
-                self.last_telemetry_update = current_time
+                self.status_update_signal.emit(mixer_data)
                 return
 
-            # Emit signals for thread-safe updates
+            if msg_type != "telemetry":
+                return
+
+            # Cache connection/ADC state so system_status polls can carry it forward
+            self._last_m1 = data.get("maestro1", {})
+            self._last_m2 = data.get("maestro2", {})
+            self._last_adc_available = data.get("adc_available", False)
+            self._last_audio_system = data.get("audio_system", {})
+
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
-            
+
             if battery_voltage > 0:
                 self.voltage_update_signal.emit(battery_voltage)
-            
-            # Emit status updates
+
             self.status_update_signal.emit(data)
-            
-            current_a0 = data.get("current_left_track",0.0)
-            current_a1 = data.get("current_right_track",0.0)
-            current_a2 = data.get("current_total",0.0)
-             
+
+            current_time = time.time()
             relative_time = current_time - self.start_time
-            
             self.battery_voltage_data.append(float(battery_voltage))
-            self.current_a0_data.append(float(current_a0))
-            self.current_a1_data.append(float(current_a1))
-            self.current_a2_data.append(float(current_a2))
+            self.current_a0_data.append(float(data.get("current_left_track", 0.0)))
+            self.current_a1_data.append(float(data.get("current_right_track", 0.0)))
+            self.current_a2_data.append(float(data.get("current_total", 0.0)))
             self.time_data.append(relative_time)
-            
-            # Update graphs
+
             self._update_graphs()
-            
-            self.last_telemetry_update = current_time
 
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON decode failed: {e}")
@@ -671,12 +594,10 @@ class HealthScreen(BaseScreen):
         self.status_labels["battery"].setText(battery_text)
         self.status_labels["battery"].setStyleSheet(battery_style)
         
-        # Only check voltage alarms if startup is complete AND alerts are enabled
         if (getattr(self, 'voltage_alerts_enabled', False) and 
             getattr(self, 'startup_complete', False)):
             self.check_voltage_alarms(voltage)
         else:
-            # Log why we're skipping (for debugging)
             alerts_enabled = getattr(self, 'voltage_alerts_enabled', False)
             startup_complete = getattr(self, 'startup_complete', False)
             self.logger.debug(f"Skipping voltage alert - alerts_enabled: {alerts_enabled}, startup_complete: {startup_complete}")
@@ -688,27 +609,38 @@ class HealthScreen(BaseScreen):
         
         updates = {}
         
-        # Basic system stats
-        cpu = data.get("cpu", "--")
-        mem = data.get("memory", "--")
-        temp = data.get("temperature", "--")
-        
-        updates["cpu"] = f"CPU: {cpu}%"
-        updates["mem"] = f"Memory: {mem}%"
-        updates["temp"] = f"Temp: {temp}°C"
+        # Basic system stats - skip update if value is missing to avoid flickering
+        cpu = data.get("cpu")
+        mem = data.get("memory")
+        temp = data.get("temperature")
+
+        if cpu is not None and cpu != "--":
+            updates["cpu"] = f"CPU: {cpu}%"
+        if mem is not None and mem != "--":
+            updates["mem"] = f"Memory: {mem}%"
+        if temp is not None and temp != "--":
+            updates["temp"] = f"Temp: {temp}°C"
         
         # Total current from A2 sensor
         current_total = data.get("current_total", 0.0)
         updates["current_total"] = f"Total Current: {current_total:.1f}A"
+        
+        # Audio system
+        audio = data.get("audio_system", {})
+        updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}"
+                
+        # ADC info with 4-channel status
+        adc_available = data.get("adc_available", False)
+        updates["adc_info"] = "ADC: 4-Ch Active" if adc_available else "ADC: Simulated"
 
         # Battery run-time estimate
         estimate = data.get("battery_estimate")
-        if estimate:
+        if estimate and "runtime" in self.status_labels:
             mins = estimate.get("estimated_minutes_remaining", 0.0)
             soc = estimate.get("soc_percent", 0.0)
             confidence = estimate.get("confidence", "")
             if confidence == "warming_up":
-                runtime_text = f"Runtime: estimating..."
+                runtime_text = "Runtime: estimating..."
                 runtime_style = "color: gray; padding: 1px; background: transparent;"
             elif mins <= 0:
                 runtime_text = f"Runtime: -- ({soc:.0f}%)"
@@ -722,22 +654,10 @@ class HealthScreen(BaseScreen):
             else:
                 runtime_text = f"Runtime: {mins:.0f}m left ({soc:.0f}%)"
                 runtime_style = f"color: {green}; padding: 1px; background: transparent;"
-            if "runtime" in self.status_labels:
-                self.status_labels["runtime"].setText(runtime_text)
-                self.status_labels["runtime"].setStyleSheet(runtime_style)
-        
-        # Audio system
-        audio = data.get("audio_system", {})
-        updates["dfplayer"] = f"Audio: {'Connected' if audio.get('connected') else 'Disconnected'}"
-                
-        # ADC info with 4-channel status
-        adc_available = data.get("adc_available", False)
-        if adc_available:
-            updates["adc_info"] = "ADC: 4-Ch Active"
-        else:
-            updates["adc_info"] = "ADC: Simulated"
+            self.status_labels["runtime"].setText(runtime_text)
+            self.status_labels["runtime"].setStyleSheet(runtime_style)
 
-        # Maestro status - shortened for panel
+        # Maestro status
         m1 = data.get("maestro1", {})
         m2 = data.get("maestro2", {})
         
@@ -759,50 +679,17 @@ class HealthScreen(BaseScreen):
         else:
             updates["maestro2"] = "M2: Disconnected"
             m2_style = f"color: {red}; padding: 1px; background: transparent;"
-        
-        # Update all text labels
+
+        # Apply text updates
         for key, text in updates.items():
             if key in self.status_labels:
                 self.status_labels[key].setText(text)
-        
-        # Apply styles
+
+        # Apply individual styles
         if "maestro1" in self.status_labels:
             self.status_labels["maestro1"].setStyleSheet(m1_style)
         if "maestro2" in self.status_labels:
             self.status_labels["maestro2"].setStyleSheet(m2_style)
-
-        # Motion mixer serial performance
-        serial_fps = data.get('serial_fps')
-        blend_ms = data.get('blend_ms')
-        serial_cmds = data.get('serial_cmds_sec')
-        active_ch = data.get('active_channels')
-
-        if serial_fps is not None:
-            target_hz = 50.0
-            if serial_fps >= target_hz * 0.9:
-                fps_style = f"color: {green}; padding: 1px; background: transparent;"
-            elif serial_fps >= target_hz * 0.7:
-                fps_style = "color: orange; padding: 1px; background: transparent;"
-            else:
-                fps_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["serial_fps"].setText(f"Mixer: {serial_fps}Hz")
-            self.status_labels["serial_fps"].setStyleSheet(fps_style)
-
-        if blend_ms is not None:
-            if blend_ms < 5.0:
-                bms_style = f"color: {green}; padding: 1px; background: transparent;"
-            elif blend_ms < 15.0:
-                bms_style = "color: orange; padding: 1px; background: transparent;"
-            else:
-                bms_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["blend_ms"].setText(f"Blend: {blend_ms}ms")
-            self.status_labels["blend_ms"].setStyleSheet(bms_style)
-
-        if serial_cmds is not None:
-            self.status_labels["serial_cmds"].setText(f"Cmds/s: {serial_cmds}")
-
-        if active_ch is not None:
-            self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
 
     def _update_graphs(self):
         """Update telemetry graphs with current data"""
@@ -814,12 +701,10 @@ class HealthScreen(BaseScreen):
             current_a2_list = list(self.current_a2_data)
             
             if len(time_list) > 1 and len(voltage_list) > 1:
-                # Update curves
                 self.voltage_curve.setData(time_list, voltage_list)
                 self.current_a0_plot.setData(time_list, current_a0_list)
                 self.current_a1_plot.setData(time_list, current_a1_list)
                 self.current_a2_plot.setData(time_list, current_a2_list)
-                
                 self.graph_widget.update()
                 
         except Exception as e:
@@ -834,21 +719,16 @@ class HealthScreen(BaseScreen):
         elif voltage < 12.0:
             current_alarm = "LOW"
         
-        # Only show splash if alarm state changed and we don't already have one open
         if (current_alarm != self.last_voltage_alarm and 
             current_alarm is not None and 
             not hasattr(self, '_active_voltage_splash')):
             
-            # Create and show splash screen
             self._active_voltage_splash = VoltageAlertSplash(
                 alert_type=current_alarm,
                 voltage=voltage,
                 parent=self
             )
-            
-            # Connect to cleanup when splash closes
             self._active_voltage_splash.splash_closed.connect(self._on_voltage_splash_closed)
-            
             self.logger.info(f"Showing {current_alarm.lower()} voltage alert: {voltage:.2f}V")
         
         self.last_voltage_alarm = current_alarm
@@ -857,7 +737,7 @@ class HealthScreen(BaseScreen):
         """Handle voltage splash close event"""
         if hasattr(self, '_active_voltage_splash'):
             delattr(self, '_active_voltage_splash')
-        self.logger.debug("Voltage alert splash closed")    
+        self.logger.debug("Voltage alert splash closed")
 
     def get_battery_health_summary(self) -> str:
         """Get battery health summary for display"""
@@ -876,7 +756,6 @@ class HealthScreen(BaseScreen):
         else:
             voltage_trend = "Stable"
         
-        # Estimate remaining capacity (rough approximation for 4S LiPo)
         if current_voltage > 15.0:
             capacity = "90-100%"
         elif current_voltage > 14.4:
@@ -892,9 +771,35 @@ class HealthScreen(BaseScreen):
         
         return f"{voltage_trend} | Est. Capacity: {capacity}"
 
+    @error_boundary
+    def _poll_camera_rssi(self):
+        """Poll ESP32 RSSI from camera proxy status endpoint"""
+        try:
+            response = requests.get(f"{self._camera_proxy_base}/camera/status", timeout=2)
+            if response.status_code == 200:
+                rssi = response.json().get("rssi", "--")
+                if "camera_rssi" in self.status_labels:
+                    green = theme_manager.get("green")
+                    red = theme_manager.get("red")
+                    if isinstance(rssi, (int, float)):
+                        style = f"color: {green}; padding: 1px; background: transparent;"
+                        if rssi < -75:
+                            style = "color: orange; padding: 1px; background: transparent;"
+                        elif rssi < -85:
+                            style = f"color: {red}; padding: 1px; background: transparent;"
+                        self.status_labels["camera_rssi"].setText(f"Camera WiFi: {rssi}dBm")
+                    else:
+                        self.status_labels["camera_rssi"].setText("Camera WiFi: --")
+                        style = f"color: {green}; padding: 1px; background: transparent;"
+                    self.status_labels["camera_rssi"].setStyleSheet(style)
+        except Exception:
+            pass  # Keep last value if poll fails
+
     def cleanup(self):
         """Cleanup health screen resources"""
-        # Close any active voltage splash
+        if hasattr(self, 'rssi_poll_timer'):
+            self.rssi_poll_timer.stop()
+
         if hasattr(self, '_active_voltage_splash'):
             self._active_voltage_splash.close_splash()
             delattr(self, '_active_voltage_splash')
