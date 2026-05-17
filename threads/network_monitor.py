@@ -34,6 +34,8 @@ class NetworkMonitorThread(QThread):
         self.bandwidth_test_requested = False
         
         self.logger.info(f"Network monitor initialized for {pi_ip} on {self.platform}")
+        # Stores (link_speed_mbps_str, protocol_str) updated each cycle on Linux
+        self.last_link_info = (None, None)
 
     def run(self):
         """Main monitoring loop"""
@@ -84,6 +86,32 @@ class NetworkMonitorThread(QThread):
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
+                # Link speed
+                speed_match = re.search(r'Bit Rate=(\d+\.?\d*)\s*Mb/s', result.stdout)
+                speed = speed_match.group(1) if speed_match else None
+
+                # Protocol via iw dev (more reliable than iwconfig for this)
+                protocol = None
+                try:
+                    iw_result = subprocess.run(
+                        ['iw', 'dev'],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    # Look for "channel X (YYYY MHz), width: Z" to infer protocol
+                    width_match = re.search(r'width:\s*(\d+)\s*MHz', iw_result.stdout)
+                    freq_match = re.search(r'\((\d+)\s*MHz\)', iw_result.stdout)
+                    if freq_match and width_match:
+                        freq = int(freq_match.group(1))
+                        width = int(width_match.group(1))
+                        if freq >= 5000:
+                            protocol = "802.11ac" if width >= 80 else "802.11n (5GHz)"
+                        else:
+                            protocol = "802.11n" if width >= 40 else "802.11g"
+                except Exception:
+                    pass
+
+                self.last_link_info = (speed, protocol)
+
                 # Look for Link Quality
                 quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
                 if quality_match:
@@ -91,7 +119,7 @@ class NetworkMonitorThread(QThread):
                     percentage = int((current / maximum) * 100)
                     self.logger.debug(f"WiFi signal from iwconfig: {percentage}%")
                     return percentage
-                
+
                 # Look for Signal level in dBm
                 signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
                 if signal_match:
@@ -320,15 +348,15 @@ class NetworkMonitorThread(QThread):
     def get_signal_bars(self, percentage: int) -> str:
         """Generate signal bar representation using ASCII characters"""
         if percentage >= 75:
-            return "████"  # 4 bars
+            return "â–ˆâ–ˆâ–ˆâ–ˆ"  # 4 bars
         elif percentage >= 50:
-            return "███░"  # 3 bars
+            return "â–ˆâ–ˆâ–ˆâ–’"  # 3 bars
         elif percentage >= 25:
-            return "██░░"  # 2 bars
+            return "â–ˆâ–ˆâ–’â–’"  # 2 bars
         elif percentage > 0:
-            return "█░░░"  # 1 bar
+            return "â–ˆâ–’â–’â–’"  # 1 bar
         else:
-            return "░░░░"  # 0 bars
+            return "â–’â–’â–’â–’"  # 0 bars
 
     def request_bandwidth_test(self):
         """Request bandwidth test on next monitoring cycle"""
