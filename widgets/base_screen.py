@@ -448,7 +448,7 @@ class DynamicHeader(QFrame):
 
     def _setup_network_monitoring(self):
         """Setup WiFi signal monitoring"""
-        self.network_monitor = NetworkMonitorThread(pi_ip=self.pi_ip, update_interval=5.0)
+        self.network_monitor = NetworkMonitorThread(pi_ip=self.pi_ip, update_interval=2.0)
         self.network_monitor.wifi_updated.connect(self.update_wifi_display)
         self.network_monitor.start()
         self.logger.info("Network monitoring started for header")
