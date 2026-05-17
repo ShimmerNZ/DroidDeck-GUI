@@ -86,23 +86,28 @@ class NetworkMonitorThread(QThread):
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
-                # Link speed
-                speed_match = re.search(r'Bit Rate=(\d+\.?\d*)\s*Mb/s', result.stdout)
-                speed = speed_match.group(1) if speed_match else None
-
-                # Protocol via iw dev (more reliable than iwconfig for this)
+                # Link speed and protocol via iw dev link (more reliable than iwconfig)
+                speed = None
                 protocol = None
                 try:
                     iw_result = subprocess.run(
-                        ['iw', 'dev'],
+                        ['iw', 'dev', 'wlan1', 'link'],
                         capture_output=True, text=True, timeout=3
                     )
-                    # Look for "channel X (YYYY MHz), width: Z" to infer protocol
-                    width_match = re.search(r'width:\s*(\d+)\s*MHz', iw_result.stdout)
-                    freq_match = re.search(r'\((\d+)\s*MHz\)', iw_result.stdout)
-                    if freq_match and width_match:
+                    iw_out = iw_result.stdout
+
+                    # tx bitrate: 300.0 MBit/s ...
+                    speed_match = re.search(r'tx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
+                    if speed_match:
+                        speed = speed_match.group(1)
+
+                    # freq: 5180  or  freq: 2437
+                    freq_match = re.search(r'freq:\s*(\d+)', iw_out)
+                    # channel width from iwconfig output
+                    width_match = re.search(r'width:\s*(\d+)\s*MHz', iw_out)
+                    if freq_match:
                         freq = int(freq_match.group(1))
-                        width = int(width_match.group(1))
+                        width = int(width_match.group(1)) if width_match else 20
                         if freq >= 5000:
                             protocol = "802.11ac" if width >= 80 else "802.11n (5GHz)"
                         else:
