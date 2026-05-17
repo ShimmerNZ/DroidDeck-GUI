@@ -14,6 +14,8 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, pyqtSignal
 import pyqtgraph as pg
 
+from core.config_manager import config_manager as _config_manager
+
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
@@ -45,7 +47,15 @@ class HealthScreen(BaseScreen):
         """Initialize health monitoring interface"""
         self.setFixedWidth(1180)
         self.startup_complete = False
-        
+
+        # Initialise early so signal handlers never find these missing
+        self.status_labels = {}
+        self.battery_voltage_data = deque(maxlen=100)
+        self.current_a0_data = deque(maxlen=100)
+        self.current_a1_data = deque(maxlen=100)
+        self.current_a2_data = deque(maxlen=100)
+        self.time_data = deque(maxlen=100)
+
         # Rate limiting for telemetry updates
         self.last_telemetry_update = 0
         self.telemetry_update_interval = 0.25
@@ -65,10 +75,6 @@ class HealthScreen(BaseScreen):
         # Connect signals for thread-safe updates
         self.voltage_update_signal.connect(self._update_voltage_display)
         self.status_update_signal.connect(self._update_status_displays)
-
-        # Connect network monitor for WiFi stats on the health screen
-        if self.network_monitor:
-            self.network_monitor.wifi_updated.connect(self._update_wifi_display)
         
         self.init_ui()
         
@@ -232,6 +238,7 @@ class HealthScreen(BaseScreen):
         """Create the themed health monitoring control panel"""
         # Main panel with theme styling
         control_panel = QWidget()
+        control_panel.setObjectName("control_panel")
         control_panel.setFixedWidth(340)
         self._update_control_panel_style(control_panel)
         
@@ -266,11 +273,15 @@ class HealthScreen(BaseScreen):
         primary = theme_manager.get("primary_color")
         panel_bg = theme_manager.get("panel_bg")
         panel.setStyleSheet(f"""
-            QWidget {{
+            QWidget#control_panel {{
                 background-color: {panel_bg};
                 border: 2px solid {primary};
                 border-radius: 12px;
                 color: white;
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
             }}
         """)
 
@@ -291,21 +302,17 @@ class HealthScreen(BaseScreen):
     def _create_status_display_section(self):
         """Create themed status display section within the control panel"""
         self.status_frame = QWidget()
+        self.status_frame.setObjectName("status_frame")
         self._update_status_frame_style()
         
         status_layout = QVBoxLayout()
-        status_layout.setContentsMargins(12, 8, 12, 18)
-        status_layout.setSpacing(4)
-        
-        # Status header
-        self.status_header = QLabel("STATUS")
-        self.status_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.status_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.status_header)
-        status_layout.addWidget(self.status_header)
+        status_layout.setContentsMargins(12, 14, 12, 18)
+        status_layout.setSpacing(8)
         
         # Create status labels within the panel
-        label_configs = [
+        from PyQt6.QtWidgets import QSizePolicy
+
+        system_configs = [
             ("cpu", "CPU: 0%"),
             ("mem", "Memory: 0%"),
             ("temp", "Temp: 0°C"),
@@ -315,20 +322,39 @@ class HealthScreen(BaseScreen):
             ("blend_ms", "Blend: --ms"),
             ("serial_cmds", "Cmds/s: --"),
             ("active_ch", "Active Ch: --"),
+        ]
+
+        wifi_configs = [
             ("wifi_signal", "WiFi: --%"),
-            ("wifi_speed", "Link: -- Mbps"),
+            ("wifi_speed", "Link: --"),
             ("wifi_protocol", "Protocol: --"),
             ("wifi_ping", "Ping: --ms"),
         ]
-        
-        for key, text in label_configs:
+
+        def _add_label(key, text):
             label = QLabel(text)
-            label.setFont(QFont("Arial", 18))
+            label.setFont(QFont("Arial", 15))
             self._update_status_label_style(label)
-            label.setWordWrap(True)
+            label.setWordWrap(False)
+            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             self.status_labels[key] = label
             status_layout.addWidget(label)
-        
+
+        for key, text in system_configs:
+            _add_label(key, text)
+
+        # Separator between system and wifi sections
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        primary = theme_manager.get("primary_color")
+        separator.setStyleSheet(f"background-color: {primary}; border: none; max-height: 1px;")
+        status_layout.addWidget(separator)
+
+        for key, text in wifi_configs:
+            _add_label(key, text)
+
+        status_layout.addStretch(1)
+
         self.status_frame.setLayout(status_layout)
         return self.status_frame
 
@@ -336,7 +362,7 @@ class HealthScreen(BaseScreen):
         """Apply themed styling to status frame"""
         primary = theme_manager.get("primary_color")
         self.status_frame.setStyleSheet(f"""
-            QWidget {{
+            QWidget#status_frame {{
                 border: 1px solid {primary};
                 border-radius: 8px;
                 background-color: rgba(0, 0, 0, 0.3);
@@ -450,8 +476,6 @@ class HealthScreen(BaseScreen):
             # Update status section
             if hasattr(self, 'status_frame'):
                 self._update_status_frame_style()
-            if hasattr(self, 'status_header'):
-                self._update_section_header_style(self.status_header)
             
             # Update system section
             if hasattr(self, 'system_frame'):
@@ -515,8 +539,8 @@ class HealthScreen(BaseScreen):
         self.bandwidth_btn.setEnabled(False)
         self.bandwidth_btn.setText("TESTING...")
         
-        # Determine camera proxy URL (you can adjust this based on your config)
-        camera_proxy_url = "http://10.1.1.230:8081"  # Or get from your config
+        wave_config = _config_manager.get_wave_config()
+        camera_proxy_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
         
         # Show the bandwidth test splash screen
         results = show_bandwidth_test_splash(self, camera_proxy_url)
@@ -533,13 +557,13 @@ class HealthScreen(BaseScreen):
         green = theme_manager.get("green")
         
         if voltage < 13.2:
-            return f"Battery: {voltage:.2f}V CRITICAL", f"color: {red}; font-weight: bold; background: transparent;"
+            return f"Battery: {voltage:.2f}V CRITICAL", f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
         elif voltage < 14.0:
-            return f"Battery: {voltage:.2f}V LOW", f"color: {primary}; font-weight: bold; background: transparent;"
+            return f"Battery: {voltage:.2f}V LOW", f"color: {primary}; font-weight: bold; padding: 1px; background: transparent;"
         elif voltage > 14.0:
-            return f"Battery: {voltage:.2f}V GOOD", f"color: {green}; background: transparent;"
+            return f"Battery: {voltage:.2f}V GOOD", f"color: {green}; padding: 1px; background: transparent;"
         else:
-            return f"Battery: {voltage:.2f}V OK", f"color: {green}; background: transparent;"
+            return f"Battery: {voltage:.2f}V OK", f"color: {green}; padding: 1px; background: transparent;"
 
     def get_maestro_status_text(self, maestro_data: dict, maestro_name: str) -> tuple:
         """Format detailed Maestro status information with theme colors"""
@@ -742,6 +766,11 @@ class HealthScreen(BaseScreen):
         if active_ch is not None:
             self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
 
+    def connect_network_monitor(self, network_monitor):
+        """Connect the shared network monitor from the header bar."""
+        self._network_monitor = network_monitor
+        network_monitor.wifi_updated.connect(self._update_wifi_display)
+
     def _update_wifi_display(self, signal_percent: int, status_text: str, ping_ms: float):
         """Update WiFi status labels on the health screen"""
         green = theme_manager.get("green")
@@ -767,9 +796,9 @@ class HealthScreen(BaseScreen):
                     f"color: {red}; padding: 1px; background: transparent;"
                 )
 
-        # Pull link speed and protocol from network monitor if available
-        if self.network_monitor and hasattr(self.network_monitor, "last_link_info"):
-            speed, protocol = self.network_monitor.last_link_info
+        monitor = getattr(self, '_network_monitor', None)
+        if monitor and hasattr(monitor, 'last_link_info'):
+            speed, protocol = monitor.last_link_info
             if "wifi_speed" in self.status_labels:
                 self.status_labels["wifi_speed"].setText(
                     f"Link: {speed} Mbps" if speed else "Link: --"

@@ -208,6 +208,10 @@ class DroidDeckApplication(QMainWindow):
         # Connect scene screen signals to home screen for updates
         if hasattr(self.scene_screen, 'scenes_updated') and hasattr(self.home_screen, 'connect_scene_screen_signals'):
             self.home_screen.connect_scene_screen_signals(self.scene_screen)
+
+        # Share the header's network monitor with the health screen
+        if hasattr(self.header, 'network_monitor'):
+            self.health_screen.connect_network_monitor(self.header.network_monitor)
         
         time.sleep(0.2)
     
@@ -581,13 +585,13 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.blockSignals(False)
     
     def _update_header_from_telemetry(self, message: str):
-        """Update header voltage and runtime from backend messages"""
+        """Update header voltage from telemetry, and handle failsafe state sync"""
         try:
             import json
             data = json.loads(message)
             msg_type = data.get("type")
 
-            if msg_type == "system_status":
+            if msg_type == "telemetry":
                 voltage = data.get("battery_voltage", 0.0)
                 if voltage > 0:
                     self.header.update_voltage(voltage)
