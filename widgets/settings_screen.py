@@ -317,13 +317,21 @@ class NetworkTestThread(QThread):
 
 
 class UpdateThread(QThread):
-    """Background thread for downloading and installing updates from GitHub"""
-    
-    progress_updated = pyqtSignal(str)  # status message
-    update_completed = pyqtSignal(bool, str)  # success, message
-    
+    """Background thread for downloading and installing GUI updates from GitHub"""
+
+    progress_updated = pyqtSignal(str)
+    update_completed = pyqtSignal(bool, str)
+
     GITHUB_REPO = "ShimmerNZ/DroidDeck-GUI"
-    GITHUB_ZIP_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+
+    def __init__(self, branch: str = "main"):
+        super().__init__()
+        self.branch = branch
+        self.app_root = self._get_app_root()
+
+    @property
+    def GITHUB_ZIP_URL(self):
+        return f"https://github.com/{self.GITHUB_REPO}/archive/refs/heads/{self.branch}.zip"
     
     # Files/folders to protect (will NOT be overwritten)
     PROTECTED_PATHS = [
@@ -338,10 +346,6 @@ class UpdateThread(QThread):
         "resources/configs/theme_config.json",
         "resources/configs/voltage_alert_config.json",
     ]
-    
-    def __init__(self):
-        super().__init__()
-        self.app_root = self._get_app_root()
     
     def _get_app_root(self) -> Path:
         """Determine the application root directory"""
@@ -395,7 +399,7 @@ class UpdateThread(QThread):
             self.progress_updated.emit("Installing update...")
             self._update_files(source_dir, self.app_root)
             
-            self.update_completed.emit(True, "Update installed successfully. Restart DroidDeck to apply the changes.")
+            self.update_completed.emit(True, "Update completed successfully! Please restart the application.")
             
         except requests.exceptions.RequestException as e:
             self.update_completed.emit(False, f"Download failed: {str(e)}")
@@ -412,44 +416,81 @@ class UpdateThread(QThread):
                     pass  # Ignore cleanup errors
     
     def _update_files(self, source_dir: Path, target_dir: Path):
-        """Copy files from source to target.
-
-        Protected config files are only skipped if they already exist on disk —
-        if a config is missing (e.g. new install or new config added in an update)
-        it will be installed from the downloaded defaults.
-        """
-        installed_configs = []
+        """Copy files from source to target, protecting config files"""
         for item in source_dir.rglob('*'):
             if item.is_file():
+                # Get relative path from source
                 rel_path = item.relative_to(source_dir)
                 target_path = target_dir / rel_path
-
+                
+                # Check if this file is protected
                 if self._is_protected(rel_path):
-                    if target_path.exists():
-                        continue  # Existing config — leave the user's version alone
-                    else:
-                        installed_configs.append(str(rel_path))
-                        # Fall through to copy — installs missing default config
-
+                    continue  # Skip protected files
+                
+                # Create parent directory if needed
                 target_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy file
                 try:
                     shutil.copy2(item, target_path)
                 except Exception as e:
+                    # Log but don't fail on individual file errors
                     print(f"Warning: Could not update {rel_path}: {e}")
-
-        if installed_configs:
-            self.progress_updated.emit(
-                f"Installed {len(installed_configs)} missing config(s): "
-                + ", ".join(installed_configs)
-            )
-
+    
     def _is_protected(self, rel_path: Path) -> bool:
-        """Return True if this path is a protected config file."""
+        """Check if a file path should be protected from updates"""
         path_str = str(rel_path).replace('\\', '/')
+        
         for protected in self.PROTECTED_PATHS:
             if path_str.startswith(protected) or path_str == protected:
                 return True
+        
         return False
+
+
+class ServerUpdateThread(QThread):
+    """Background thread for triggering a backend update via WebSocket"""
+
+    progress_updated = pyqtSignal(str)
+    update_completed = pyqtSignal(bool, str)
+
+    GITHUB_REPO = "ShimmerNZ/DroidDeck-Backend"
+
+    def __init__(self, branch: str = "main", websocket_sender=None):
+        super().__init__()
+        self.branch = branch
+        self.websocket_sender = websocket_sender
+
+    def run(self):
+        """Send update command to backend via WebSocket"""
+        try:
+            if not self.websocket_sender:
+                self.update_completed.emit(False, "No WebSocket connection to backend")
+                return
+
+            self.progress_updated.emit(f"Sending update command to backend ({self.branch} branch)...")
+
+            message = {
+                "type": "server_update",
+                "branch": self.branch,
+                "repo": self.GITHUB_REPO,
+            }
+
+            self.websocket_sender(message)
+            self.progress_updated.emit("Update command sent - backend is downloading and restarting...")
+
+            # Give the backend time to restart before reporting done
+            import time
+            time.sleep(3)
+
+            self.update_completed.emit(
+                True,
+                f"Backend update triggered from branch '{self.branch}'.\n\n"
+                "The backend will restart automatically. Reconnect in a few seconds."
+            )
+
+        except Exception as e:
+            self.update_completed.emit(False, f"Failed to send update command: {str(e)}")
 
 
 class SettingsScreen(BaseScreen):
@@ -921,14 +962,22 @@ class SettingsScreen(BaseScreen):
         row.addWidget(self.reset_btn)
         row.addWidget(self.test_connection_btn)
         
-        self.update_btn = QPushButton("Update")
+        self.update_btn = QPushButton("Update GUI")
         self.update_btn.setFont(font)
         self.update_btn.clicked.connect(self.check_for_updates)
         self.update_btn.setFixedHeight(40)
-        self.update_btn.setMinimumWidth(110)
+        self.update_btn.setMinimumWidth(120)
         self._update_update_button_style()
         row.addWidget(self.update_btn)
-        
+
+        self.update_server_btn = QPushButton("Update Server")
+        self.update_server_btn.setFont(font)
+        self.update_server_btn.clicked.connect(self.check_for_server_updates)
+        self.update_server_btn.setFixedHeight(40)
+        self.update_server_btn.setMinimumWidth(140)
+        self._update_server_update_button_style()
+        row.addWidget(self.update_server_btn)
+
         row.addStretch()
         return row
 
@@ -988,7 +1037,7 @@ class SettingsScreen(BaseScreen):
         """)
 
     def _update_update_button_style(self):
-        """Style for the update button - blue/info color"""
+        """Style for the Update GUI button"""
         self.update_btn.setStyleSheet("""
         QPushButton {
             background-color: #2196F3;
@@ -1000,6 +1049,21 @@ class SettingsScreen(BaseScreen):
         }
         QPushButton:hover { background-color: #42A5F5; }
         QPushButton:pressed { background-color: #1976D2; }
+        """)
+
+    def _update_server_update_button_style(self):
+        """Style for the Update Server button"""
+        self.update_server_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #7B1FA2;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        QPushButton:hover { background-color: #9C27B0; }
+        QPushButton:pressed { background-color: #6A1B9A; }
         """)
 
     # ---------- Widget styling helpers ----------
@@ -1204,6 +1268,7 @@ class SettingsScreen(BaseScreen):
             self._update_reset_button_style()
             self._update_test_button_style()
             self._update_update_button_style()
+            self._update_server_update_button_style()
 
             self.logger.info(f"Settings screen updated for theme: {theme_manager.get_theme_name()}")
         except Exception as e:
@@ -1594,35 +1659,81 @@ class SettingsScreen(BaseScreen):
     # ---------- Update System ----------
 
     def check_for_updates(self):
-        """Check for and install updates from GitHub"""
-        # Show confirmation dialog
-        reply = QMessageBox.question(
-            self,
-            "Update DroidDeck",
-            "This will download the latest version from GitHub.\n\n"
-            "Your configuration files in resources/configs/ will NOT be overwritten.\n\n"
-            "Do you want to proceed?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
+        """Check for and install GUI updates from GitHub"""
+        branch = self._ask_branch("Update DroidDeck GUI")
+        if branch is None:
             return
-        
-        # Create progress dialog
+
         self.update_progress = QProgressDialog("Preparing to update...", "Cancel", 0, 0, self)
-        self.update_progress.setWindowTitle("Updating DroidDeck")
+        self.update_progress.setWindowTitle("Updating DroidDeck GUI")
         self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
         self.update_progress.setMinimumDuration(0)
-        self.update_progress.setCancelButton(None)  # No cancel for now
+        self.update_progress.setCancelButton(None)
         self.update_progress.setFixedSize(400, 120)
         self.update_progress.show()
-        
-        # Create and start update thread
-        self.update_thread = UpdateThread()
+
+        self.update_thread = UpdateThread(branch=branch)
         self.update_thread.progress_updated.connect(self._on_update_progress)
         self.update_thread.update_completed.connect(self._on_update_complete)
         self.update_thread.start()
+
+    def check_for_server_updates(self):
+        """Trigger a backend server update from GitHub"""
+        branch = self._ask_branch("Update DroidDeck Server")
+        if branch is None:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Update Server",
+            f"This will update the backend server from GitHub ({branch} branch).\n\n"
+            "Config files will NOT be overwritten.\n"
+            "The backend service will restart automatically.\n\n"
+            "Do you want to proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.update_progress = QProgressDialog("Sending update command to server...", "Cancel", 0, 0, self)
+        self.update_progress.setWindowTitle("Updating DroidDeck Server")
+        self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.update_progress.setMinimumDuration(0)
+        self.update_progress.setCancelButton(None)
+        self.update_progress.setFixedSize(400, 120)
+        self.update_progress.show()
+
+        sender = getattr(self, "send_websocket_message", None)
+        self.server_update_thread = ServerUpdateThread(branch=branch, websocket_sender=sender)
+        self.server_update_thread.progress_updated.connect(self._on_update_progress)
+        self.server_update_thread.update_completed.connect(self._on_update_complete)
+        self.server_update_thread.start()
+
+    def _ask_branch(self, title: str) -> str:
+        """Show a branch selection dialog. Returns 'main', 'dev', or None if cancelled."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setFixedSize(320, 160)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Select branch to update from:"))
+
+        branch_combo = QComboBox()
+        branch_combo.addItems(["main", "dev"])
+        layout.addWidget(branch_combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            return branch_combo.currentText()
+        return None
     
     def _on_update_progress(self, message: str):
         """Update progress dialog with current status"""
@@ -1632,33 +1743,20 @@ class SettingsScreen(BaseScreen):
     
     def _on_update_complete(self, success: bool, message: str):
         """Handle update completion"""
+        # Close progress dialog
         if hasattr(self, 'update_progress'):
             self.update_progress.close()
         
+        # Show result message
         if success:
-            reply = QMessageBox.question(
+            QMessageBox.information(
                 self,
                 "Update Complete",
-                f"{message}\n\nRestart DroidDeck now?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
+                message
             )
-            if reply == QMessageBox.StandardButton.Yes:
-                self._restart_application()
         else:
-            QMessageBox.warning(self, "Update Failed", message)
-
-    def _restart_application(self):
-        """Restart DroidDeck in-place by re-executing the current process."""
-        try:
-            self.logger.info("Restarting DroidDeck after update...")
-            # Give Qt a moment to finish any pending events before we replace the process
-            QApplication.processEvents()
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as e:
-            self.logger.error(f"Restart failed: {e}")
             QMessageBox.warning(
                 self,
-                "Restart Failed",
-                f"Could not restart automatically: {e}\n\nPlease close and reopen DroidDeck manually."
+                "Update Failed",
+                message
             )

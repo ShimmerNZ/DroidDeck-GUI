@@ -1482,6 +1482,16 @@ class SceneScreen(BaseScreen):
                     QMessageBox.critical(self, "Error", f"Failed to save to backend: {error}")
                     self.update_status("Save failed", red)
 
+            elif msg_type == "bottango_scenes_updated":
+                # Fired automatically by the backend watcher when a new file is converted
+                bottango_scenes = msg.get("bottango_scenes", [])
+                if bottango_scenes:
+                    self.bottango_scenes = bottango_scenes
+                    for row in self.scene_rows:
+                        row.update_bottango_scenes(bottango_scenes)
+                    self.update_status(f"Bottango scenes updated ({len(bottango_scenes)} available)", green)
+                    self.logger.info(f"Auto-refreshed Bottango scenes: {len(bottango_scenes)} available")
+
             elif msg_type == "bottango_import_complete":
                 converted = msg.get("converted", 0)
                 bottango_scenes = msg.get("bottango_scenes", [])

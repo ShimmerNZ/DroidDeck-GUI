@@ -174,14 +174,14 @@
     "name": "Head Pan"
   },
   "m1_ch2": {
-    "home": 1739,
-    "min": 1376,
+    "home": 1555,
+    "min": 1200,
     "max": 2200,
     "name": "Left Eye Tilt"
   },
   "m1_ch3": {
-    "home": 1231,
-    "min": 800,
+    "home": 1326,
+    "min": 912,
     "max": 1600,
     "name": "Right Eye Tilt"
   },
