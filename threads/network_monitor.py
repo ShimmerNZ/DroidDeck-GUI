@@ -96,22 +96,28 @@ class NetworkMonitorThread(QThread):
                     )
                     iw_out = iw_result.stdout
 
-                    # tx bitrate: 300.0 MBit/s ...
-                    speed_match = re.search(r'tx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
-                    if speed_match:
-                        speed = speed_match.group(1)
+                    # rx bitrate: 117.0 MBit/s VHT-MCS 6 VHT-NSS 2
+                    rx_match = re.search(r'rx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
+                    tx_match = re.search(r'tx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
+                    if rx_match:
+                        speed = rx_match.group(1)
+                    elif tx_match:
+                        speed = tx_match.group(1)
 
-                    # freq: 5180  or  freq: 2437
-                    freq_match = re.search(r'freq:\s*(\d+)', iw_out)
-                    # channel width from iwconfig output
-                    width_match = re.search(r'width:\s*(\d+)\s*MHz', iw_out)
+                    # freq: 5180.0
+                    freq_match = re.search(r'freq:\s*([\d.]+)', iw_out)
                     if freq_match:
-                        freq = int(freq_match.group(1))
-                        width = int(width_match.group(1)) if width_match else 20
-                        if freq >= 5000:
-                            protocol = "802.11ac" if width >= 80 else "802.11n (5GHz)"
+                        freq = float(freq_match.group(1))
+                        if "VHT" in iw_out:
+                            protocol = "802.11ac"
+                        elif "HT" in iw_out and freq >= 5000:
+                            protocol = "802.11n (5GHz)"
+                        elif "HT" in iw_out:
+                            protocol = "802.11n"
+                        elif freq >= 5000:
+                            protocol = "802.11a"
                         else:
-                            protocol = "802.11n" if width >= 40 else "802.11g"
+                            protocol = "802.11g"
                 except Exception:
                     pass
 
