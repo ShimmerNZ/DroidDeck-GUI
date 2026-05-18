@@ -173,7 +173,7 @@ class BandwidthTestWorker(QThread):
             start_time = time.time()
             # Simulate progress updates during upload
             response = requests.post(
-                f"{self.camera_proxy_url}/bandwidth_test/upload",
+                f"{self.camera_proxy_url}/bandwidth_upload",
                 data=upload_data,
                 headers={'Content-Type': 'application/octet-stream'},
                 timeout=60
