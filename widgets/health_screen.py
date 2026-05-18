@@ -56,6 +56,12 @@ class HealthScreen(BaseScreen):
         self.current_a2_data = deque(maxlen=100)
         self.time_data = deque(maxlen=100)
 
+        # Carry-forward cache so system_status messages don't wipe telemetry values
+        self._last_system_stats = {"cpu": "--", "memory": "--", "temperature": "--"}
+        # Last known throughput bytes for delta calculation
+        self._last_net_bytes = None
+        self._last_net_time = None
+
         # Rate limiting for telemetry updates
         self.last_telemetry_update = 0
         self.telemetry_update_interval = 0.25
@@ -243,8 +249,8 @@ class HealthScreen(BaseScreen):
         self._update_control_panel_style(control_panel)
         
         panel_layout = QVBoxLayout()
-        panel_layout.setContentsMargins(15, 5, 15, 15)
-        panel_layout.setSpacing(15)
+        panel_layout.setContentsMargins(15, 5, 15, 10)
+        panel_layout.setSpacing(10)
         
         # Header with theme styling
         self.header = QLabel("SYSTEM HEALTH")
@@ -306,8 +312,8 @@ class HealthScreen(BaseScreen):
         self._update_status_frame_style()
         
         status_layout = QVBoxLayout()
-        status_layout.setContentsMargins(12, 14, 12, 18)
-        status_layout.setSpacing(8)
+        status_layout.setContentsMargins(12, 10, 12, 10)
+        status_layout.setSpacing(6)
         
         # Create status labels within the panel
         from PyQt6.QtWidgets import QSizePolicy
@@ -329,6 +335,8 @@ class HealthScreen(BaseScreen):
             ("wifi_speed", "Link: --"),
             ("wifi_protocol", "Protocol: --"),
             ("wifi_ping", "Ping: --ms"),
+            ("net_down", "Down: --"),
+            ("net_up", "Up: --"),
         ]
 
         def _add_label(key, text):
@@ -712,26 +720,36 @@ class HealthScreen(BaseScreen):
         """Thread-safe status display updates with theme colors"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")
-        
+
         updates = {}
-        
-        # Basic system stats
-        cpu = data.get("cpu", "--")
-        mem = data.get("memory", "--")
-        temp = data.get("temperature", "--")
-        
-        updates["cpu"] = f"CPU: {cpu}%"
-        updates["mem"] = f"Memory: {mem}%"
-        updates["temp"] = f"Temp: {temp}°C"
-        
+
+        # Carry-forward: only update system stats when the values are actually present
+        cpu = data.get("cpu")
+        mem = data.get("memory")
+        temp = data.get("temperature")
+
+        if cpu not in (None, "--"):
+            self._last_system_stats["cpu"] = cpu
+        if mem not in (None, "--"):
+            self._last_system_stats["memory"] = mem
+        if temp not in (None, "--"):
+            self._last_system_stats["temperature"] = temp
+
+        updates["cpu"] = f"CPU: {self._last_system_stats['cpu']}%"
+        updates["mem"] = f"Memory: {self._last_system_stats['memory']}%"
+        updates["temp"] = f"Temp: {self._last_system_stats['temperature']}°C"
+
         # Total current from A2 sensor
         current_total = data.get("current_total", 0.0)
         updates["current_total"] = f"Total Current: {current_total:.1f}A"
-        
+
         # Update all text labels
         for key, text in updates.items():
             if key in self.status_labels:
                 self.status_labels[key].setText(text)
+
+        # Sample /proc/net/dev for throughput on wlan0
+        self._update_throughput_display(green)
 
         # Motion mixer serial performance
         serial_fps = data.get('serial_fps')
@@ -765,6 +783,52 @@ class HealthScreen(BaseScreen):
 
         if active_ch is not None:
             self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
+
+    def _format_throughput(self, bytes_per_sec: float) -> str:
+        """Auto-scale bytes/sec to KB/s or MB/s"""
+        if bytes_per_sec >= 1_048_576:
+            return f"{bytes_per_sec / 1_048_576:.1f} MB/s"
+        elif bytes_per_sec >= 1024:
+            return f"{bytes_per_sec / 1024:.0f} KB/s"
+        else:
+            return f"{bytes_per_sec:.0f} B/s"
+
+    def _update_throughput_display(self, green: str):
+        """Sample /proc/net/dev to calculate wlan0 TX/RX throughput"""
+        if "net_down" not in self.status_labels or "net_up" not in self.status_labels:
+            return
+        try:
+            import time as _time
+            now = _time.monotonic()
+            rx_bytes = tx_bytes = None
+
+            with open("/proc/net/dev", "r") as f:
+                for line in f:
+                    if "wlan0:" in line:
+                        parts = line.split()
+                        rx_bytes = int(parts[1])
+                        tx_bytes = int(parts[9])
+                        break
+
+            if rx_bytes is None:
+                return
+
+            if self._last_net_bytes is not None:
+                elapsed = now - self._last_net_time
+                if elapsed > 0:
+                    rx_rate = (rx_bytes - self._last_net_bytes[0]) / elapsed
+                    tx_rate = (tx_bytes - self._last_net_bytes[1]) / elapsed
+                    self.status_labels["net_down"].setText(f"Down: {self._format_throughput(rx_rate)}")
+                    self.status_labels["net_up"].setText(f"Up: {self._format_throughput(tx_rate)}")
+
+            self._last_net_bytes = (rx_bytes, tx_bytes)
+            self._last_net_time = now
+
+        except (FileNotFoundError, PermissionError):
+            # /proc/net/dev not available (macOS dev environment)
+            pass
+        except Exception as e:
+            self.logger.debug(f"Throughput read failed: {e}")
 
     def connect_network_monitor(self, network_monitor):
         """Connect the shared network monitor from the header bar."""
