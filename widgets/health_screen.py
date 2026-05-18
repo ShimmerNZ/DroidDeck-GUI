@@ -547,6 +547,8 @@ class HealthScreen(BaseScreen):
         
         wave_config = _config_manager.get_wave_config()
         camera_proxy_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
+        if camera_proxy_url.endswith("/stream"):
+            camera_proxy_url = camera_proxy_url[:-7]
         
         # Show the bandwidth test splash screen
         results = show_bandwidth_test_splash(self, camera_proxy_url)

@@ -138,25 +138,27 @@ class BandwidthTestWorker(QThread):
             
             downloaded = 0
             last_update_time = start_time
-            
+
             for chunk in response.iter_content(chunk_size=8192):
                 if self.test_cancelled:
                     return 0.0
-                    
+
                 downloaded += len(chunk)
                 current_time = time.time()
-                
-                # Update speed display every 0.5 seconds during download
-                if current_time - last_update_time >= 0.5:
+
+                # Update speed display every 0.1 seconds during download
+                if current_time - last_update_time >= 0.1:
                     elapsed = current_time - start_time
                     if elapsed > 0:
                         current_speed = (downloaded / (1024 * 1024)) / elapsed
                         self.speed_updated.emit("download", current_speed)
                         last_update_time = current_time
-            
+
             duration = time.time() - start_time
             if duration > 0:
-                return (downloaded / (1024 * 1024)) / duration
+                final_speed = (downloaded / (1024 * 1024)) / duration
+                self.speed_updated.emit("download", final_speed)
+                return final_speed
             return 0.0
             
         except Exception:
