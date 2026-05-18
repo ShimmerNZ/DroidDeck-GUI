@@ -22,7 +22,7 @@ class NetworkMonitorThread(QThread):
     wifi_updated = pyqtSignal(int, str, float)  # signal_percent, status_text, ping_ms
     bandwidth_tested = pyqtSignal(float, float, str)  # download_mbps, upload_mbps, status_text
 
-    def __init__(self, pi_ip: str = "10.1.1.230", update_interval: float = 5.0):
+    def __init__(self, pi_ip: str = "10.42.0.1", update_interval: float = 5.0):
         super().__init__()
         self.logger = get_logger("network")
         self.pi_ip = pi_ip
@@ -91,7 +91,7 @@ class NetworkMonitorThread(QThread):
                 protocol = None
                 try:
                     iw_result = subprocess.run(
-                        ['iw', 'dev', 'wlan1', 'link'],
+                        ['iw', 'dev', 'wlan0', 'link'],
                         capture_output=True, text=True, timeout=3
                     )
                     iw_out = iw_result.stdout
@@ -443,42 +443,3 @@ class NetworkMonitorThread(QThread):
         self.running = False
         self.quit()
         self.wait(3000)
-
-
-# Test section for standalone running
-if __name__ == "__main__":
-    import sys
-    import os
-    
-    # Add parent directory to path for imports
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    
-    print(f"Testing NetworkMonitorThread on {platform.system()}")
-    
-    # Create a simple logger for testing
-    class SimpleLogger:
-        def info(self, msg): print(f"INFO: {msg}")
-        def debug(self, msg): print(f"DEBUG: {msg}")
-        def warning(self, msg): print(f"WARNING: {msg}")
-        def error(self, msg): print(f"ERROR: {msg}")
-    
-    # Mock the core.logger module for standalone testing
-    import types
-    mock_logger_module = types.ModuleType('core.logger')
-    mock_logger_module.get_logger = lambda name: SimpleLogger()
-    sys.modules['core.logger'] = mock_logger_module
-    
-    # Now we can create the monitor
-    monitor = NetworkMonitorThread(pi_ip='10.1.1.230')
-    
-    print("\n=== Testing Ping ===")
-    quality, ping_ms = monitor.get_ping_quality()
-    print(f"Ping Result: Quality={quality}, Time={ping_ms}ms")
-    
-    print("\n=== Testing WiFi Signal ===")
-    wifi_percent = monitor.get_wifi_signal_strength()
-    print(f"WiFi Signal: {wifi_percent}%")
-    
-    print("\n=== Testing Status Format ===")
-    status = monitor.format_wifi_status(wifi_percent, ping_ms)
-    print(f"Status: {status}")

@@ -392,7 +392,7 @@ class SteamDeckBatteryWidget(QWidget):
 class DynamicHeader(QFrame):
     """Dynamic header showing system status at top of application"""
     
-    def __init__(self, screen_name: str, pi_ip: str = "10.1.1.230"):
+    def __init__(self, screen_name: str, pi_ip: str = "10.42.0.1"):
         super().__init__()
         self.logger = get_logger("ui")
         self.setStyleSheet("background-color: rgba(0, 0, 0, 0); color: white;")

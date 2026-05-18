@@ -166,7 +166,7 @@ class DroidDeckApplication(QMainWindow):
         # Extract IP from proxy URL
         import re
         ip_match = re.search(r'http://([^:]+)', proxy_url)
-        self.pi_ip = ip_match.group(1) if ip_match else "10.1.1.230"
+        self.pi_ip = ip_match.group(1) if ip_match else "10.42.0.1"
         time.sleep(0.3)
     
     def _setup_screens(self):
