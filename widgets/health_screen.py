@@ -332,8 +332,6 @@ class HealthScreen(BaseScreen):
 
         wifi_configs = [
             ("wifi_signal", "WiFi: --%"),
-            ("wifi_speed", "Link: --"),
-            ("wifi_protocol", "Protocol: --"),
             ("wifi_ping", "Ping: --ms"),
             ("net_down", "Down: --"),
             ("net_up", "Up: --"),
@@ -860,17 +858,7 @@ class HealthScreen(BaseScreen):
                     f"color: {red}; padding: 1px; background: transparent;"
                 )
 
-        monitor = getattr(self, '_network_monitor', None)
-        if monitor and hasattr(monitor, 'last_link_info'):
-            speed, protocol = monitor.last_link_info
-            if "wifi_speed" in self.status_labels:
-                self.status_labels["wifi_speed"].setText(
-                    f"Link: {speed} Mbps" if speed else "Link: --"
-                )
-            if "wifi_protocol" in self.status_labels:
-                self.status_labels["wifi_protocol"].setText(
-                    f"Protocol: {protocol}" if protocol else "Protocol: --"
-                )
+
 
     def _update_graphs(self):
         """Update telemetry graphs with current data"""

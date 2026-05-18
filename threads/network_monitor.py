@@ -34,8 +34,6 @@ class NetworkMonitorThread(QThread):
         self.bandwidth_test_requested = False
         
         self.logger.info(f"Network monitor initialized for {pi_ip} on {self.platform}")
-        # Stores (link_speed_mbps_str, protocol_str) updated each cycle on Linux
-        self.last_link_info = (None, None)
 
     def run(self):
         """Main monitoring loop"""
@@ -86,42 +84,7 @@ class NetworkMonitorThread(QThread):
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
-                # Link speed and protocol via iw dev link (more reliable than iwconfig)
-                speed = None
-                protocol = None
-                try:
-                    iw_result = subprocess.run(
-                        ['iw', 'dev', 'wlan0', 'link'],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    iw_out = iw_result.stdout
 
-                    # rx bitrate: 117.0 MBit/s VHT-MCS 6 VHT-NSS 2
-                    rx_match = re.search(r'rx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
-                    tx_match = re.search(r'tx bitrate:\s*([\d.]+)\s*MBit/s', iw_out)
-                    if rx_match:
-                        speed = rx_match.group(1)
-                    elif tx_match:
-                        speed = tx_match.group(1)
-
-                    # freq: 5180.0
-                    freq_match = re.search(r'freq:\s*([\d.]+)', iw_out)
-                    if freq_match:
-                        freq = float(freq_match.group(1))
-                        if "VHT" in iw_out:
-                            protocol = "802.11ac"
-                        elif "HT" in iw_out and freq >= 5000:
-                            protocol = "802.11n (5GHz)"
-                        elif "HT" in iw_out:
-                            protocol = "802.11n"
-                        elif freq >= 5000:
-                            protocol = "802.11a"
-                        else:
-                            protocol = "802.11g"
-                except Exception:
-                    pass
-
-                self.last_link_info = (speed, protocol)
 
                 # Look for Link Quality
                 quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
