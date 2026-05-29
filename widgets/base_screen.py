@@ -81,6 +81,8 @@ class RightStatusWidget(QWidget):
 
     def set_websocket_connected(self, connected: bool):
         """Called by DynamicHeader when WebSocket connects or disconnects."""
+        if not self.flash_timer:
+            return
         self.ws_connected = connected
         if connected:
             self.wifi_color = "#44FF44"
@@ -92,7 +94,7 @@ class RightStatusWidget(QWidget):
 
     # ── WiFi flash helpers ────────────────────────────────────────────────────
     def _start_wifi_flash(self):
-        if not self.flash_timer.isActive():
+        if self.flash_timer and not self.flash_timer.isActive():
             self.flash_timer.start(500)
 
     def _stop_wifi_flash(self):
@@ -511,6 +513,17 @@ class DynamicHeader(QFrame):
 
     def cleanup(self):
         """Cleanup header resources"""
+        if hasattr(self, '_ws_poll_timer') and self._ws_poll_timer:
+            self._ws_poll_timer.stop()
+        if hasattr(self, 'right_widget') and self.right_widget:
+            self.right_widget.flash_timer.stop()
+        if hasattr(self, '_websocket') and self._websocket:
+            try:
+                self._websocket.connected.disconnect()
+                self._websocket.disconnected.disconnect()
+            except Exception:
+                pass
+            self._websocket = None
         if hasattr(self, 'network_monitor'):
             self.network_monitor.stop()
 
