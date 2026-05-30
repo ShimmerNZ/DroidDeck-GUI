@@ -79,11 +79,11 @@ class NetworkMonitorThread(QThread):
             return self._get_fallback_wifi_signal()
 
     def _get_wifi_signal_linux(self) -> int:
-        """Get WiFi signal strength on Linux using nl80211 (iw), nmcli, or iwconfig"""
+        """Get WiFi signal strength on Linux using nl80211 (iw), nmcli, or /proc/net/wireless"""
 
-        # Method 1: iw — the modern nl80211 interface, works on all current Linux WiFi drivers
+        # Method 1: iw — the modern nl80211 interface, works on all current Linux WiFi drivers.
+        # Requires the 'iw' package: sudo apt install iw (inside Distrobox)
         try:
-            # Discover the wireless interface name
             dev_result = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=3)
             if dev_result.returncode == 0:
                 iface_match = re.search(r'Interface\s+(\S+)', dev_result.stdout)
@@ -101,7 +101,7 @@ class NetworkMonitorThread(QThread):
         except Exception as e:
             self.logger.debug(f"iw failed: {e}")
 
-        # Method 2: nmcli — use IN-USE field so the connected network is identifiable
+        # Method 2: nmcli — use IN-USE,SIGNAL so the connected network is identifiable
         # in terse mode; -t separates fields with ':' and has no '*' prefix marker
         try:
             result = subprocess.run(
@@ -119,7 +119,32 @@ class NetworkMonitorThread(QThread):
         except Exception as e:
             self.logger.debug(f"nmcli failed: {e}")
 
-        # Method 3: iwconfig — legacy WEXT, may not be present on modern systems
+        # Method 3: /proc/net/wireless — populated on SteamOS even with modern drivers.
+        # Column layout: interface | status | link_quality | signal_dBm | noise_dBm | ...
+        # Read column 3 (signal level in dBm, always negative) for an accurate reading.
+        # Column 2 (link quality, 0-70 scale) is NOT read — treating it as a percentage
+        # caps the result at 70% when quality is at maximum.
+        try:
+            with open('/proc/net/wireless', 'r') as f:
+                for line in f.readlines()[2:]:  # skip two header lines
+                    if ':' not in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            dbm = float(parts[3].rstrip('.'))
+                            if dbm < 0:
+                                percentage = max(0, min(100, (dbm + 100) * 2))
+                                self.logger.debug(
+                                    f"WiFi signal from /proc/net/wireless: {dbm} dBm = {percentage}%"
+                                )
+                                return int(percentage)
+                        except ValueError:
+                            pass
+        except Exception as e:
+            self.logger.debug(f"/proc/net/wireless failed: {e}")
+
+        # Method 4: iwconfig — legacy WEXT, kept as last resort
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
