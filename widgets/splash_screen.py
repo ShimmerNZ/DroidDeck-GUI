@@ -69,12 +69,12 @@ class DroidDeckSplashScreen(QSplashScreen):
         self.current_step = 0
         self.progress = 0
         
-        # Center on screen
         self._center_on_screen()
-        
-        # Force to front after showing
+        self._audio_started = False
+
+        # _bring_to_front fires after the first event loop tick;
+        # audio is triggered from paintEvent once the screen is actually rendered
         QTimer.singleShot(100, self._bring_to_front)
-        QTimer.singleShot(1200, self._init_audio)
         
     def _init_audio(self):
         """Initialize pygame mixer and play startup sound"""
@@ -129,16 +129,49 @@ class DroidDeckSplashScreen(QSplashScreen):
         self.update()
         QApplication.processEvents()
     
-    def finish_loading(self):
-        """Mark loading as complete"""
+    def finish_loading(self, on_complete=None):
+        """Mark loading as complete and wait for startup audio to finish"""
         self.progress = 100
         self.current_message = len(self.messages) - 1
         self.messages[-1] = "DroidDeck Ready!"
+        self._on_complete = on_complete
         self.update()
         QApplication.processEvents()
-        
-        # Close after a brief delay
-        QTimer.singleShot(2000, self.close)
+
+        # Give audio a moment to settle, then start polling for completion.
+        # When the startup tune ends the splash closes and the main window appears.
+        # Falls back to a short fixed delay if audio is not available.
+        QTimer.singleShot(300, self._start_audio_wait)
+
+    def _start_audio_wait(self):
+        """Begin polling pygame for audio completion"""
+        if PYGAME_AVAILABLE:
+            try:
+                if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                    self._audio_poll_timer = QTimer()
+                    self._audio_poll_timer.timeout.connect(self._check_audio_complete)
+                    self._audio_poll_timer.start(200)
+                    return
+            except Exception:
+                pass
+        # Audio not running — close after a brief display of the ready message
+        QTimer.singleShot(1000, self._finish)
+
+    def _check_audio_complete(self):
+        """Close splash when the startup audio track finishes"""
+        try:
+            if not pygame.mixer.music.get_busy():
+                self._audio_poll_timer.stop()
+                self._finish()
+        except Exception:
+            self._audio_poll_timer.stop()
+            self._finish()
+
+    def _finish(self):
+        """Trigger the completion callback then close the splash"""
+        if self._on_complete:
+            self._on_complete()
+        self.close()
     
     def closeEvent(self, event):
         """Clean up audio when closing"""
@@ -153,6 +186,11 @@ class DroidDeckSplashScreen(QSplashScreen):
         """Custom paint event to draw the splash screen"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Trigger audio on the first paint — guarantees the screen is visible first
+        if not self._audio_started:
+            self._audio_started = True
+            QTimer.singleShot(50, self._init_audio)
         
         # Draw background gradient
         gradient = QLinearGradient(0, 0, 0, self.height())
@@ -297,7 +335,7 @@ class DroidDeckShutdownSplash(QSplashScreen):
         self.progress = 0
         
         self._center_on_screen()
-        QTimer.singleShot(1500, self._init_audio)
+        self._audio_started = False
         
     def _init_audio(self):
         """Initialize pygame mixer and play shutdown sound"""
@@ -345,6 +383,11 @@ class DroidDeckShutdownSplash(QSplashScreen):
         """Draw shutdown splash"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Trigger audio on the first paint — guarantees the screen is visible first
+        if not self._audio_started:
+            self._audio_started = True
+            QTimer.singleShot(50, self._init_audio)
         
         # Background gradient
         gradient = QLinearGradient(0, 0, 0, self.height())

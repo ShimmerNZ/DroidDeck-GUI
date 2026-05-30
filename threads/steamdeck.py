@@ -54,7 +54,7 @@ class SteamDeckControllerThread(QThread):
         self.sequence_number = 0
         
         # Timing control
-        self.poll_rate_hz = 10
+        self.poll_rate_hz = 50
         self.poll_interval = 1.0 / self.poll_rate_hz
         self.heartbeat_interval = 0.5
         self.last_heartbeat = 0
@@ -233,8 +233,12 @@ class SteamDeckControllerThread(QThread):
                 if int(current_time) % 5 == 0:  # Every 5 seconds
                     self._update_stats()
                 
-                # Sleep to maintain desired poll rate
-                time.sleep(self.poll_interval)
+                # Sleep for the remainder of the poll interval so the effective
+                # rate stays stable regardless of how long the poll work took
+                elapsed = time.time() - current_time
+                sleep_time = self.poll_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                 
             except Exception as e:
                 self.logger.error(f"Controller thread error: {e}")

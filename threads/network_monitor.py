@@ -79,66 +79,65 @@ class NetworkMonitorThread(QThread):
             return self._get_fallback_wifi_signal()
 
     def _get_wifi_signal_linux(self) -> int:
-        """Get WiFi signal strength on Linux"""
-        # Method 1: Try iwconfig
+        """Get WiFi signal strength on Linux using nl80211 (iw), nmcli, or iwconfig"""
+
+        # Method 1: iw — the modern nl80211 interface, works on all current Linux WiFi drivers
+        try:
+            # Discover the wireless interface name
+            dev_result = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=3)
+            if dev_result.returncode == 0:
+                iface_match = re.search(r'Interface\s+(\S+)', dev_result.stdout)
+                if iface_match:
+                    iface = iface_match.group(1)
+                    link_result = subprocess.run(
+                        ['iw', iface, 'link'], capture_output=True, text=True, timeout=3
+                    )
+                    signal_match = re.search(r'signal:\s*(-?\d+)', link_result.stdout)
+                    if signal_match:
+                        dbm = int(signal_match.group(1))
+                        percentage = max(0, min(100, (dbm + 100) * 2))
+                        self.logger.debug(f"WiFi signal from iw: {dbm} dBm = {percentage}%")
+                        return percentage
+        except Exception as e:
+            self.logger.debug(f"iw failed: {e}")
+
+        # Method 2: nmcli — use IN-USE field so the connected network is identifiable
+        # in terse mode; -t separates fields with ':' and has no '*' prefix marker
+        try:
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'IN-USE,SIGNAL', 'dev', 'wifi'],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith('*:'):
+                        signal_val = line.split(':', 1)[1].strip()
+                        if signal_val.isdigit():
+                            percentage = int(signal_val)
+                            self.logger.debug(f"WiFi signal from nmcli: {percentage}%")
+                            return percentage
+        except Exception as e:
+            self.logger.debug(f"nmcli failed: {e}")
+
+        # Method 3: iwconfig — legacy WEXT, may not be present on modern systems
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
-
-
-                # Look for Link Quality
                 quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
                 if quality_match:
                     current, maximum = map(int, quality_match.groups())
                     percentage = int((current / maximum) * 100)
-                    self.logger.debug(f"WiFi signal from iwconfig: {percentage}%")
+                    self.logger.debug(f"WiFi signal from iwconfig quality: {percentage}%")
                     return percentage
 
-                # Look for Signal level in dBm
                 signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
                 if signal_match:
                     dbm = int(signal_match.group(1))
                     percentage = max(0, min(100, (dbm + 100) * 2))
-                    self.logger.debug(f"WiFi signal from iwconfig dBm: {percentage}%")
+                    self.logger.debug(f"WiFi signal from iwconfig dBm: {dbm} dBm = {percentage}%")
                     return percentage
         except Exception as e:
             self.logger.debug(f"iwconfig failed: {e}")
-
-        # Method 2: Try nmcli
-        try:
-            result = subprocess.run(['nmcli', '-t', '-f', 'SIGNAL', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=3)
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if line.startswith('*'):  # Connected network
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            signal = re.search(r'(\d+)', parts[1])
-                            if signal:
-                                percentage = int(signal.group(1))
-                                self.logger.debug(f"WiFi signal from nmcli: {percentage}%")
-                                return percentage
-        except Exception as e:
-            self.logger.debug(f"nmcli failed: {e}")
-
-        # Method 3: Try /proc/net/wireless
-        try:
-            with open('/proc/net/wireless', 'r') as f:
-                lines = f.readlines()
-                for line in lines[2:]:  # Skip headers
-                    if ':' in line:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            signal = float(parts[2])
-                            if signal < 0:  # dBm format
-                                percentage = max(0, min(100, (signal + 90) * 100 / 60))
-                            else:  # Already percentage
-                                percentage = min(100, signal)
-                            self.logger.debug(f"WiFi signal from /proc: {percentage}%")
-                            return int(percentage)
-        except Exception as e:
-            self.logger.debug(f"/proc/net/wireless failed: {e}")
 
         return self._get_fallback_wifi_signal()
 
@@ -176,18 +175,17 @@ class NetworkMonitorThread(QThread):
         return self._get_fallback_wifi_signal()
 
     def _get_fallback_wifi_signal(self) -> int:
-        """Fallback WiFi signal when platform detection fails"""
-        # Return a reasonable default based on ping success
+        """Fallback WiFi signal when all platform detection methods fail"""
         try:
             quality, ping_ms = self.get_ping_quality()
             if ping_ms and ping_ms < 100:
-                return 70  # Assume good signal if ping is responsive
-            elif ping_ms and ping_ms < 200:
                 return 50
+            elif ping_ms and ping_ms < 200:
+                return 30
             else:
-                return 25
-        except:
-            return 50  # Neutral default
+                return 0
+        except Exception:
+            return 0
 
     def get_ping_quality(self) -> Tuple[int, Optional[float]]:
         """Get ping quality and response time to Pi"""

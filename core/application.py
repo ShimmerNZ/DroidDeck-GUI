@@ -53,44 +53,44 @@ class DroidDeckApplication(QMainWindow):
         self._run_initialization()
     
     def _run_initialization(self):
-        """Run initialization steps with realistic timing"""
+        """Run initialization steps as fast as possible, then wait for audio to finish"""
+        # Minimum time each step label stays visible — just long enough to read.
+        # Real work counts toward this; the sleep only fires if a step completes
+        # faster than the minimum. After all steps finish, the splash holds on
+        # "DroidDeck Ready!" until the startup audio track ends.
+        STEP_MIN_DISPLAY = 0.3
+
         try:
             for i, (message, method) in enumerate(self.init_steps):
-                # Update splash screen with current step
+                step_start = time.monotonic()
+
                 self.splash.update_progress(i, message)
-                
-                # Vary delay based on step complexity
-                if i in [2, 3]:  # Connection and screens steps
-                    time.sleep(1.2)
-                elif i in [1, 4]:  # Config and navigation steps
-                    time.sleep(0.8)
-                else:
-                    time.sleep(0.6)
-                
-                # Execute the initialization step
-                method()
-                
-                # Process events to update splash
                 QApplication.processEvents()
-                
-                # Extra delay after heavy steps
-                if i in [2, 3]:  # After connections and screens
-                    time.sleep(0.4)
-            
-            # Mark initialization complete
-            self.splash.finish_loading()
-            
-            # Show main window after splash closes
-            QTimer.singleShot(2200, self._show_main_window)
-            
+
+                method()
+
+                QApplication.processEvents()
+
+                elapsed = time.monotonic() - step_start
+                remaining = STEP_MIN_DISPLAY - elapsed
+                if remaining > 0:
+                    # Keep the event loop alive during the minimum display period
+                    # so the splash screen continues to animate rather than freezing
+                    deadline = time.monotonic() + remaining
+                    while time.monotonic() < deadline:
+                        QApplication.processEvents()
+                        time.sleep(0.016)
+
+            # Hand off to the splash — it closes when the startup tune ends,
+            # then calls _show_main_window automatically
+            self.splash.finish_loading(on_complete=self._show_main_window)
+
         except Exception as e:
-            # Show error on splash
             error_msg = f"Initialization failed: {str(e)}"
             self.splash.set_message(error_msg)
             if hasattr(self, 'logger'):
                 self.logger.error(f"DroidDeck initialization error: {e}")
-            
-            # Handle error after delay
+
             captured_error = e
             QTimer.singleShot(3000, lambda: self._handle_init_error(captured_error))
     
@@ -111,14 +111,12 @@ class DroidDeckApplication(QMainWindow):
     def _setup_logging(self):
         """Initialize the logging system"""
         self.logger = get_logger("main")
-        time.sleep(0.3)
-        
+
         logging_config = config_manager.get_logging_config()
         logger_manager.configure(
             debug_level=logging_config["debug_level"],
             module_debug=logging_config["module_debug"]
         )
-        time.sleep(0.2)
     def _center_main_window(self):
         """Center the main application window on screen"""
         try:
@@ -142,61 +140,44 @@ class DroidDeckApplication(QMainWindow):
             
     def _setup_theme(self):
         """Initialize theme manager and window setup"""
-        time.sleep(0.4)
-        
-        # Initialize theme manager
         theme_manager.initialize()
         theme_manager.register_callback(self._apply_theme)
-        
-        # Setup main window with DroidDeck branding
+
         self.setWindowTitle("DroidDeck - Professional Droid Control System")
         self.setFixedSize(1280, 800)
         self._setup_background()
-        time.sleep(0.3)
     
     def _setup_websocket_step(self):
         """Setup WebSocket connection"""
-        time.sleep(0.5)
-        
         self.websocket = self._setup_websocket()
-        
-        # Get Pi IP from config for network monitoring
+
         wave_config = config_manager.get_wave_config()
         proxy_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
-        # Extract IP from proxy URL
         import re
         ip_match = re.search(r'http://([^:]+)', proxy_url)
         self.pi_ip = ip_match.group(1) if ip_match else "10.42.0.1"
-        time.sleep(0.3)
     
     def _setup_screens(self):
         """Initialize all application screens"""
-        time.sleep(0.4)
-        
-        # Initialize UI components with Pi IP
         self.header = DynamicHeader("Home", pi_ip=self.pi_ip)
         self.header.setFixedWidth(1280)
         self.header.connect_websocket_signals(self.websocket)
         self.stack = QStackedWidget()
-        
-        time.sleep(0.3)
-        
-        # Create screens with shared WebSocket
+
         self.home_screen = HomeScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.camera_screen = CameraFeedScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.health_screen = HealthScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.servo_screen = ServoConfigScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.controller_screen = ControllerConfigScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.settings_screen = SettingsScreen(self.websocket)
-        time.sleep(0.1)
+        QApplication.processEvents()
         self.scene_screen = SceneScreen(self.websocket)
-        
-        # Add screens to stack
+
         self.stack.addWidget(self.home_screen)
         self.stack.addWidget(self.camera_screen)
         self.stack.addWidget(self.health_screen)
@@ -204,30 +185,18 @@ class DroidDeckApplication(QMainWindow):
         self.stack.addWidget(self.controller_screen)
         self.stack.addWidget(self.settings_screen)
         self.stack.addWidget(self.scene_screen)
-        
-        # Connect scene screen signals to home screen for updates
+
         if hasattr(self.scene_screen, 'scenes_updated') and hasattr(self.home_screen, 'connect_scene_screen_signals'):
             self.home_screen.connect_scene_screen_signals(self.scene_screen)
 
-        # Share the header's network monitor with the health screen
         if hasattr(self.header, 'network_monitor'):
             self.health_screen.connect_network_monitor(self.header.network_monitor)
-        
-        time.sleep(0.2)
     
     def _setup_navigation_step(self):
         """Setup navigation and memory management"""
-        time.sleep(0.3)
-        
         self.nav_buttons = {}
-        
-        # Setup memory management
         self._setup_memory_management()
-        
-        # Setup UI layout
         self._setup_navigation()
-        time.sleep(0.2)
-
         self.menuBar().hide()
         self._setup_hidden_exit()
 
@@ -259,20 +228,11 @@ class DroidDeckApplication(QMainWindow):
     
     def _finalize_setup(self):
         """Finalize setup and apply theme"""
-        time.sleep(0.3)
-        
         self._setup_layout()
-        
-        # Initialize Steam Deck controller thread
         self._setup_controller_thread()
-
-        # Apply initial theme
         self._apply_theme()
         self._center_main_window()
-        
-        # Connect telemetry updates to header
         self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
-        time.sleep(0.2)
     
     def _setup_controller_thread(self):
         """Initialize and start the Steam Deck controller thread with thread-safe WebSocket"""
@@ -628,21 +588,26 @@ class DroidDeckApplication(QMainWindow):
             ("Cleaning resources...", self._cleanup_resources),
             ("Shutdown complete", lambda: None)
         ]
-        
-        # Run shutdown steps with progress
+
+        # Each step targets 1.0s of display time (5 steps = 5.0s).
+        # Real cleanup work counts toward the target; only the remainder is slept.
+        # _wait_for_audio_completion then holds until the 6s shutdown tune ends.
         for i, (message, method) in enumerate(shutdown_steps):
+            step_start = time.monotonic()
             self.shutdown_splash.update_shutdown_progress(i)
-            time.sleep(0.4)  # Show progress
             try:
                 method()
             except Exception as e:
                 if hasattr(self, 'logger'):
                     self.logger.error(f"Shutdown error in {message}: {e}")
             QApplication.processEvents()
-        
-        # Final step
+            elapsed = time.monotonic() - step_start
+            remaining = 1.0 - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
         self.shutdown_splash.update_shutdown_progress(len(shutdown_steps))
-        time.sleep(0.8)
+        QApplication.processEvents()
         if hasattr(self, 'shutdown_splash'):
             self._wait_for_audio_completion()
 
