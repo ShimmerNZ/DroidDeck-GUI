@@ -1,110 +1,148 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-bitsteam field inspector for DroidDeck
-Connects to /dev/hidraw2, reads a few frames, and prints every
-field name and its current value so we can map them precisely
-into steamdeck.py and controller_config.json.
+bitsteam field inspector for DroidDeck — updated for actual API
+Output saved to ~/DroidDeck/bitsteam_fields.txt
 
 Run inside Distrobox:
-    python3 inspect_bitsteam_fields.py
+    python3 ~/DroidDeck/inspect_bitsteam_fields.py
 """
 
 import time
-from bitsteam import SteamDeck
+import sys
 
+OUTPUT_FILE = "/home/deck/DroidDeck/bitsteam_fields.txt"
 
-def inspect(state):
-    """Print every non-private attribute and its value"""
-    fields = {
-        k: getattr(state, k)
-        for k in dir(state)
-        if not k.startswith('_') and not callable(getattr(state, k))
-    }
-    return fields
+def log(msg=""):
+    print(msg)
+    with open(OUTPUT_FILE, 'a') as f:
+        f.write(msg + "\n")
 
+# Clear output file
+open(OUTPUT_FILE, 'w').close()
 
-def main():
-    print("Connecting to Steam Deck HID device...")
+log("=== bitsteam field inspector ===")
+log()
+
+try:
+    from bitsteam import SteamDeck
+except ImportError:
+    log("ERROR: bitsteam not installed")
+    log("Run: pip install bitsteam --break-system-packages")
+    sys.exit(1)
+
+log("Connecting...")
+try:
+    deck = SteamDeck()
+    deck.start()
+    log(f"Connected — device: {deck.device_path}")
+except Exception as e:
+    log(f"Connection failed: {e}")
+    log("Check udev rule and /dev/hidraw* permissions")
+    sys.exit(1)
+
+# Let the reader thread settle
+time.sleep(0.5)
+
+log()
+log("--- Analog values (sticks, triggers, trackpads) ---")
+try:
+    analog = deck.get_analog_values()
+    log(f"Type: {type(analog)}")
+    if hasattr(analog, '__dict__'):
+        for k, v in vars(analog).items():
+            log(f"  {k}: {v}")
+    elif hasattr(analog, '_fields_'):
+        for f in analog._fields_:
+            log(f"  {f}: {getattr(analog, f)}")
+    else:
+        log(f"  raw: {analog}")
+        try:
+            for i, v in enumerate(analog):
+                log(f"  [{i}]: {v}")
+        except Exception:
+            pass
+except Exception as e:
+    log(f"get_analog_values error: {e}")
+
+log()
+log("--- Button state ---")
+try:
+    buttons = deck.get_button_state()
+    log(f"Type: {type(buttons)}")
+    if hasattr(buttons, '__dict__'):
+        for k, v in vars(buttons).items():
+            log(f"  {k}: {v}")
+    elif hasattr(buttons, '_fields_'):
+        for f in buttons._fields_:
+            log(f"  {f}: {getattr(buttons, f)}")
+    else:
+        log(f"  raw: {buttons}")
+except Exception as e:
+    log(f"get_button_state error: {e}")
+
+log()
+log("--- IMU rates (gyro/accelerometer) ---")
+try:
+    imu = deck.get_imu_rates()
+    log(f"Type: {type(imu)}")
+    if hasattr(imu, '__dict__'):
+        for k, v in vars(imu).items():
+            log(f"  {k}: {v}")
+    elif hasattr(imu, '_fields_'):
+        for f in imu._fields_:
+            log(f"  {f}: {getattr(imu, f)}")
+    else:
+        log(f"  raw: {imu}")
+        try:
+            for i, v in enumerate(imu):
+                log(f"  [{i}]: {v}")
+        except Exception:
+            pass
+except Exception as e:
+    log(f"get_imu_rates error: {e}")
+
+log()
+log("--- Raw attribute snapshots ---")
+log(f"  deck.analog: {deck.analog}")
+log(f"  deck.buttons: {deck.buttons}")
+log(f"  deck.imu: {deck.imu}")
+
+log()
+log("--- Live check: press every button and tilt the Deck (15s) ---")
+log("Watching for button changes and IMU movement...")
+
+seen_buttons = set()
+start = time.monotonic()
+prev_buttons = deck.buttons
+
+while time.monotonic() - start < 15:
     try:
-        deck = SteamDeck()
+        # Check for button changes
+        curr = deck.buttons
+        if curr != prev_buttons:
+            log(f"  BUTTON CHANGE: {curr}")
+            seen_buttons.add(str(curr))
+            prev_buttons = curr
+
+        # Check IMU
+        imu = deck.get_imu_rates()
+        if imu is not None:
+            try:
+                vals = list(imu) if hasattr(imu, '__iter__') else vars(imu).values()
+                if any(abs(v) > 0.1 for v in vals if isinstance(v, (int, float))):
+                    log(f"  IMU: {imu}")
+            except Exception:
+                pass
+
     except Exception as e:
-        print(f"Connection failed: {e}")
-        print("Make sure the udev rule is applied and /dev/hidraw2 is readable.")
-        return
+        log(f"  read error: {e}")
 
-    print("Connected. Reading 3 frames to capture field names...\n")
+    time.sleep(0.1)
 
-    # Grab a few frames so any lazy-initialised fields are populated
-    state = None
-    for _ in range(10):
-        s = deck.get_state()
-        if s is not None:
-            state = s
-        time.sleep(0.05)
+deck.stop()
 
-    if state is None:
-        print("No state received. Is the controller active?")
-        deck.close()
-        return
-
-    fields = inspect(state)
-
-    # Group by likely category for readability
-    sticks    = {k: v for k, v in fields.items() if 'stick' in k or 'joystick' in k}
-    triggers  = {k: v for k, v in fields.items() if 'trigger' in k}
-    imu       = {k: v for k, v in fields.items() if any(x in k for x in
-                 ('pitch', 'yaw', 'roll', 'accel', 'gyro', 'imu', 'angular', 'gravity'))}
-    buttons   = {k: v for k, v in fields.items() if 'btn' in k or 'button' in k or 'press' in k}
-    pads      = {k: v for k, v in fields.items() if 'pad' in k or 'touch' in k}
-    other     = {k: v for k, v in fields.items()
-                 if k not in sticks and k not in triggers and k not in imu
-                 and k not in buttons and k not in pads}
-
-    def show(label, d):
-        if not d:
-            return
-        print(f"--- {label} ---")
-        for k, v in sorted(d.items()):
-            print(f"  {k:<30} = {v!r}")
-        print()
-
-    show("Sticks", sticks)
-    show("Triggers", triggers)
-    show("IMU (gyro / accelerometer)", imu)
-    show("Buttons", buttons)
-    show("Trackpads", pads)
-    show("Other", other)
-
-    # Now hold for 10 seconds and report any button presses or large IMU readings
-    print("--- Live check: press every button and tilt the Deck (10s) ---\n")
-    seen_buttons = set()
-    start = time.monotonic()
-    while time.monotonic() - start < 10:
-        s = deck.get_state()
-        if s is None:
-            time.sleep(0.02)
-            continue
-
-        live = inspect(s)
-
-        # Report buttons that just became True
-        for k, v in live.items():
-            if ('btn' in k or 'button' in k) and v and k not in seen_buttons:
-                print(f"  BUTTON PRESSED: {k}")
-                seen_buttons.add(k)
-
-        # Report significant IMU movement
-        for k in ('pitch', 'yaw', 'roll'):
-            if k in live and abs(live[k]) > 5:
-                print(f"  IMU {k}: {live[k]:.2f}")
-
-        time.sleep(0.02)
-
-    deck.close()
-    print(f"\nButtons observed during live check: {sorted(seen_buttons)}")
-    print("\nCopy these field names — they're what goes into the steamdeck.py migration.")
-
-
-if __name__ == '__main__':
-    main()
+log()
+log("--- Summary ---")
+log(f"Button changes seen: {len(seen_buttons)}")
+log("Done. Read this file at ~/DroidDeck/bitsteam_fields.txt")
