@@ -44,6 +44,15 @@ class WebSocketManager(QWebSocket):
         self.logger.info(f"WebSocket connected to {self.url}")
         self.reconnect_attempts = 0
         self.reconnect_timer.stop()
+
+        # Disable Nagle algorithm so controller frames are sent immediately
+        # rather than being batched — reduces latency by up to 40ms
+        try:
+            self.setSocketOption(
+                QAbstractSocket.SocketOption.LowDelayOption, 1
+            )
+        except Exception as e:
+            self.logger.debug(f"Could not set TCP_NODELAY: {e}")
     
     def on_disconnected(self):
         """Handle disconnection"""
