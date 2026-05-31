@@ -834,9 +834,10 @@ class HealthScreen(BaseScreen):
         """Connect the shared network monitor from the header bar."""
         self._network_monitor = network_monitor
         network_monitor.wifi_updated.connect(self._update_wifi_display)
+        network_monitor.connectivity_updated.connect(self._update_ping_display)
 
-    def _update_wifi_display(self, signal_percent: int, status_text: str, ping_ms: float):
-        """Update WiFi status labels on the health screen"""
+    def _update_wifi_display(self, signal_percent: int, status_text: str, _unused: float):
+        """Update WiFi signal label on the health screen"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")
 
@@ -847,15 +848,20 @@ class HealthScreen(BaseScreen):
                 f"color: {color}; padding: 1px; background: transparent;"
             )
 
+    def _update_ping_display(self, ping_ms: float, is_connected: bool):
+        """Update Pi connectivity label on the health screen"""
+        green = theme_manager.get("green")
+        red = theme_manager.get("red")
+
         if "wifi_ping" in self.status_labels:
-            if ping_ms and ping_ms > 0:
-                self.status_labels["wifi_ping"].setText(f"Ping: {ping_ms:.1f}ms")
+            if is_connected and ping_ms > 0:
+                self.status_labels["wifi_ping"].setText(f"Pi: {ping_ms:.1f}ms")
                 color = green if ping_ms < 30 else ("orange" if ping_ms < 80 else red)
                 self.status_labels["wifi_ping"].setStyleSheet(
                     f"color: {color}; padding: 1px; background: transparent;"
                 )
             else:
-                self.status_labels["wifi_ping"].setText("Ping: timeout")
+                self.status_labels["wifi_ping"].setText("Pi: unreachable")
                 self.status_labels["wifi_ping"].setStyleSheet(
                     f"color: {red}; padding: 1px; background: transparent;"
                 )

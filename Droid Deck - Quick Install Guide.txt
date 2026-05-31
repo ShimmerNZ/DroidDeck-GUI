@@ -68,20 +68,19 @@ Set any password you like. You only need to do this once — it survives reboots
 #### Step 2: Download the Repository
 
 ```bash
-# Clone the repository
-cd ~
-git clone https://github.com/ShimmerNZ/DroidDeck-GUI.git
-cd DroidDeck-GUI
+# Clone directly into the DroidDeck directory
+git clone https://github.com/ShimmerNZ/DroidDeck-GUI.git ~/DroidDeck
+cd ~/DroidDeck
 ```
 
 #### Step 3: Run the Installer
 
 ```bash
 # Make the installer executable
-chmod +x DD_install.sh
+chmod +x DD_Install.sh
 
-# Run the automated installer (takes 10-15 minutes)
-./DD_install.sh
+# Run the automated installer (takes approximately 10 minutes)
+./DD_Install.sh
 ```
 
 The installer will:
@@ -98,30 +97,14 @@ The installer will:
 - ✅ Generate launch scripts
 - ✅ Create Steam integration helpers
 
-#### Step 4: Copy Application Files
-
-After installation, copy the application files to the DroidDeck directory:
-
-```bash
-# From the cloned repository
-cp -r main.py widgets core threads resources ~/DroidDeck/
-```
-
-Or clone directly into the DroidDeck directory:
-
-```bash
-cd ~/DroidDeck
-git clone https://github.com/ShimmerNZ/DroidDeck-GUI.git .
-```
-
-#### Step 5: Test the Installation
+#### Step 4: Test the Installation
 
 ```bash
 # Launch Droid Deck in Desktop Mode
-~/DroidDeck/launch.sh
+./launch.sh
 ```
 
-#### Step 6: Add to Steam (Gaming Mode)
+#### Step 5: Add to Steam (Gaming Mode)
 
 For Gaming Mode access, run the helper script:
 
@@ -342,7 +325,7 @@ Edit `resources/configs/controller_config.json`:
    ```
    
    **Steam Deck (Gaming Mode):**
-   - Launch "Droid Deck" from Steam library
+   - Launch "Droid Deck" from Steam library (after completing Step 5)
    
    **Other Linux Systems:**
    ```bash
@@ -541,5 +524,5 @@ Droid Deck is a comprehensive control system designed to provide a user-friendly
 
 ---
 
-**Total Setup Time**: ~30 minutes  
+**Total Setup Time**: ~15 minutes (10 min package install + 5 min configuration)
 **Difficulty**: ⭐⭐☆☆☆ (Easy-Medium)
