@@ -157,6 +157,7 @@ class SteamDeckControllerThread(QThread):
     def _request_imu_config(self):
         """Ask the backend for the controller config so we can find the imu_toggle button."""
         self.send_websocket_message.emit({"type": "get_controller_config"})
+        self.logger.info("Requested controller config to discover imu_toggle button")
 
     def _on_websocket_message(self, text: str):
         """Parse incoming backend messages and extract the imu_toggle button from config."""
@@ -175,8 +176,16 @@ class SteamDeckControllerThread(QThread):
                         self.imu_toggle_button = control_name
                         self.logger.info(f"IMU toggle button set from config: {control_name}")
                         return
-        except Exception:
-            pass
+            # No imu_toggle behavior found in config
+            self.logger.warning(
+                "No imu_toggle behavior found in controller config — "
+                "IMU toggle disabled. Add a button with behavior 'imu_toggle' "
+                "in the controller screen and save."
+            )
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse websocket message in steamdeck: {e}")
+        except Exception as e:
+            self.logger.error(f"Error processing websocket message in steamdeck: {e}")
 
     def start_monitoring(self):
         if not self.running:
@@ -254,8 +263,14 @@ class SteamDeckControllerThread(QThread):
                 self.controller_active = True
                 self.logger.info(f"HID controller opened: {HIDRAW_PATH}")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
-                # Discover which button is mapped to imu_toggle in controller_config
+                # Request controller config to discover imu_toggle button.
+                # Also schedule a retry 3s later in case the websocket isn't
+                # fully ready or the backend returns an error on first attempt.
                 self._request_imu_config()
+                time.sleep(3.0)
+                if self.imu_toggle_button is None:
+                    self.logger.info("imu_toggle button not yet set — retrying config request")
+                    self._request_imu_config()
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")

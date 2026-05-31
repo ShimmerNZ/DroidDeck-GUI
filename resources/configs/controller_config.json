@@ -146,5 +146,10 @@
       "behavior": "imu_tilt",
       "servos": []
     }
+  ],
+  "button_x": [
+    {
+      "behavior": "imu_toggle"
+    }
   ]
 }
