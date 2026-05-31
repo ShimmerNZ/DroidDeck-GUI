@@ -19,6 +19,7 @@ Byte offsets verified by hardware orientation sweep testing:
   Accel pitch: 26               — int16,  ±17000 (back=+, forward=-)
 """
 
+import json
 import struct
 import time
 from typing import Dict, Any, Optional
@@ -26,6 +27,7 @@ from typing import Dict, Any, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.logger import get_logger
+from core.config_manager import config_manager
 from core.utils import error_boundary
 
 
@@ -143,52 +145,68 @@ class SteamDeckControllerThread(QThread):
             "disconnections":   0,
         }
 
-        # Listen for incoming backend messages so we can detect the imu_toggle
-        # button from controller_config without hardcoding it here.
+        # Listen for controller_config_data messages so imu_toggle_button updates
+        # automatically when the user refreshes config from backend on a different device.
         if websocket_manager:
             try:
                 websocket_manager.textMessageReceived.connect(self._on_websocket_message)
-                websocket_manager.connected.connect(self._request_imu_config)
             except Exception:
                 pass
 
         self.logger.info("SteamDeck controller thread initialised")
 
-    def _request_imu_config(self):
-        """Ask the backend for the controller config so we can find the imu_toggle button."""
-        self.send_websocket_message.emit({"type": "get_controller_config"})
-        self.logger.info("Requested controller config to discover imu_toggle button")
+    def _scan_config_for_imu_toggle(self, config: dict):
+        """Scan a controller config dict and set imu_toggle_button from the first
+        entry found with behavior 'imu_toggle'. Called from both the local file
+        read on startup and from any controller_config_data websocket message."""
+        if not isinstance(config, dict):
+            return
+        for control_name, configs in config.items():
+            if isinstance(configs, dict):
+                configs = [configs]
+            if not isinstance(configs, list):
+                continue
+            for cfg in configs:
+                if cfg.get("behavior") == "imu_toggle":
+                    if self.imu_toggle_button != control_name:
+                        self.imu_toggle_button = control_name
+                        self.logger.info(f"IMU toggle button: {control_name}")
+                    return
+        # Nothing found — clear in case it was removed from config
+        if self.imu_toggle_button is not None:
+            self.logger.warning("No imu_toggle behavior in config — IMU toggle disabled")
+            self.imu_toggle_button = None
+
+    def _load_imu_toggle_from_local_config(self):
+        """Read the local controller config file immediately — no network needed.
+        This gives instant imu_toggle detection at startup when the config was
+        saved on this device."""
+        try:
+            config = config_manager.get_config("resources/configs/controller_config.json")
+            if config:
+                self._scan_config_for_imu_toggle(config)
+        except Exception as e:
+            self.logger.debug(f"Could not read local controller config: {e}")
 
     def _on_websocket_message(self, text: str):
-        """Parse incoming backend messages and extract the imu_toggle button from config."""
+        """Parse incoming controller_config_data messages and update imu_toggle_button.
+        This handles the case where config was set on another device and refreshed
+        from the backend."""
         try:
             data = json.loads(text)
             if data.get("type") != "controller_config_data":
                 return
-            config = data.get("config", {})
-            for control_name, configs in config.items():
-                if isinstance(configs, dict):
-                    configs = [configs]
-                if not isinstance(configs, list):
-                    continue
-                for cfg in configs:
-                    if cfg.get("behavior") == "imu_toggle":
-                        self.imu_toggle_button = control_name
-                        self.logger.info(f"IMU toggle button set from config: {control_name}")
-                        return
-            # No imu_toggle behavior found in config
-            self.logger.warning(
-                "No imu_toggle behavior found in controller config — "
-                "IMU toggle disabled. Add a button with behavior 'imu_toggle' "
-                "in the controller screen and save."
-            )
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse websocket message in steamdeck: {e}")
+            self._scan_config_for_imu_toggle(data.get("config", {}))
+        except json.JSONDecodeError:
+            pass
         except Exception as e:
-            self.logger.error(f"Error processing websocket message in steamdeck: {e}")
+            self.logger.debug(f"Error in steamdeck websocket handler: {e}")
 
     def start_monitoring(self):
         if not self.running:
+            # Read local config immediately so imu_toggle_button is set before
+            # the first HID frame is processed — no network request needed.
+            self._load_imu_toggle_from_local_config()
             self.running = True
             self.stats["start_time"] = time.time()
             self.start()
@@ -203,10 +221,6 @@ class SteamDeckControllerThread(QThread):
         if self.websocket_manager:
             try:
                 self.websocket_manager.textMessageReceived.disconnect(self._on_websocket_message)
-            except Exception:
-                pass
-            try:
-                self.websocket_manager.connected.disconnect(self._request_imu_config)
             except Exception:
                 pass
 
@@ -263,14 +277,6 @@ class SteamDeckControllerThread(QThread):
                 self.controller_active = True
                 self.logger.info(f"HID controller opened: {HIDRAW_PATH}")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
-                # Request controller config to discover imu_toggle button.
-                # Also schedule a retry 3s later in case the websocket isn't
-                # fully ready or the backend returns an error on first attempt.
-                self._request_imu_config()
-                time.sleep(3.0)
-                if self.imu_toggle_button is None:
-                    self.logger.info("imu_toggle button not yet set — retrying config request")
-                    self._request_imu_config()
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")
