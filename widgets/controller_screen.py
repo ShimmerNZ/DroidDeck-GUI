@@ -986,8 +986,9 @@ class ControllerConfigScreen(BaseScreen):
         self.input_types = ["joystick", "trigger", "button", "dpad"]
         
         self.behaviors = [
-            "direct_servo", "multi_servo", "toggle_servo", "joystick_pair", "differential_tracks", 
-            "scene_trigger", "toggle_scenes", "nema_stepper", "system_control"
+            "direct_servo", "multi_servo", "toggle_servo", "joystick_pair", "differential_tracks",
+            "scene_trigger", "toggle_scenes", "nema_stepper", "system_control",
+            "imu_tilt", "imu_toggle"
         ]
         
         # Don't load servo channels here - wait for maestro detection
@@ -1051,6 +1052,67 @@ class ControllerConfigScreen(BaseScreen):
         self.request_controller_info()
         self.logger.info("Requested controller config from backend")
 
+
+    def _create_imu_tilt_params(self, row_data: Dict):
+        """Create parameters for imu_tilt behaviour — target servo, sensitivity, invert"""
+        primary_color = theme_manager.get("primary")
+
+        header = QLabel("IMU Tilt Configuration")
+        header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; background: transparent;")
+        self.params_layout.addWidget(header)
+
+        info = QLabel("Maps accelerometer tilt (-1 to 1) to a servo channel.\n"
+                      "imu_roll: left tilt = positive, right tilt = negative.\n"
+                      "imu_pitch: tilt back = positive, tilt forward = negative.")
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {theme_manager.get('text_secondary')}; padding: 4px 0px;")
+        self.params_layout.addWidget(info)
+
+        # Target servo
+        target_layout = QHBoxLayout()
+        target_layout.addWidget(QLabel("Target Servo:"))
+        servo_combo = QComboBox()
+        servo_combo.addItems(["Select Servo..."] + self.servo_channels)
+        servo_combo.setStyleSheet(self._get_combo_style())
+        if 'target' in row_data['config']:
+            servo_combo.setCurrentText(row_data['config']['target'])
+        servo_combo.currentTextChanged.connect(
+            lambda text: self._update_row_config(row_data, 'target', text)
+        )
+        target_layout.addWidget(servo_combo)
+        self.params_layout.addLayout(target_layout)
+
+        # Sensitivity
+        sens_layout = QHBoxLayout()
+        sens_layout.addWidget(QLabel("Sensitivity:"))
+        sens_slider = QSlider(Qt.Orientation.Horizontal)
+        sens_slider.setMinimum(10)
+        sens_slider.setMaximum(200)
+        current_sens = int(row_data['config'].get('sensitivity', 1.0) * 100)
+        sens_slider.setValue(current_sens)
+        sens_label = QLabel(f"{current_sens / 100:.2f}")
+        sens_label.setFixedWidth(35)
+
+        def on_sens_change(val):
+            sens_label.setText(f"{val / 100:.2f}")
+            self._update_row_config(row_data, 'sensitivity', val / 100)
+
+        sens_slider.valueChanged.connect(on_sens_change)
+        sens_layout.addWidget(sens_slider)
+        sens_layout.addWidget(sens_label)
+        self.params_layout.addLayout(sens_layout)
+
+        # Invert
+        invert_cb = QCheckBox("Invert axis")
+        invert_cb.setChecked(row_data['config'].get('invert', False))
+        invert_cb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
+        invert_cb.toggled.connect(lambda checked: self._update_row_config(row_data, 'invert', checked))
+        self.params_layout.addWidget(invert_cb)
+
+        # Update target label
+        target = row_data['config'].get('target', 'Not configured')
+        row_data['target_label'].setText(f"→ {target}")
 
     def _create_system_control_params(self, row_data: Dict):
         """Create parameters for system control behavior"""
@@ -1852,6 +1914,13 @@ class ControllerConfigScreen(BaseScreen):
             self._create_nema_stepper_params(row_data)
         elif behavior == "system_control":  
             self._create_system_control_params(row_data)
+        elif behavior == "imu_tilt":
+            self._create_imu_tilt_params(row_data)
+        elif behavior == "imu_toggle":
+            label = QLabel("IMU toggle — handled by the Steam Deck frontend.\nNo backend parameters needed.\n\nConfigure the toggle button in steamdeck_config.json\nunder \"imu_toggle_button\".")
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {theme_manager.get('text_secondary')}; padding: 8px;")
+            self.params_layout.addWidget(label)
 
     def _create_direct_servo_params(self, row_data: Dict):
         """Create parameters for direct servo behavior"""
@@ -2603,28 +2672,46 @@ class ControllerConfigScreen(BaseScreen):
                 child.widget().deleteLater()
 
     def _remove_mapping_row(self, row_index: int):
-        """Remove a mapping row"""
-        if 0 <= row_index < len(self.mapping_rows):
-            row_data = self.mapping_rows[row_index]
-            control_name = row_data['input_combo'].currentText()
-            if control_name != "Select Input...":
-                self.behavior_registry.unregister_mapping(control_name)
+        """Remove a mapping row and cleanly update all dependent state"""
+        if not (0 <= row_index < len(self.mapping_rows)):
+            return
 
-            for key in ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']:
-                widget = row_data[key]
-                self.grid_layout.removeWidget(widget)
-                widget.setParent(None)
+        row_data = self.mapping_rows[row_index]
+        control_name = row_data['input_combo'].currentText()
+        if control_name != "Select Input...":
+            self.behavior_registry.unregister_mapping(control_name)
 
-            self.mapping_rows.pop(row_index)
+        for key in ['remove_btn', 'input_combo', 'behavior_combo', 'target_label', 'select_btn']:
+            widget = row_data[key]
+            self.grid_layout.removeWidget(widget)
+            widget.setParent(None)
 
-            if self.selected_row_index == row_index:
-                self.selected_row_index = None
-                self._show_no_selection_message()
-            elif self.selected_row_index is not None and self.selected_row_index > row_index:
-                self.selected_row_index -= 1
+        self.mapping_rows.pop(row_index)
 
-            self._rebuild_grid_layout()
-            self._check_for_conflicts()
+        # Adjust selected_row_index:
+        #   - deleted row was selected       → clear selection
+        #   - deleted row was above selected → shift index down by one
+        #   - deleted row was below selected → no change needed
+        if self.selected_row_index == row_index:
+            self.selected_row_index = None
+        elif self.selected_row_index is not None and self.selected_row_index > row_index:
+            self.selected_row_index -= 1
+
+        # Rebuild grid positions and refresh all index-based signal connections
+        self._rebuild_grid_layout()
+        self._check_for_conflicts()
+
+        # Refresh the config panel and button highlight states so everything
+        # reflects the post-deletion layout cleanly
+        if self.selected_row_index is not None and 0 <= self.selected_row_index < len(self.mapping_rows):
+            self._select_row_for_config(self.selected_row_index)
+        else:
+            self.selected_row_index = None
+            self._show_no_selection_message()
+            # Clear all button highlights since nothing is selected
+            for rd in self.mapping_rows:
+                rd['select_btn'].setText("Configure")
+                rd['select_btn'].setStyleSheet(self._get_small_button_style())
 
     def _rebuild_grid_layout(self):
         """Rebuild grid layout with correct row indices after removal"""
@@ -2663,10 +2750,10 @@ class ControllerConfigScreen(BaseScreen):
                 pass
 
             row_data['remove_btn'].clicked.connect(
-                lambda r=row: self._remove_mapping_row(r)
+                lambda checked=False, r=row: self._remove_mapping_row(r)
             )
             row_data['select_btn'].clicked.connect(
-                lambda r=row: self._select_row_for_config(r)
+                lambda checked=False, r=row: self._select_row_for_config(r)
             )
             row_data['behavior_combo'].currentTextChanged.connect(
                 lambda text, r=row: self._on_behavior_changed(r, text)

@@ -76,7 +76,7 @@ BUTTON_MAP = {
     'dpad_left':        'dpad_left',
     'dpad_right':       'dpad_right',
     'select':           'button_back',
-    'start':            'button_start',
+    'start':            'button_menu',
     'steam':            'button_guide',
     'quick_access':     'button_quick_access',
     'l_stick_press':    'button_l3',
