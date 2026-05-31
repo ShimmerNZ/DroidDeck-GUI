@@ -433,15 +433,20 @@ EOF
 
 # Create project directory structure
 setup_project_structure() {
-    print_step "Creating project directory structure..."
-    
-    # Remove existing directory
-    rm -rf "$PROJECT_DIR" >/dev/null 2>&1 || true
-    
-    # Create directory structure
+    print_step "Setting up project directory structure..."
+
+    # If the directory already exists (e.g. cloned directly into ~/DroidDeck)
+    # preserve the files — just ensure the expected subdirectories are present
+    if [[ -d "$PROJECT_DIR" ]]; then
+        print_info "Project directory already exists — preserving existing files"
+    else
+        mkdir -p "$PROJECT_DIR"
+    fi
+
+    # Ensure subdirectory structure exists without touching existing content
     mkdir -p "$PROJECT_DIR"/{widgets,resources,core,threads}
-    
-    print_info "Created directories:"
+
+    print_info "Project structure verified:"
     print_info "  📁 $PROJECT_DIR/widgets/"
     print_info "  📁 $PROJECT_DIR/resources/"
     print_info "  📁 $PROJECT_DIR/core/"
