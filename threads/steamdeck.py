@@ -180,15 +180,16 @@ class SteamDeckControllerThread(QThread):
                 )
 
     def _load_imu_toggle_from_local_config(self):
-        """Read the local controller config file immediately — no network needed.
-        This gives instant imu_toggle detection at startup when the config was
-        saved on this device."""
+        """Read the local controller config file immediately — no network needed."""
         try:
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config:
                 self._scan_config_for_imu_toggle(config)
+                self.logger.info(f"IMU toggle buttons after local config scan: {self.imu_toggle_buttons}")
+            else:
+                self.logger.warning("Local controller config empty — no imu_toggle buttons set")
         except Exception as e:
-            self.logger.debug(f"Could not read local controller config: {e}")
+            self.logger.error(f"Could not read local controller config: {e}")
 
     def _on_websocket_message(self, text: str):
         """Parse incoming controller_config_data messages and update imu_toggle_button.
@@ -405,9 +406,11 @@ class SteamDeckControllerThread(QThread):
         for btn in self.imu_toggle_buttons:
             current = buttons.get(btn, False)
             prev    = self._prev_buttons.get(btn, False)
+            if current:
+                self.logger.debug(f"IMU toggle candidate pressed: {btn} (prev={prev})")
             if current and not prev:
                 self._toggle_imu(raw)
-                break  # one toggle per frame is enough
+                break
         self._prev_buttons = buttons
 
     def _toggle_imu(self, raw: bytes):
