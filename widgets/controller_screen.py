@@ -2620,6 +2620,8 @@ class ControllerConfigScreen(BaseScreen):
             if self.selected_row_index == row_index:
                 self.selected_row_index = None
                 self._show_no_selection_message()
+            elif self.selected_row_index is not None and self.selected_row_index > row_index:
+                self.selected_row_index -= 1
 
             self._rebuild_grid_layout()
             self._check_for_conflicts()
@@ -2648,6 +2650,27 @@ class ControllerConfigScreen(BaseScreen):
             self.grid_layout.addWidget(row_data['behavior_combo'], row, 2)
             self.grid_layout.addWidget(row_data['target_label'], row, 3)
             self.grid_layout.addWidget(row_data['select_btn'], row, 4)
+
+            # Reconnect index-based signals with the correct new row index.
+            # The original lambdas captured the index at creation time; after
+            # any deletion those indices are stale and must be refreshed.
+            # The r=row default-argument pattern captures the current value.
+            try:
+                row_data['remove_btn'].clicked.disconnect()
+                row_data['select_btn'].clicked.disconnect()
+                row_data['behavior_combo'].currentTextChanged.disconnect()
+            except Exception:
+                pass
+
+            row_data['remove_btn'].clicked.connect(
+                lambda r=row: self._remove_mapping_row(r)
+            )
+            row_data['select_btn'].clicked.connect(
+                lambda r=row: self._select_row_for_config(r)
+            )
+            row_data['behavior_combo'].currentTextChanged.connect(
+                lambda text, r=row: self._on_behavior_changed(r, text)
+            )
 
     def _save_all_mappings(self):
         """Save all controller mappings to configuration"""
