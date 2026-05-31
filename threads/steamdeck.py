@@ -125,13 +125,12 @@ class SteamDeckControllerThread(QThread):
         self.sequence_number = 0
         self.last_input_sent = 0
 
-        # IMU state — toggle button is discovered from controller_config on the backend,
-        # not hardcoded here. Set to None until the config is received.
+        # IMU state
         self.imu_enabled       = False
         self.imu_zero_ax       = 0
         self.imu_zero_ay       = 0
         self._prev_buttons     = {}
-        self.imu_toggle_buttons: set = set()  # all buttons mapped to imu_toggle behavior
+        self.imu_toggle_buttons: set = set()
 
         # HID handles
         self._hid_device    = None
@@ -156,59 +155,49 @@ class SteamDeckControllerThread(QThread):
         self.logger.info("SteamDeck controller thread initialised")
 
     def _scan_config_for_imu_toggle(self, config: dict):
-        """Scan a controller config dict and populate imu_toggle_buttons with every
-        button that has behavior 'imu_toggle'. Supports multiple toggle buttons."""
+        """Scan a controller config dict and populate imu_toggle_buttons."""
         if not isinstance(config, dict):
             return
         found = set()
-        for control_name, configs in config.items():
-            if isinstance(configs, dict):
-                configs = [configs]
-            if not isinstance(configs, list):
+        for control_name, entries in config.items():
+            if isinstance(entries, dict):
+                entries = [entries]
+            if not isinstance(entries, list):
                 continue
-            for cfg in configs:
-                if cfg.get("behavior") == "imu_toggle":
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("behavior") == "imu_toggle":
                     found.add(control_name)
-        if found != self.imu_toggle_buttons:
-            self.imu_toggle_buttons = found
-            if found:
-                self.logger.info(f"IMU toggle buttons: {', '.join(sorted(found))}")
-            else:
-                self.logger.warning(
-                    "No imu_toggle behavior in config — IMU toggle disabled."
-                )
+        self.imu_toggle_buttons = found
+        if found:
+            self.logger.info(f"IMU toggle buttons: {', '.join(sorted(found))}")
+        else:
+            self.logger.warning("No imu_toggle behavior found in controller config")
 
-    def _load_imu_toggle_from_local_config(self):
-        """Read the local controller config file and populate imu_toggle_buttons.
-        The local file is the authoritative source — the Pi may have a stale config."""
+    def _load_controller_config(self):
+        """Read controller config from disk and update imu_toggle_buttons."""
         try:
-            import json as _json
             with open("resources/configs/controller_config.json", "r") as f:
-                config = _json.load(f)
+                config = json.load(f)
             self._scan_config_for_imu_toggle(config)
         except Exception as e:
-            self.logger.error(f"Could not read local controller config: {e}")
+            self.logger.error(f"Could not load controller config: {e}")
 
     def _on_websocket_message(self, text: str):
-        """Re-read the local config when a save completes so imu_toggle_buttons
-        stays in sync without being overwritten by the Pi's potentially stale config."""
+        """Reload controller config when a save completes."""
         try:
             data = json.loads(text)
             if data.get("type") == "controller_config_saved" and data.get("success"):
-                self._load_imu_toggle_from_local_config()
+                self._load_controller_config()
         except Exception:
             pass
 
     def start_monitoring(self):
         if not self.running:
-            # Read local config immediately so imu_toggle_button is set before
-            # the first HID frame is processed — no network request needed.
-            self._load_imu_toggle_from_local_config()
+            self._load_controller_config()
             self.running = True
             self.stats["start_time"] = time.time()
             self.start()
             self.logger.info("SteamDeck controller monitoring started")
-
     def stop_monitoring(self):
         """Signal the poll loop to stop and wait for the thread to exit cleanly."""
         self.running = False
@@ -393,16 +382,16 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
-        """Detect a press edge on any configured IMU toggle button."""
-        if not self.imu_toggle_buttons:
-            self._prev_buttons = buttons
-            return
+        """Detect a press edge on any configured IMU toggle button.
+        All buttons are checked before deciding to toggle — no early exit."""
+        triggered = False
         for btn in self.imu_toggle_buttons:
             current = buttons.get(btn, False)
             prev    = self._prev_buttons.get(btn, False)
             if current and not prev:
-                self._toggle_imu(raw)
-                break
+                triggered = True
+        if triggered:
+            self._toggle_imu(raw)
         self._prev_buttons = buttons
 
     def _toggle_imu(self, raw: bytes):
