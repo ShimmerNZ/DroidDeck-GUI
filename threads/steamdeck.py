@@ -79,8 +79,8 @@ BUTTON_MAP = {
     'start':            'button_menu',
     'steam':            'button_guide',
     'quick_access':     'button_quick_access',
-    'l_stick_press':    'button_l3',
-    'r_stick_press':    'button_r3',
+    'l_stick_press':    'stick_left_click',
+    'r_stick_press':    'stick_right_click',
     'l_lower_grip':     'grip_left_lower',
     'r_lower_grip':     'grip_right_lower',
     'l_upper_grip':     'grip_left_upper',
@@ -149,7 +149,7 @@ class SteamDeckControllerThread(QThread):
         """Read the IMU toggle button name from config, default to button_r3"""
         try:
             cfg = config_manager.get_config("resources/configs/steamdeck_config.json")
-            return cfg.get("current", {}).get("imu_toggle_button", "button_r3")
+            return cfg.get("current", {}).get("imu_toggle_button", "stick_right_click")
         except Exception:
             return "button_r3"
 
@@ -354,9 +354,13 @@ class SteamDeckControllerThread(QThread):
         return 0.0 if abs(v) < STICK_DEADZONE else max(-1.0, min(1.0, v))
 
     def _norm_trigger(self, raw_uint16: int) -> float:
-        """Normalise uint16 trigger value to 0.0–1.0 with deadzone"""
-        v = raw_uint16 / TRIGGER_MAX
-        return 0.0 if v < TRIGGER_DEADZONE else min(1.0, v)
+        """Normalise a trigger to -1.0 (released) → +1.0 (fully pressed).
+
+        The old pygame axis range was -1 to +1 so multi_servo's center-based
+        formula (center ± pulse_range) sweeps the full servo min→max.
+        Mapping 0→1 instead would only use the upper half of the range.
+        """
+        return max(-1.0, min(1.0, (raw_uint16 / TRIGGER_MAX) * 2.0 - 1.0))
 
     def _norm_imu(self, delta: int) -> float:
         """Normalise IMU delta value to ±1.0 with deadzone"""

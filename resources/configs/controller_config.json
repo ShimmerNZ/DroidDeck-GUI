@@ -135,5 +135,17 @@
       "position_1": 1050,
       "position_2": 1400
     }
+  ],
+  "imu_roll": [
+    {
+      "behavior": "imu_tilt",
+      "servos": []
+    }
+  ],
+  "imu_pitch": [
+    {
+      "behavior": "imu_tilt",
+      "servos": []
+    }
   ]
 }

@@ -967,10 +967,12 @@ class ControllerConfigScreen(BaseScreen):
         # Steam Deck inputs (default)
         self.steam_inputs = [
             # Axes
-            "left_stick_x", "left_stick_y", 
+            "left_stick_x", "left_stick_y",
             "left_trigger",
             "right_stick_x", "right_stick_y",
             "right_trigger",
+            # IMU tilt axes (active when IMU toggle is enabled on the Deck)
+            "imu_roll", "imu_pitch",
             # Buttons
             "button_a", "button_b", "button_x", "button_y",
             "shoulder_left", "shoulder_right",
@@ -1054,7 +1056,7 @@ class ControllerConfigScreen(BaseScreen):
 
 
     def _create_imu_tilt_params(self, row_data: Dict):
-        """Create parameters for imu_tilt behaviour — target servo, sensitivity, invert"""
+        """Create parameters for imu_tilt — multiple servos, each with invert/min/max"""
         primary_color = theme_manager.get("primary")
 
         header = QLabel("IMU Tilt Configuration")
@@ -1062,57 +1064,89 @@ class ControllerConfigScreen(BaseScreen):
         header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; background: transparent;")
         self.params_layout.addWidget(header)
 
-        info = QLabel("Maps accelerometer tilt (-1 to 1) to a servo channel.\n"
-                      "imu_roll: left tilt = positive, right tilt = negative.\n"
-                      "imu_pitch: tilt back = positive, tilt forward = negative.")
+        info = QLabel(
+            "Maps accelerometer tilt (-1 to 1) to one or more servos.\n"
+            "imu_roll: tilt left = +1, tilt right = -1.\n"
+            "imu_pitch: tilt back = +1, tilt forward = -1.\n"
+            "Invert one servo to move opposite sides of the head together."
+        )
         info.setWordWrap(True)
         info.setStyleSheet(f"color: {theme_manager.get('text_secondary')}; padding: 4px 0px;")
         self.params_layout.addWidget(info)
 
-        # Target servo
-        target_layout = QHBoxLayout()
-        target_layout.addWidget(QLabel("Target Servo:"))
-        servo_combo = QComboBox()
-        servo_combo.addItems(["Select Servo..."] + self.servo_channels)
-        servo_combo.setStyleSheet(self._get_combo_style())
-        if 'target' in row_data['config']:
-            servo_combo.setCurrentText(row_data['config']['target'])
-        servo_combo.currentTextChanged.connect(
-            lambda text: self._update_row_config(row_data, 'target', text)
-        )
-        target_layout.addWidget(servo_combo)
-        self.params_layout.addLayout(target_layout)
+        # Ensure servos list exists
+        if 'servos' not in row_data['config']:
+            row_data['config']['servos'] = []
 
-        # Sensitivity
-        sens_layout = QHBoxLayout()
-        sens_layout.addWidget(QLabel("Sensitivity:"))
-        sens_slider = QSlider(Qt.Orientation.Horizontal)
-        sens_slider.setMinimum(10)
-        sens_slider.setMaximum(200)
-        current_sens = int(row_data['config'].get('sensitivity', 1.0) * 100)
-        sens_slider.setValue(current_sens)
-        sens_label = QLabel(f"{current_sens / 100:.2f}")
-        sens_label.setFixedWidth(35)
+        # Container for servo rows
+        servo_list_layout = QVBoxLayout()
+        self.params_layout.addLayout(servo_list_layout)
 
-        def on_sens_change(val):
-            sens_label.setText(f"{val / 100:.2f}")
-            self._update_row_config(row_data, 'sensitivity', val / 100)
+        def refresh_target_label():
+            channels = [s.get('channel', '?') for s in row_data['config'].get('servos', [])]
+            row_data['target_label'].setText(f"→ {', '.join(channels)}" if channels else "→ Not configured")
 
-        sens_slider.valueChanged.connect(on_sens_change)
-        sens_layout.addWidget(sens_slider)
-        sens_layout.addWidget(sens_label)
-        self.params_layout.addLayout(sens_layout)
+        def build_servo_row(index, servo_info):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 2, 0, 2)
 
-        # Invert
-        invert_cb = QCheckBox("Invert axis")
-        invert_cb.setChecked(row_data['config'].get('invert', False))
-        invert_cb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
-        invert_cb.toggled.connect(lambda checked: self._update_row_config(row_data, 'invert', checked))
-        self.params_layout.addWidget(invert_cb)
+            ch_combo = QComboBox()
+            ch_combo.addItems(["Select Servo..."] + self.servo_channels)
+            ch_combo.setStyleSheet(self._get_combo_style())
+            if servo_info.get('channel'):
+                ch_combo.setCurrentText(servo_info['channel'])
+            ch_combo.currentTextChanged.connect(
+                lambda t, i=index: (
+                    row_data['config']['servos'].__setitem__(
+                        i, {**row_data['config']['servos'][i], 'channel': t}
+                    ) if i < len(row_data['config']['servos']) else None,
+                    refresh_target_label()
+                )
+            )
+            row_layout.addWidget(ch_combo, 3)
 
-        # Update target label
-        target = row_data['config'].get('target', 'Not configured')
-        row_data['target_label'].setText(f"→ {target}")
+            inv_cb = QCheckBox("Invert")
+            inv_cb.setChecked(servo_info.get('invert', False))
+            inv_cb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
+            inv_cb.toggled.connect(
+                lambda checked, i=index: row_data['config']['servos'].__setitem__(
+                    i, {**row_data['config']['servos'][i], 'invert': checked}
+                ) if i < len(row_data['config']['servos']) else None
+            )
+            row_layout.addWidget(inv_cb, 1)
+
+            remove_btn = QPushButton("×")
+            remove_btn.setFixedWidth(28)
+            remove_btn.setStyleSheet(self._get_remove_button_style())
+
+            def on_remove(checked=False, i=index, w=row_widget):
+                if i < len(row_data['config']['servos']):
+                    row_data['config']['servos'].pop(i)
+                w.deleteLater()
+                refresh_target_label()
+
+            remove_btn.clicked.connect(on_remove)
+            row_layout.addWidget(remove_btn)
+
+            servo_list_layout.addWidget(row_widget)
+
+        for i, srv in enumerate(row_data['config']['servos']):
+            build_servo_row(i, srv)
+
+        add_btn = QPushButton("+ Add Servo")
+        add_btn.setStyleSheet(self._get_small_button_style())
+
+        def on_add(checked=False):
+            new_servo = {'channel': '', 'invert': False}
+            row_data['config']['servos'].append(new_servo)
+            build_servo_row(len(row_data['config']['servos']) - 1, new_servo)
+            refresh_target_label()
+
+        add_btn.clicked.connect(on_add)
+        self.params_layout.addWidget(add_btn)
+
+        refresh_target_label()
 
     def _create_system_control_params(self, row_data: Dict):
         """Create parameters for system control behavior"""
