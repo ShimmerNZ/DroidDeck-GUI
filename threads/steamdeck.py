@@ -26,7 +26,6 @@ from typing import Dict, Any, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.logger import get_logger
-from core.config_manager import config_manager
 from core.utils import error_boundary
 
 
@@ -124,12 +123,13 @@ class SteamDeckControllerThread(QThread):
         self.sequence_number = 0
         self.last_input_sent = 0
 
-        # IMU state
+        # IMU state — toggle button is discovered from controller_config on the backend,
+        # not hardcoded here. Set to None until the config is received.
         self.imu_enabled      = False
         self.imu_zero_ax      = 0
         self.imu_zero_ay      = 0
         self._prev_buttons    = {}
-        self.imu_toggle_button = self._load_imu_toggle_button()
+        self.imu_toggle_button = None
 
         # HID handles
         self._hid_device    = None
@@ -143,15 +143,40 @@ class SteamDeckControllerThread(QThread):
             "disconnections":   0,
         }
 
+        # Listen for incoming backend messages so we can detect the imu_toggle
+        # button from controller_config without hardcoding it here.
+        if websocket_manager:
+            try:
+                websocket_manager.textMessageReceived.connect(self._on_websocket_message)
+                websocket_manager.connected.connect(self._request_imu_config)
+            except Exception:
+                pass
+
         self.logger.info("SteamDeck controller thread initialised")
 
-    def _load_imu_toggle_button(self) -> str:
-        """Read the IMU toggle button name from config, default to button_r3"""
+    def _request_imu_config(self):
+        """Ask the backend for the controller config so we can find the imu_toggle button."""
+        self.send_websocket_message.emit({"type": "get_controller_config"})
+
+    def _on_websocket_message(self, text: str):
+        """Parse incoming backend messages and extract the imu_toggle button from config."""
         try:
-            cfg = config_manager.get_config("resources/configs/steamdeck_config.json")
-            return cfg.get("current", {}).get("imu_toggle_button", "stick_right_click")
+            data = json.loads(text)
+            if data.get("type") != "controller_config_data":
+                return
+            config = data.get("config", {})
+            for control_name, configs in config.items():
+                if isinstance(configs, dict):
+                    configs = [configs]
+                if not isinstance(configs, list):
+                    continue
+                for cfg in configs:
+                    if cfg.get("behavior") == "imu_toggle":
+                        self.imu_toggle_button = control_name
+                        self.logger.info(f"IMU toggle button set from config: {control_name}")
+                        return
         except Exception:
-            return "button_r3"
+            pass
 
     def start_monitoring(self):
         if not self.running:
@@ -212,6 +237,8 @@ class SteamDeckControllerThread(QThread):
                 self.controller_active = True
                 self.logger.info(f"HID controller opened: {HIDRAW_PATH}")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
+                # Discover which button is mapped to imu_toggle in controller_config
+                self._request_imu_config()
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")
@@ -321,6 +348,9 @@ class SteamDeckControllerThread(QThread):
 
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
         """Detect a press edge on the IMU toggle button and switch IMU state"""
+        if not self.imu_toggle_button:
+            self._prev_buttons = buttons
+            return
         current = buttons.get(self.imu_toggle_button, False)
         prev    = self._prev_buttons.get(self.imu_toggle_button, False)
 

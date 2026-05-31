@@ -1056,7 +1056,7 @@ class ControllerConfigScreen(BaseScreen):
 
 
     def _create_imu_tilt_params(self, row_data: Dict):
-        """Create parameters for imu_tilt — multiple servos, each with invert/min/max"""
+        """Create parameters for imu_tilt — up to 2 servos, each with channel/invert/min/home/max"""
         primary_color = theme_manager.get("primary")
 
         header = QLabel("IMU Tilt Configuration")
@@ -1064,89 +1064,110 @@ class ControllerConfigScreen(BaseScreen):
         header.setStyleSheet(f"color: {primary_color}; padding: 6px 0px; background: transparent;")
         self.params_layout.addWidget(header)
 
-        info = QLabel(
-            "Maps accelerometer tilt (-1 to 1) to one or more servos.\n"
-            "imu_roll: tilt left = +1, tilt right = -1.\n"
-            "imu_pitch: tilt back = +1, tilt forward = -1.\n"
-            "Invert one servo to move opposite sides of the head together."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet(f"color: {theme_manager.get('text_secondary')}; padding: 4px 0px;")
-        self.params_layout.addWidget(info)
-
-        # Ensure servos list exists
         if 'servos' not in row_data['config']:
             row_data['config']['servos'] = []
 
-        # Container for servo rows
-        servo_list_layout = QVBoxLayout()
-        self.params_layout.addLayout(servo_list_layout)
+        def rebuild():
+            self._clear_parameters_layout()
+            self._create_imu_tilt_params(row_data)
 
-        def refresh_target_label():
-            channels = [s.get('channel', '?') for s in row_data['config'].get('servos', [])]
+        def update_target_label():
+            channels = [s.get('channel', '?') for s in row_data['config'].get('servos', []) if s.get('channel')]
             row_data['target_label'].setText(f"→ {', '.join(channels)}" if channels else "→ Not configured")
 
-        def build_servo_row(index, servo_info):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 2, 0, 2)
+        for i, srv in enumerate(row_data['config']['servos']):
+            frame = QWidget()
+            frame.setStyleSheet(f"background: {theme_manager.get('surface')}; border-radius: 4px; padding: 2px;")
+            fl = QVBoxLayout(frame)
+            fl.setContentsMargins(6, 4, 6, 4)
+            fl.setSpacing(4)
 
+            # Row 1: channel + invert + remove
+            top = QHBoxLayout()
             ch_combo = QComboBox()
             ch_combo.addItems(["Select Servo..."] + self.servo_channels)
             ch_combo.setStyleSheet(self._get_combo_style())
-            if servo_info.get('channel'):
-                ch_combo.setCurrentText(servo_info['channel'])
-            ch_combo.currentTextChanged.connect(
-                lambda t, i=index: (
-                    row_data['config']['servos'].__setitem__(
-                        i, {**row_data['config']['servos'][i], 'channel': t}
-                    ) if i < len(row_data['config']['servos']) else None,
-                    refresh_target_label()
-                )
-            )
-            row_layout.addWidget(ch_combo, 3)
+            if srv.get('channel'):
+                ch_combo.setCurrentText(srv['channel'])
+
+            def make_ch_handler(idx):
+                def on_ch(text):
+                    if idx < len(row_data['config']['servos']):
+                        row_data['config']['servos'][idx]['channel'] = text
+                        update_target_label()
+                return on_ch
+
+            ch_combo.currentTextChanged.connect(make_ch_handler(i))
+            top.addWidget(ch_combo, 3)
 
             inv_cb = QCheckBox("Invert")
-            inv_cb.setChecked(servo_info.get('invert', False))
+            inv_cb.setChecked(srv.get('invert', False))
             inv_cb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
-            inv_cb.toggled.connect(
-                lambda checked, i=index: row_data['config']['servos'].__setitem__(
-                    i, {**row_data['config']['servos'][i], 'invert': checked}
-                ) if i < len(row_data['config']['servos']) else None
-            )
-            row_layout.addWidget(inv_cb, 1)
 
-            remove_btn = QPushButton("×")
-            remove_btn.setFixedWidth(28)
-            remove_btn.setStyleSheet(self._get_remove_button_style())
+            def make_inv_handler(idx):
+                def on_inv(checked):
+                    if idx < len(row_data['config']['servos']):
+                        row_data['config']['servos'][idx]['invert'] = checked
+                return on_inv
 
-            def on_remove(checked=False, i=index, w=row_widget):
-                if i < len(row_data['config']['servos']):
-                    row_data['config']['servos'].pop(i)
-                w.deleteLater()
-                refresh_target_label()
+            inv_cb.toggled.connect(make_inv_handler(i))
+            top.addWidget(inv_cb, 1)
 
-            remove_btn.clicked.connect(on_remove)
-            row_layout.addWidget(remove_btn)
+            rm_btn = QPushButton("×")
+            rm_btn.setFixedWidth(28)
+            rm_btn.setStyleSheet(self._get_remove_button_style())
 
-            servo_list_layout.addWidget(row_widget)
+            def make_remove_handler(idx):
+                def on_remove(checked=False):
+                    if idx < len(row_data['config']['servos']):
+                        row_data['config']['servos'].pop(idx)
+                    rebuild()
+                return on_remove
 
-        for i, srv in enumerate(row_data['config']['servos']):
-            build_servo_row(i, srv)
+            rm_btn.clicked.connect(make_remove_handler(i))
+            top.addWidget(rm_btn)
+            fl.addLayout(top)
+
+            # Row 2: min / home / max spinboxes
+            pulse_row = QHBoxLayout()
+            for label_text, key, default in [
+                ("Min", "min_pulse", 992),
+                ("Home", "home_pulse", 1500),
+                ("Max", "max_pulse", 2000),
+            ]:
+                pulse_row.addWidget(QLabel(label_text))
+                sb = QSpinBox()
+                sb.setRange(500, 2500)
+                sb.setSingleStep(10)
+                sb.setValue(srv.get(key, default))
+                sb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
+
+                def make_pulse_handler(idx, k):
+                    def on_val(v):
+                        if idx < len(row_data['config']['servos']):
+                            row_data['config']['servos'][idx][k] = v
+                    return on_val
+
+                sb.valueChanged.connect(make_pulse_handler(i, key))
+                pulse_row.addWidget(sb, 1)
+
+            fl.addLayout(pulse_row)
+            self.params_layout.addWidget(frame)
 
         add_btn = QPushButton("+ Add Servo")
         add_btn.setStyleSheet(self._get_small_button_style())
+        add_btn.setEnabled(len(row_data['config']['servos']) < 2)
 
         def on_add(checked=False):
-            new_servo = {'channel': '', 'invert': False}
-            row_data['config']['servos'].append(new_servo)
-            build_servo_row(len(row_data['config']['servos']) - 1, new_servo)
-            refresh_target_label()
+            if len(row_data['config']['servos']) < 2:
+                row_data['config']['servos'].append(
+                    {'channel': '', 'invert': False, 'min_pulse': 992, 'home_pulse': 1500, 'max_pulse': 2000}
+                )
+                rebuild()
 
         add_btn.clicked.connect(on_add)
         self.params_layout.addWidget(add_btn)
-
-        refresh_target_label()
+        update_target_label()
 
     def _create_system_control_params(self, row_data: Dict):
         """Create parameters for system control behavior"""
