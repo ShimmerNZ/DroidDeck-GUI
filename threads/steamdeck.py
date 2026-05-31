@@ -127,11 +127,11 @@ class SteamDeckControllerThread(QThread):
 
         # IMU state — toggle button is discovered from controller_config on the backend,
         # not hardcoded here. Set to None until the config is received.
-        self.imu_enabled      = False
-        self.imu_zero_ax      = 0
-        self.imu_zero_ay      = 0
-        self._prev_buttons    = {}
-        self.imu_toggle_button = None
+        self.imu_enabled       = False
+        self.imu_zero_ax       = 0
+        self.imu_zero_ay       = 0
+        self._prev_buttons     = {}
+        self.imu_toggle_buttons: set = set()  # all buttons mapped to imu_toggle behavior
 
         # HID handles
         self._hid_device    = None
@@ -156,11 +156,11 @@ class SteamDeckControllerThread(QThread):
         self.logger.info("SteamDeck controller thread initialised")
 
     def _scan_config_for_imu_toggle(self, config: dict):
-        """Scan a controller config dict and set imu_toggle_button from the first
-        entry found with behavior 'imu_toggle'. Called from both the local file
-        read on startup and from any controller_config_data websocket message."""
+        """Scan a controller config dict and populate imu_toggle_buttons with every
+        button that has behavior 'imu_toggle'. Supports multiple toggle buttons."""
         if not isinstance(config, dict):
             return
+        found = set()
         for control_name, configs in config.items():
             if isinstance(configs, dict):
                 configs = [configs]
@@ -168,14 +168,16 @@ class SteamDeckControllerThread(QThread):
                 continue
             for cfg in configs:
                 if cfg.get("behavior") == "imu_toggle":
-                    if self.imu_toggle_button != control_name:
-                        self.imu_toggle_button = control_name
-                        self.logger.info(f"IMU toggle button: {control_name}")
-                    return
-        # Nothing found — clear in case it was removed from config
-        if self.imu_toggle_button is not None:
-            self.logger.warning("No imu_toggle behavior in config — IMU toggle disabled")
-            self.imu_toggle_button = None
+                    found.add(control_name)
+        if found != self.imu_toggle_buttons:
+            self.imu_toggle_buttons = found
+            if found:
+                self.logger.info(f"IMU toggle buttons: {', '.join(sorted(found))}")
+            else:
+                self.logger.warning(
+                    "No imu_toggle behavior in config — IMU toggle disabled. "
+                    "Add a button with behavior 'imu_toggle' in the controller screen and save."
+                )
 
     def _load_imu_toggle_from_local_config(self):
         """Read the local controller config file immediately — no network needed.
@@ -396,16 +398,16 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
-        """Detect a press edge on the IMU toggle button and switch IMU state"""
-        if not self.imu_toggle_button:
+        """Detect a press edge on any configured IMU toggle button."""
+        if not self.imu_toggle_buttons:
             self._prev_buttons = buttons
             return
-        current = buttons.get(self.imu_toggle_button, False)
-        prev    = self._prev_buttons.get(self.imu_toggle_button, False)
-
-        if current and not prev:
-            self._toggle_imu(raw)
-
+        for btn in self.imu_toggle_buttons:
+            current = buttons.get(btn, False)
+            prev    = self._prev_buttons.get(btn, False)
+            if current and not prev:
+                self._toggle_imu(raw)
+                break  # one toggle per frame is enough
         self._prev_buttons = buttons
 
     def _toggle_imu(self, raw: bytes):
@@ -487,7 +489,7 @@ class SteamDeckControllerThread(QThread):
             "controller_name": "Steam Deck (HID)",
             "controller_id":   "steamdeck_hid",
             "imu_enabled":     self.imu_enabled,
-            "imu_toggle":      self.imu_toggle_button,
+            "imu_toggle":      sorted(self.imu_toggle_buttons),
             "sequence_number": self.sequence_number,
             "poll_rate":       self.poll_rate_hz,
         }
