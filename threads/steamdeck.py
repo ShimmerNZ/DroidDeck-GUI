@@ -347,6 +347,10 @@ class SteamDeckControllerThread(QThread):
         axes    = self._parse_analog(raw)
         buttons = self._parse_buttons()
 
+        # DEBUG: report every button-down edge to the Pi log so we can see
+        # exactly which buttons bitsteam detects, independent of IMU logic.
+        self._debug_button_edges(buttons)
+
         # Toggle IMU on button press edge; add axes if enabled
         self._check_imu_toggle(buttons, raw)
         if self.imu_enabled:
@@ -406,6 +410,22 @@ class SteamDeckControllerThread(QThread):
             our_name: bool(raw.get(bs_name, False))
             for bs_name, our_name in BUTTON_MAP.items()
         }
+
+    def _debug_button_edges(self, buttons: Dict[str, bool]):
+        """Send every button-down edge to the Pi log. Diagnostic only — shows
+        exactly which buttons bitsteam reports, regardless of config/IMU state."""
+        if not hasattr(self, '_dbg_prev'):
+            self._dbg_prev = {}
+        for name, pressed in buttons.items():
+            if pressed and not self._dbg_prev.get(name, False):
+                try:
+                    self.send_websocket_message.emit({
+                        "type": "button_debug",
+                        "button": name,
+                    })
+                except Exception:
+                    pass
+        self._dbg_prev = dict(buttons)
 
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
         """Detect a press edge on any configured IMU toggle button."""
