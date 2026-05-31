@@ -175,48 +175,29 @@ class SteamDeckControllerThread(QThread):
                 self.logger.info(f"IMU toggle buttons: {', '.join(sorted(found))}")
             else:
                 self.logger.warning(
-                    "No imu_toggle behavior in config — IMU toggle disabled. "
-                    "Add a button with behavior 'imu_toggle' in the controller screen and save."
+                    "No imu_toggle behavior in config — IMU toggle disabled."
                 )
-        # Send the current set to the backend so it appears in the Pi log —
-        # useful for debugging since the frontend log isn't visible in gaming mode.
-        try:
-            self.send_websocket_message.emit({
-                "type": "imu_toggle_debug",
-                "buttons": sorted(self.imu_toggle_buttons),
-            })
-        except Exception:
-            pass
 
     def _load_imu_toggle_from_local_config(self):
-        """Read the local controller config file directly to populate imu_toggle_buttons.
-        Bypasses config_manager's LRU cache to guarantee fresh data."""
+        """Read the local controller config file and populate imu_toggle_buttons.
+        The local file is the authoritative source — the Pi may have a stale config."""
         try:
             import json as _json
             with open("resources/configs/controller_config.json", "r") as f:
                 config = _json.load(f)
             self._scan_config_for_imu_toggle(config)
-            print(f"[IMU] imu_toggle_buttons after startup scan: {sorted(self.imu_toggle_buttons)}", flush=True)
-        except FileNotFoundError:
-            print("[IMU] controller_config.json not found — imu toggle disabled", flush=True)
-            self.logger.warning("controller_config.json not found — imu toggle disabled")
         except Exception as e:
-            print(f"[IMU] Failed to load controller config: {e}", flush=True)
             self.logger.error(f"Could not read local controller config: {e}")
 
     def _on_websocket_message(self, text: str):
-        """Parse incoming controller_config_data messages and update imu_toggle_button.
-        This handles the case where config was set on another device and refreshed
-        from the backend."""
+        """Re-read the local config when a save completes so imu_toggle_buttons
+        stays in sync without being overwritten by the Pi's potentially stale config."""
         try:
             data = json.loads(text)
-            if data.get("type") != "controller_config_data":
-                return
-            self._scan_config_for_imu_toggle(data.get("config", {}))
-        except json.JSONDecodeError:
+            if data.get("type") == "controller_config_saved" and data.get("success"):
+                self._load_imu_toggle_from_local_config()
+        except Exception:
             pass
-        except Exception as e:
-            self.logger.debug(f"Error in steamdeck websocket handler: {e}")
 
     def start_monitoring(self):
         if not self.running:
@@ -351,10 +332,6 @@ class SteamDeckControllerThread(QThread):
         axes    = self._parse_analog(raw)
         buttons = self._parse_buttons()
 
-        # DEBUG: report every button-down edge to the Pi log so we can see
-        # exactly which buttons bitsteam detects, independent of IMU logic.
-        self._debug_button_edges(buttons)
-
         # Toggle IMU on button press edge; add axes if enabled
         self._check_imu_toggle(buttons, raw)
         if self.imu_enabled:
@@ -415,22 +392,6 @@ class SteamDeckControllerThread(QThread):
             for bs_name, our_name in BUTTON_MAP.items()
         }
 
-    def _debug_button_edges(self, buttons: Dict[str, bool]):
-        """Send every button-down edge to the Pi log. Diagnostic only — shows
-        exactly which buttons bitsteam reports, regardless of config/IMU state."""
-        if not hasattr(self, '_dbg_prev'):
-            self._dbg_prev = {}
-        for name, pressed in buttons.items():
-            if pressed and not self._dbg_prev.get(name, False):
-                try:
-                    self.send_websocket_message.emit({
-                        "type": "button_debug",
-                        "button": name,
-                    })
-                except Exception:
-                    pass
-        self._dbg_prev = dict(buttons)
-
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
         """Detect a press edge on any configured IMU toggle button."""
         if not self.imu_toggle_buttons:
@@ -440,7 +401,6 @@ class SteamDeckControllerThread(QThread):
             current = buttons.get(btn, False)
             prev    = self._prev_buttons.get(btn, False)
             if current and not prev:
-                print(f"[IMU] Toggle fired by: {btn} | set={sorted(self.imu_toggle_buttons)}", flush=True)
                 self._toggle_imu(raw)
                 break
         self._prev_buttons = buttons
