@@ -124,8 +124,7 @@
   ],
   "stick_right_click": [
     {
-      "behavior": "system_control",
-      "system_action": "select"
+      "behavior": "imu_toggle"
     }
   ],
   "stick_left_click": [

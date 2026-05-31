@@ -186,10 +186,27 @@ class SteamDeckControllerThread(QThread):
             self.logger.info("SteamDeck controller monitoring started")
 
     def stop_monitoring(self):
+        """Signal the poll loop to stop and wait for the thread to exit cleanly."""
         self.running = False
+
+        # Disconnect websocket signals before the thread tears down so there
+        # are no dangling references to this object after cleanup.
+        if self.websocket_manager:
+            try:
+                self.websocket_manager.textMessageReceived.disconnect(self._on_websocket_message)
+            except Exception:
+                pass
+            try:
+                self.websocket_manager.connected.disconnect(self._request_imu_config)
+            except Exception:
+                pass
+
         if self.isRunning():
-            self.quit()
+            # No self.quit() here — run() uses a plain while loop, not a Qt
+            # event loop, so quit() is a no-op. Setting self.running = False is
+            # sufficient to break the loop. Give it 5 s to flush cleanup.
             self.wait(5000)
+
         self.logger.info("SteamDeck controller monitoring stopped")
 
     def run(self):
@@ -242,13 +259,22 @@ class SteamDeckControllerThread(QThread):
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")
-                time.sleep(retry_delay)
+                # Sleep in small increments so shutdown can interrupt quickly
+                deadline = time.monotonic() + retry_delay
+                while self.running and time.monotonic() < deadline:
+                    time.sleep(0.1)
 
     def _cleanup_hid(self):
-        """Release HID resources"""
+        """Release HID resources cleanly."""
         try:
             if self._bitsteam_deck:
-                self._bitsteam_deck.stop()
+                # stop() joins the bitsteam background thread — give it 2s before giving up
+                import threading
+                t = threading.Thread(target=self._bitsteam_deck.stop, daemon=True)
+                t.start()
+                t.join(timeout=2.0)
+                if t.is_alive():
+                    self.logger.warning("bitsteam stop() timed out — continuing shutdown")
                 self._bitsteam_deck = None
         except Exception as e:
             self.logger.debug(f"bitsteam stop error: {e}")
@@ -260,6 +286,8 @@ class SteamDeckControllerThread(QThread):
         except Exception as e:
             self.logger.debug(f"HID close error: {e}")
 
+        # Only signal disconnect if we actually connected — avoids a spurious
+        # "disconnected" event on startup failure or repeated stop() calls.
         if self.controller_active:
             self.controller_active = False
             self.controller_disconnected.emit("HID device closed")

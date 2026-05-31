@@ -579,10 +579,6 @@ class SystemControlHandler(BehaviorHandler):
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error handling exit app: {e}")
-            # Emergency fallback - force quit
-            try:
-                QApplication.instance().quit()
-            except:
                 import sys
                 sys.exit(0)
 
@@ -1057,7 +1053,7 @@ class ControllerConfigScreen(BaseScreen):
 
     def _create_imu_tilt_params(self, row_data: Dict):
         """Create parameters for imu_tilt — up to 2 servos, each with channel/invert/min/home/max"""
-        primary_color = theme_manager.get("primary")
+        primary_color = theme_manager.get("primary_color", "#e1a014")
 
         header = QLabel("IMU Tilt Configuration")
         header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
@@ -1077,7 +1073,7 @@ class ControllerConfigScreen(BaseScreen):
 
         for i, srv in enumerate(row_data['config']['servos']):
             frame = QWidget()
-            frame.setStyleSheet(f"background: {theme_manager.get('surface')}; border-radius: 4px; padding: 2px;")
+            frame.setStyleSheet(f"background: {theme_manager.get('card_bg', '#252525')}; border-radius: 4px; padding: 2px;")
             fl = QVBoxLayout(frame)
             fl.setContentsMargins(6, 4, 6, 4)
             fl.setSpacing(4)
@@ -1102,7 +1098,7 @@ class ControllerConfigScreen(BaseScreen):
 
             inv_cb = QCheckBox("Invert")
             inv_cb.setChecked(srv.get('invert', False))
-            inv_cb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
+            inv_cb.setStyleSheet(f"color: {theme_manager.get('grey_light', '#aaaaaa')};")
 
             def make_inv_handler(idx):
                 def on_inv(checked):
@@ -1140,7 +1136,7 @@ class ControllerConfigScreen(BaseScreen):
                 sb.setRange(500, 2500)
                 sb.setSingleStep(10)
                 sb.setValue(srv.get(key, default))
-                sb.setStyleSheet(f"color: {theme_manager.get('text_primary')};")
+                sb.setStyleSheet(f"color: {theme_manager.get('grey_light', '#aaaaaa')};")
 
                 def make_pulse_handler(idx, k):
                     def on_val(v):
@@ -1254,10 +1250,13 @@ class ControllerConfigScreen(BaseScreen):
         row_data['target_label'].setText(f"→ {action}")
 
     def _load_existing_configuration(self):
-        """Load existing controller configuration on startup"""
+        """Load existing controller configuration — fallback when backend hasn't responded.
+        Clears any existing rows first so it is safe to call at any time without producing duplicates.
+        """
         try:
             config = config_manager.get_config("resources/configs/controller_config.json")
             if config and isinstance(config, dict):
+                self._clear_all_rows()
                 loaded = 0
                 for control_name, control_config in config.items():
                     if isinstance(control_config, list):
@@ -1972,9 +1971,13 @@ class ControllerConfigScreen(BaseScreen):
         elif behavior == "imu_tilt":
             self._create_imu_tilt_params(row_data)
         elif behavior == "imu_toggle":
-            label = QLabel("IMU toggle — handled by the Steam Deck frontend.\nNo backend parameters needed.\n\nConfigure the toggle button in steamdeck_config.json\nunder \"imu_toggle_button\".")
+            label = QLabel(
+                "IMU toggle is handled by the Steam Deck frontend.\n"
+                "Map this behaviour to a button, save, and the Deck\n"
+                "will detect it automatically on next connection."
+            )
             label.setWordWrap(True)
-            label.setStyleSheet(f"color: {theme_manager.get('text_secondary')}; padding: 8px;")
+            label.setStyleSheet(f"color: {theme_manager.get('grey_light', '#aaaaaa')}; padding: 8px;")
             self.params_layout.addWidget(label)
 
     def _create_direct_servo_params(self, row_data: Dict):
