@@ -98,66 +98,86 @@ class NetworkMonitorThread(QThread):
             return self._get_fallback_wifi_signal()
 
     def _get_wifi_signal_linux(self) -> int:
-        """Get WiFi signal strength on Linux"""
-        # Method 1: Try iwconfig
+        """Get WiFi signal strength on Linux using nl80211 (iw), nmcli, or iwconfig"""
+
+        # Method 1: iw — modern nl80211, works on all current Linux WiFi drivers including Steam Deck
+        # Requires: sudo apt install iw (included in DD_Install.sh)
+        try:
+            dev_result = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=3)
+            if dev_result.returncode == 0:
+                iface_match = re.search(r'Interface\s+(\S+)', dev_result.stdout)
+                if iface_match:
+                    iface = iface_match.group(1)
+                    link_result = subprocess.run(
+                        ['iw', iface, 'link'], capture_output=True, text=True, timeout=3
+                    )
+                    signal_match = re.search(r'signal:\s*(-?\d+)', link_result.stdout)
+                    if signal_match:
+                        dbm = int(signal_match.group(1))
+                        percentage = max(0, min(100, (dbm + 100) * 2))
+                        self.logger.debug(f"WiFi signal from iw: {dbm} dBm = {percentage}%")
+                        return percentage
+        except Exception as e:
+            self.logger.debug(f"iw failed: {e}")
+
+        # Method 2: nmcli — use IN-USE,SIGNAL so connected network is identifiable in terse mode
+        try:
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'IN-USE,SIGNAL', 'dev', 'wifi'],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith('*:'):
+                        signal_val = line.split(':', 1)[1].strip()
+                        if signal_val.isdigit():
+                            percentage = int(signal_val)
+                            self.logger.debug(f"WiFi signal from nmcli: {percentage}%")
+                            return percentage
+        except Exception as e:
+            self.logger.debug(f"nmcli failed: {e}")
+
+        # Method 3: /proc/net/wireless — read column 3 (signal level in dBm, always negative)
+        # Column 2 is link quality on a 0-70 scale — NOT a percentage, do not use it directly
+        try:
+            with open('/proc/net/wireless', 'r') as f:
+                for line in f.readlines()[2:]:
+                    if ':' not in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            dbm = float(parts[3].rstrip('.'))
+                            if dbm < 0:
+                                percentage = max(0, min(100, (dbm + 100) * 2))
+                                self.logger.debug(
+                                    f"WiFi signal from /proc/net/wireless: {dbm} dBm = {percentage}%"
+                                )
+                                return int(percentage)
+                        except ValueError:
+                            pass
+        except Exception as e:
+            self.logger.debug(f"/proc/net/wireless failed: {e}")
+
+        # Method 4: iwconfig — legacy WEXT, last resort
         try:
             result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
-
-
-                # Look for Link Quality
                 quality_match = re.search(r'Link Quality=(\d+)/(\d+)', result.stdout)
                 if quality_match:
                     current, maximum = map(int, quality_match.groups())
                     percentage = int((current / maximum) * 100)
-                    self.logger.debug(f"WiFi signal from iwconfig: {percentage}%")
+                    self.logger.debug(f"WiFi signal from iwconfig quality: {percentage}%")
                     return percentage
 
-                # Look for Signal level in dBm
                 signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
                 if signal_match:
                     dbm = int(signal_match.group(1))
                     percentage = max(0, min(100, (dbm + 100) * 2))
-                    self.logger.debug(f"WiFi signal from iwconfig dBm: {percentage}%")
+                    self.logger.debug(f"WiFi signal from iwconfig dBm: {dbm} dBm = {percentage}%")
                     return percentage
         except Exception as e:
             self.logger.debug(f"iwconfig failed: {e}")
-
-        # Method 2: Try nmcli
-        try:
-            result = subprocess.run(['nmcli', '-t', '-f', 'SIGNAL', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=3)
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if line.startswith('*'):  # Connected network
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            signal = re.search(r'(\d+)', parts[1])
-                            if signal:
-                                percentage = int(signal.group(1))
-                                self.logger.debug(f"WiFi signal from nmcli: {percentage}%")
-                                return percentage
-        except Exception as e:
-            self.logger.debug(f"nmcli failed: {e}")
-
-        # Method 3: Try /proc/net/wireless
-        try:
-            with open('/proc/net/wireless', 'r') as f:
-                lines = f.readlines()
-                for line in lines[2:]:  # Skip headers
-                    if ':' in line:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            signal = float(parts[2])
-                            if signal < 0:  # dBm format
-                                percentage = max(0, min(100, (signal + 90) * 100 / 60))
-                            else:  # Already percentage
-                                percentage = min(100, signal)
-                            self.logger.debug(f"WiFi signal from /proc: {percentage}%")
-                            return int(percentage)
-        except Exception as e:
-            self.logger.debug(f"/proc/net/wireless failed: {e}")
 
         return self._get_fallback_wifi_signal()
 
@@ -182,15 +202,18 @@ class NetworkMonitorThread(QThread):
     def _get_wifi_signal_windows(self) -> int:
         """Get WiFi signal strength on Windows"""
         try:
-            # Use netsh command
-            result = subprocess.run(['netsh', 'wlan', 'show', 'profiles'], 
-                                  capture_output=True, text=True, timeout=3)
-            # This is a placeholder - would need more implementation
-            # Windows WiFi detection requires WMI or other APIs for accuracy
-            self.logger.debug("Windows WiFi detection - returning default")
-            return 75  # Return reasonable default
+            result = subprocess.run(
+                ['netsh', 'wlan', 'show', 'interfaces'],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode == 0:
+                signal_match = re.search(r'Signal\s*:\s*(\d+)%', result.stdout)
+                if signal_match:
+                    percentage = int(signal_match.group(1))
+                    self.logger.debug(f"WiFi signal from netsh: {percentage}%")
+                    return percentage
         except Exception as e:
-            self.logger.debug(f"Windows netsh failed: {e}")
+            self.logger.debug(f"netsh failed: {e}")
 
         return self._get_fallback_wifi_signal()
 
