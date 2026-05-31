@@ -237,13 +237,25 @@ class SteamDeckControllerThread(QThread):
             self.controller_active = False
             self.controller_disconnected.emit("HID device closed")
 
+    def _drain_hid(self) -> Optional[bytes]:
+        """Read all pending HID reports and return only the most recent.
+
+        The Steam Deck sends reports at ~250Hz but we poll at 50Hz. Without
+        draining, the kernel FIFO builds up and reads become stale by seconds.
+        """
+        latest = None
+        while True:
+            data = self._hid_device.read(64)
+            if not data:
+                break
+            latest = bytes(data)
+        return latest
+
     def _read_and_send(self, current_time: float):
         """Read one HID frame, parse all inputs, and emit the websocket message"""
-        data = self._hid_device.read(64)
-        if not data or len(data) < 56:
+        raw = self._drain_hid()
+        if not raw or len(raw) < 56:
             return
-
-        raw = bytes(data)
         axes    = self._parse_analog(raw)
         buttons = self._parse_buttons()
 
