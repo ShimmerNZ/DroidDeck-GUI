@@ -189,15 +189,19 @@ class SteamDeckControllerThread(QThread):
             pass
 
     def _load_imu_toggle_from_local_config(self):
-        """Read the local controller config file immediately — no network needed."""
+        """Read the local controller config file directly to populate imu_toggle_buttons.
+        Bypasses config_manager's LRU cache to guarantee fresh data."""
         try:
-            config = config_manager.get_config("resources/configs/controller_config.json")
-            if config:
-                self._scan_config_for_imu_toggle(config)
-                self.logger.info(f"IMU toggle buttons after local config scan: {self.imu_toggle_buttons}")
-            else:
-                self.logger.warning("Local controller config empty — no imu_toggle buttons set")
+            import json as _json
+            with open("resources/configs/controller_config.json", "r") as f:
+                config = _json.load(f)
+            self._scan_config_for_imu_toggle(config)
+            print(f"[IMU] imu_toggle_buttons after startup scan: {sorted(self.imu_toggle_buttons)}", flush=True)
+        except FileNotFoundError:
+            print("[IMU] controller_config.json not found — imu toggle disabled", flush=True)
+            self.logger.warning("controller_config.json not found — imu toggle disabled")
         except Exception as e:
+            print(f"[IMU] Failed to load controller config: {e}", flush=True)
             self.logger.error(f"Could not read local controller config: {e}")
 
     def _on_websocket_message(self, text: str):
@@ -435,9 +439,8 @@ class SteamDeckControllerThread(QThread):
         for btn in self.imu_toggle_buttons:
             current = buttons.get(btn, False)
             prev    = self._prev_buttons.get(btn, False)
-            if current:
-                self.logger.debug(f"IMU toggle candidate pressed: {btn} (prev={prev})")
             if current and not prev:
+                print(f"[IMU] Toggle fired by: {btn} | set={sorted(self.imu_toggle_buttons)}", flush=True)
                 self._toggle_imu(raw)
                 break
         self._prev_buttons = buttons
