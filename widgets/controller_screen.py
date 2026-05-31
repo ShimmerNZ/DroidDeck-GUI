@@ -747,6 +747,12 @@ class ControllerConfigScreen(BaseScreen):
                 self.handle_controller_info_response(msg)
             elif msg_type == "controller_config_data":
                 self._load_config_from_backend_response(msg.get("config", {}))
+            elif msg_type == "controller_config_saved":
+                # Config was just saved — request it back so steamdeck.py
+                # picks up any imu_toggle mapping changes without a restart.
+                if msg.get("success"):
+                    self._suppress_grid_reload = True
+                    self.send_websocket_message("get_controller_config")
             elif msg_type == "controller_input":
                 pass
             elif msg_type == "system_control_command":
@@ -973,8 +979,11 @@ class ControllerConfigScreen(BaseScreen):
             "button_a", "button_b", "button_x", "button_y",
             "shoulder_left", "shoulder_right",
             "button_menu",
-            "trigger_left_click", "trigger_right_click",
+            "left_trigger_btn", "right_trigger_btn",
             "stick_left_click", "stick_right_click",
+            "grip_left_lower", "grip_right_lower",
+            "grip_left_upper", "grip_right_upper",
+            "button_left_pad", "button_right_pad",
             "dpad_up", "dpad_down", "dpad_left", "dpad_right"
         ]
         
@@ -1054,6 +1063,8 @@ class ControllerConfigScreen(BaseScreen):
     def _create_imu_tilt_params(self, row_data: Dict):
         """Create parameters for imu_tilt — up to 2 servos, each with channel/invert/min/home/max"""
         primary_color = theme_manager.get("primary_color", "#e1a014")
+        grey          = theme_manager.get("grey_light", "#aaaaaa")
+        card_bg       = theme_manager.get("card_bg", "#252525")
 
         header = QLabel("IMU Tilt Configuration")
         header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
@@ -1073,13 +1084,15 @@ class ControllerConfigScreen(BaseScreen):
 
         for i, srv in enumerate(row_data['config']['servos']):
             frame = QWidget()
-            frame.setStyleSheet(f"background: {theme_manager.get('card_bg', '#252525')}; border-radius: 4px; padding: 2px;")
+            frame.setStyleSheet(f"background: {card_bg}; border-radius: 4px;")
             fl = QVBoxLayout(frame)
-            fl.setContentsMargins(6, 4, 6, 4)
-            fl.setSpacing(4)
+            fl.setContentsMargins(8, 6, 8, 8)
+            fl.setSpacing(6)
 
-            # Row 1: channel + invert + remove
+            # ── Row 1: channel dropdown · invert · remove ──────────────────
             top = QHBoxLayout()
+            top.setSpacing(6)
+
             ch_combo = QComboBox()
             ch_combo.addItems(["Select Servo..."] + self.servo_channels)
             ch_combo.setStyleSheet(self._get_combo_style())
@@ -1094,11 +1107,11 @@ class ControllerConfigScreen(BaseScreen):
                 return on_ch
 
             ch_combo.currentTextChanged.connect(make_ch_handler(i))
-            top.addWidget(ch_combo, 3)
+            top.addWidget(ch_combo, 1)
 
             inv_cb = QCheckBox("Invert")
             inv_cb.setChecked(srv.get('invert', False))
-            inv_cb.setStyleSheet(f"color: {theme_manager.get('grey_light', '#aaaaaa')};")
+            inv_cb.setStyleSheet(f"color: {grey};")
 
             def make_inv_handler(idx):
                 def on_inv(checked):
@@ -1107,10 +1120,10 @@ class ControllerConfigScreen(BaseScreen):
                 return on_inv
 
             inv_cb.toggled.connect(make_inv_handler(i))
-            top.addWidget(inv_cb, 1)
+            top.addWidget(inv_cb)
 
             rm_btn = QPushButton("×")
-            rm_btn.setFixedWidth(28)
+            rm_btn.setFixedSize(32, 32)
             rm_btn.setStyleSheet(self._get_remove_button_style())
 
             def make_remove_handler(idx):
@@ -1124,19 +1137,29 @@ class ControllerConfigScreen(BaseScreen):
             top.addWidget(rm_btn)
             fl.addLayout(top)
 
-            # Row 2: min / home / max spinboxes
-            pulse_row = QHBoxLayout()
-            for label_text, key, default in [
-                ("Min", "min_pulse", 992),
+            # ── Row 2: Min / Home / Max — label above, spinbox below ───────
+            pulse_grid = QGridLayout()
+            pulse_grid.setSpacing(4)
+            pulse_grid.setColumnStretch(0, 1)
+            pulse_grid.setColumnStretch(1, 1)
+            pulse_grid.setColumnStretch(2, 1)
+
+            for col, (label_text, key, default) in enumerate([
+                ("Min",  "min_pulse",  992),
                 ("Home", "home_pulse", 1500),
-                ("Max", "max_pulse", 2000),
-            ]:
-                pulse_row.addWidget(QLabel(label_text))
+                ("Max",  "max_pulse",  2000),
+            ]):
+                lbl = QLabel(label_text)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet(f"color: {grey}; font-size: 11px;")
+                pulse_grid.addWidget(lbl, 0, col)
+
                 sb = QSpinBox()
                 sb.setRange(500, 2500)
                 sb.setSingleStep(10)
                 sb.setValue(srv.get(key, default))
-                sb.setStyleSheet(f"color: {theme_manager.get('grey_light', '#aaaaaa')};")
+                sb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                sb.setStyleSheet(f"color: {grey};")
 
                 def make_pulse_handler(idx, k):
                     def on_val(v):
@@ -1145,9 +1168,9 @@ class ControllerConfigScreen(BaseScreen):
                     return on_val
 
                 sb.valueChanged.connect(make_pulse_handler(i, key))
-                pulse_row.addWidget(sb, 1)
+                pulse_grid.addWidget(sb, 1, col)
 
-            fl.addLayout(pulse_row)
+            fl.addLayout(pulse_grid)
             self.params_layout.addWidget(frame)
 
         add_btn = QPushButton("+ Add Servo")
@@ -1382,6 +1405,14 @@ class ControllerConfigScreen(BaseScreen):
             self.logger.warning("Received empty controller config from backend")
             return
 
+        # After a save the screen requests the config back so steamdeck.py can
+        # hot-reload imu_toggle_buttons.  Skip the grid rebuild in that case so
+        # the user's current editing session is not interrupted.
+        if getattr(self, '_suppress_grid_reload', False):
+            self._suppress_grid_reload = False
+            self.logger.info("Config hot-reload skipped for grid (steamdeck.py updated via websocket)")
+            return
+
         self._config_loaded = True
         self._loading_config = True
 
@@ -1481,6 +1512,15 @@ class ControllerConfigScreen(BaseScreen):
         if behavior == "direct_servo":
             target = config.get('target', 'Not configured')
             return f"→ {target}"
+        elif behavior == "multi_servo":
+            servos = config.get('servos', [])
+            channels = [s.get('channel', '?') for s in servos if s.get('channel')]
+            return f"→ {', '.join(channels)}" if channels else "→ Not configured"
+        elif behavior == "toggle_servo":
+            target = config.get('target', 'Not configured')
+            p1 = config.get('position_1', '?')
+            p2 = config.get('position_2', '?')
+            return f"→ {target} ({p1}↔{p2})"
         elif behavior == "joystick_pair":
             x_servo = config.get('x_servo', '?')
             y_servo = config.get('y_servo', '?')
@@ -1504,6 +1544,12 @@ class ControllerConfigScreen(BaseScreen):
         elif behavior == "system_control":
             action = config.get('system_action', 'Not configured')
             return f"→ {action}"
+        elif behavior == "imu_tilt":
+            servos = config.get('servos', [])
+            channels = [s.get('channel', '?') for s in servos if s.get('channel')]
+            return f"→ {', '.join(channels)}" if channels else "→ Not configured"
+        elif behavior == "imu_toggle":
+            return "→ IMU toggle"
         else:
             return "Configure targets →"
 
@@ -3263,6 +3309,7 @@ class ControllerConfigScreen(BaseScreen):
                 selection-background-color: {primary};
                 selection-color: black;
                 font-size: 14px;
+                min-width: 220px;
             }}
         """
 
