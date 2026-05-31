@@ -114,7 +114,7 @@ class NetworkMonitorThread(QThread):
                     signal_match = re.search(r'signal:\s*(-?\d+)', link_result.stdout)
                     if signal_match:
                         dbm = int(signal_match.group(1))
-                        percentage = max(0, min(100, (dbm + 100) * 2))
+                        percentage = max(0, min(100, int((dbm + 85) * 100 / 35)))
                         self.logger.debug(f"WiFi signal from iw: {dbm} dBm = {percentage}%")
                         return percentage
         except Exception as e:
@@ -149,7 +149,7 @@ class NetworkMonitorThread(QThread):
                         try:
                             dbm = float(parts[3].rstrip('.'))
                             if dbm < 0:
-                                percentage = max(0, min(100, (dbm + 100) * 2))
+                                percentage = max(0, min(100, int((dbm + 85) * 100 / 35)))
                                 self.logger.debug(
                                     f"WiFi signal from /proc/net/wireless: {dbm} dBm = {percentage}%"
                                 )
@@ -173,7 +173,7 @@ class NetworkMonitorThread(QThread):
                 signal_match = re.search(r'Signal level=(-?\d+) dBm', result.stdout)
                 if signal_match:
                     dbm = int(signal_match.group(1))
-                    percentage = max(0, min(100, (dbm + 100) * 2))
+                    percentage = max(0, min(100, int((dbm + 85) * 100 / 35)))
                     self.logger.debug(f"WiFi signal from iwconfig dBm: {dbm} dBm = {percentage}%")
                     return percentage
         except Exception as e:
@@ -191,7 +191,7 @@ class NetworkMonitorThread(QThread):
                 rssi_match = re.search(r'agrCtlRSSI: (-?\d+)', result.stdout)
                 if rssi_match:
                     rssi = int(rssi_match.group(1))
-                    percentage = max(0, min(100, (rssi + 100) * 2))
+                    percentage = max(0, min(100, int((rssi + 85) * 100 / 35)))
                     self.logger.debug(f"WiFi signal from airport: {percentage}%")
                     return percentage
         except Exception as e:
