@@ -34,49 +34,6 @@ cleanup_on_failure() {
 # Set trap for cleanup
 trap cleanup_on_failure ERR
 
-# Verify sudo is available before doing anything else.
-# After a factory reset the deck user has no password set — sudo will fail
-# until you run: passwd  (then set any password you like)
-check_sudo() {
-    print_step "Checking sudo access..."
-
-    if sudo -v 2>/dev/null; then
-        print_success "sudo access confirmed"
-        return 0
-    fi
-
-    print_error "sudo is not available for the current user."
-    echo ""
-    echo "  After a factory reset the deck user has no password."
-    echo "  Open a new Konsole window and run:"
-    echo ""
-    echo "      passwd"
-    echo ""
-    echo "  Set any password, then re-run this installer."
-    exit 1
-}
-
-# Install the udev rule that allows Distrobox to read the Steam Deck's
-# raw HID device without running as root. Required for bitsteam (IMU / gyro).
-setup_udev_rules() {
-    print_step "Installing HID udev rule for bitsteam controller access..."
-
-    local RULE_FILE="/etc/udev/rules.d/70-steam-deck-hidraw.rules"
-    local RULE='KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1205", MODE="0660", GROUP="input", TAG+="uaccess"'
-
-    if [[ -f "$RULE_FILE" ]]; then
-        print_info "udev rule already exists — skipping"
-        return 0
-    fi
-
-    echo "$RULE" | sudo tee "$RULE_FILE" > /dev/null
-    sudo udevadm control --reload-rules
-    sudo udevadm trigger
-
-    print_success "udev rule installed: $RULE_FILE"
-    print_info "The deck user can now read /dev/hidraw* for bitsteam IMU access"
-}
-
 print_step "🎮 Steam Deck DroidDeck Installer"
 print_info "Creating persistent Ubuntu environment for DroidDeck"
 
@@ -227,13 +184,6 @@ sudo apt install -y --no-install-recommends \
     libasound2-dev \
     libasound2-plugins
 
-# Install WiFi and HID tools
-echo "Installing WiFi signal tools and HID libraries..."
-sudo apt install -y --no-install-recommends \
-    iw \
-    libhidapi-dev \
-    libhidapi-hidraw0
-
 # Install comprehensive X11 and XCB libraries for PyQt6
 echo "Installing comprehensive X11 and XCB libraries..."
 sudo apt install -y --no-install-recommends \
@@ -328,6 +278,7 @@ pip install python-dateutil==2.8.2
 echo "Installing optional packages..."
 pip install pygame==2.6.0 || echo "pygame install failed (optional)"
 pip install bitsteam || echo "bitsteam install failed (optional)"
+pip install hidapi || echo "hidapi install failed (optional)"
 pip install opencv-python==4.10.0.84 || echo "OpenCV install failed (optional)"
 pip install mediapipe==0.10.14 || echo "MediaPipe install failed (optional)"
 
@@ -405,12 +356,6 @@ try:
 except ImportError:
     print('⚠️  MediaPipe not available (optional)')
 
-try:
-    import bitsteam
-    print(f'✅ bitsteam available (IMU / gyro controller support)')
-except ImportError:
-    print('⚠️  bitsteam not available (optional — needed for IMU/gyro control)')
-
 print('✅ Testing complete')
 "
 
@@ -433,20 +378,15 @@ EOF
 
 # Create project directory structure
 setup_project_structure() {
-    print_step "Setting up project directory structure..."
-
-    # If the directory already exists (e.g. cloned directly into ~/DroidDeck)
-    # preserve the files — just ensure the expected subdirectories are present
-    if [[ -d "$PROJECT_DIR" ]]; then
-        print_info "Project directory already exists — preserving existing files"
-    else
-        mkdir -p "$PROJECT_DIR"
-    fi
-
-    # Ensure subdirectory structure exists without touching existing content
+    print_step "Creating project directory structure..."
+    
+    # Remove existing directory
+    rm -rf "$PROJECT_DIR" >/dev/null 2>&1 || true
+    
+    # Create directory structure
     mkdir -p "$PROJECT_DIR"/{widgets,resources,core,threads}
-
-    print_info "Project structure verified:"
+    
+    print_info "Created directories:"
     print_info "  📁 $PROJECT_DIR/widgets/"
     print_info "  📁 $PROJECT_DIR/resources/"
     print_info "  📁 $PROJECT_DIR/core/"
@@ -731,10 +671,8 @@ main() {
     print_info "Steam Deck DroidDeck Installer"
     print_info "Using Distrobox for persistent Ubuntu environment"
     echo ""
-
-    check_sudo
+    
     check_steam_deck
-    setup_udev_rules
     setup_distrobox
     create_container
     setup_python_environment
