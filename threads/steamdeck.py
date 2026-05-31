@@ -178,6 +178,15 @@ class SteamDeckControllerThread(QThread):
                     "No imu_toggle behavior in config — IMU toggle disabled. "
                     "Add a button with behavior 'imu_toggle' in the controller screen and save."
                 )
+        # Send the current set to the backend so it appears in the Pi log —
+        # useful for debugging since the frontend log isn't visible in gaming mode.
+        try:
+            self.send_websocket_message.emit({
+                "type": "imu_toggle_debug",
+                "buttons": sorted(self.imu_toggle_buttons),
+            })
+        except Exception:
+            pass
 
     def _load_imu_toggle_from_local_config(self):
         """Read the local controller config file immediately — no network needed."""
