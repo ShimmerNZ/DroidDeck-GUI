@@ -1652,6 +1652,8 @@ class SettingsScreen(BaseScreen):
                     widget.reload_camera_settings()
                 elif hasattr(widget, "reload_network_settings"):
                     widget.reload_network_settings()
+                elif hasattr(widget, "reload_controller_settings"):
+                    widget.reload_controller_settings()
 
         except Exception as e:
             self.logger.warning(f"Failed to notify components of config changes: {e}")

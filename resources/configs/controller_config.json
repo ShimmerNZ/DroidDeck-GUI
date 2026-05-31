@@ -122,11 +122,6 @@
       "position_2": 912
     }
   ],
-  "stick_right_click": [
-    {
-      "behavior": "imu_toggle"
-    }
-  ],
   "stick_left_click": [
     {
       "behavior": "toggle_servo",
@@ -147,7 +142,12 @@
       "servos": []
     }
   ],
-  "button_x": [
+  "stick_right_click": [
+    {
+      "behavior": "imu_toggle"
+    }
+  ],
+  "grip_right_lower": [
     {
       "behavior": "imu_toggle"
     }

@@ -1388,6 +1388,10 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.info("Requested controller info from backend")
 
+    def reload_controller_settings(self):
+        """Called by settings screen after a GUI update to reload config from backend."""
+        self._refresh_from_backend()
+
     def _refresh_from_backend(self):
         """Refresh controller config from backend, then update controller status"""
         if self.websocket and self.websocket.is_connected():
