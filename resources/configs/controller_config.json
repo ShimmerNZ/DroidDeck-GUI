@@ -133,7 +133,22 @@
   "imu_roll": [
     {
       "behavior": "imu_tilt",
-      "servos": []
+      "servos": [
+        {
+          "channel": "m1_ch2",
+          "invert": false,
+          "min_pulse": 992,
+          "home_pulse": 1552,
+          "max_pulse": 2200
+        },
+        {
+          "channel": "m1_ch3",
+          "invert": false,
+          "min_pulse": 992,
+          "home_pulse": 1330,
+          "max_pulse": 2000
+        }
+      ]
     }
   ],
   "imu_pitch": [

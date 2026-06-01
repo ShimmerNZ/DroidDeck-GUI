@@ -1,7 +1,7 @@
 #!/bin/bash
 # DroidDeck Installer for Steam Deck
 # Sets up the Ubuntu Distrobox container, Python environment,
-# launch script with logging, SMB file share, and Steam integration.
+# launch script with logging, and Steam integration.
 
 set -e
 
@@ -37,6 +37,8 @@ check_sudo() {
         print_info "Set a password first: passwd"
         exit 1
     fi
+    # Extend sudo credential lifetime to cover the full install (~15 min)
+    sudo sh -c 'echo "Defaults timestamp_timeout=60" > /etc/sudoers.d/droiddeck-install'
     print_success "sudo access confirmed"
 }
 
@@ -114,12 +116,16 @@ sudo apt update
 echo "Installing Python and build tools..."
 sudo apt install -y --no-install-recommends \
     python3 python3-pip python3-venv python3-dev \
-    build-essential pkg-config curl wget git iw samba
+    build-essential pkg-config curl wget git iw
 
 echo "Installing audio libraries..."
 sudo apt install -y --no-install-recommends \
     libpulse0 libpulse-dev pulseaudio-utils \
     libasound2 libasound2-dev libasound2-plugins
+
+echo "Installing HID libraries..."
+sudo apt install -y --no-install-recommends \
+    libhidapi-hidraw0 libhidapi-libusb0 libhidapi-dev
 
 echo "Installing X11 libraries..."
 sudo apt install -y --no-install-recommends \
@@ -190,8 +196,12 @@ pip install python-dateutil==2.8.2
 
 echo "Installing optional packages..."
 pip install pygame==2.6.0     || echo "pygame install failed (optional)"
+pip install hid==1.0.6            || echo "hid install failed (optional)"
 pip install bitsteam           || echo "bitsteam install failed (optional)"
-pip install hidapi             || echo "hidapi install failed (optional)"
+# bitsteam pulls in a conflicting hid stub that shadows hid 1.0.6 —
+# uninstall the stub then reinstall the correct version.
+pip uninstall hid -y 2>/dev/null || true
+pip install hid==1.0.6            || echo "hid reinstall failed (optional)"
 pip install opencv-python==4.10.0.84 || echo "OpenCV install failed (optional)"
 pip install mediapipe==0.10.14       || echo "MediaPipe install failed (optional)"
 
@@ -203,6 +213,11 @@ import PyQt6.QtCore
 print(f'PyQt6 {PyQt6.QtCore.qVersion()} OK')
 import pyqtgraph, websockets, requests, numpy, psutil
 print('Core dependencies OK')
+try:
+    import hid; hid.Device  # verify hid 1.0.6 API is present
+    print('hid 1.0.6 OK')
+except Exception as e:
+    print(f'hid not available: {e} (optional)')
 try:
     import cv2; print(f'OpenCV {cv2.__version__} OK')
 except ImportError:
@@ -226,6 +241,7 @@ EOF
 # ─────────────────────────────────────────────
 install_hid_udev_rule() {
     print_step "Installing HID udev rule for Steam Deck controller access..."
+
     RULES_FILE="/etc/udev/rules.d/99-steamdeck-hid.rules"
     if [[ -f "$RULES_FILE" ]]; then
         print_info "udev rule already installed"
@@ -334,64 +350,6 @@ EOF
 }
 
 # ─────────────────────────────────────────────
-setup_smb_share() {
-    print_step "Setting up SMB file share for ~/DroidDeck..."
-
-    SMB_CONF="$HOME/.config/droiddeck-smb/smb.conf"
-    mkdir -p "$HOME/.config/droiddeck-smb"
-
-    cat > "$SMB_CONF" << EOF
-[global]
-    workgroup = WORKGROUP
-    server string = Steam Deck DroidDeck
-    netbios name = steamdeck
-    security = user
-    map to guest = bad user
-    guest account = $(whoami)
-    log level = 1
-    max log size = 500
-
-[DroidDeck]
-    path = $PROJECT_DIR
-    browseable = yes
-    writable = yes
-    guest ok = yes
-    guest only = yes
-    create mask = 0664
-    directory mask = 0775
-    force user = $(whoami)
-EOF
-
-    mkdir -p "$HOME/.config/systemd/user"
-    cat > "$HOME/.config/systemd/user/droiddeck-smb.service" << EOF
-[Unit]
-Description=DroidDeck SMB File Share
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=distrobox enter droiddeckapp -- smbd --foreground --no-process-group --configfile=$SMB_CONF
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-
-    systemctl --user daemon-reload
-    systemctl --user enable droiddeck-smb.service
-    systemctl --user start droiddeck-smb.service
-
-    sleep 2
-
-    if systemctl --user is-active --quiet droiddeck-smb.service; then
-        print_success "SMB share running"
-    else
-        print_warning "SMB service may not have started — check: systemctl --user status droiddeck-smb.service"
-    fi
-}
-
-# ─────────────────────────────────────────────
 setup_steam_integration() {
     print_step "Setting up Steam integration..."
 
@@ -472,19 +430,19 @@ main() {
 
     check_sudo
     check_steam_deck
+    install_hid_udev_rule
     setup_distrobox
     create_container
     setup_python_environment
-    install_hid_udev_rule
     setup_project_structure
     create_launcher
-    setup_smb_share
     setup_steam_integration
     test_installation
 
     trap - ERR
 
-    IP=$(hostname -I | awk '{print $1}')
+    # Remove the temporary sudo timeout extension
+    sudo rm -f /etc/sudoers.d/droiddeck-install
 
     echo ""
     print_success "DroidDeck installation complete!"
@@ -493,10 +451,6 @@ main() {
     print_info "Container:          $CONTAINER_NAME"
     print_info "Python environment: /home/deck/droiddeck_env (in container)"
     print_info "Logs:               $PROJECT_DIR/logs/droiddeck.log"
-    echo ""
-    print_info "SMB file share (guest access, no password):"
-    print_info "  Mac:     smb://${IP}/DroidDeck   (Finder > Go > Connect to Server)"
-    print_info "  Windows: \\\\${IP}\\DroidDeck"
     echo ""
     print_info "Next steps:"
     print_info "  1. Configure your robot IP in resources/configs/steamdeck_config.json"

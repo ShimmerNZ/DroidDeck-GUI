@@ -15,7 +15,7 @@ A PyQt6-based robot control interface for droid robots, featuring real-time tele
 
 ## Requirements
 
-- Steam Deck running SteamOS 3.0+ in Desktop Mode
+- Steam Deck running SteamOS 3.0+
 - Network connection to the robot backend (Raspberry Pi)
 - Robot backend running at a known IP address
 
@@ -59,7 +59,7 @@ The installer handles everything automatically (~10 minutes):
 - Installs `bitsteam` for Steam Deck IMU/gyroscope support
 - Installs the HID udev rule for direct controller access
 - Creates the launch script with session logging
-- Sets up the SMB file share for easy file transfer
+- Sets up SMB file share with guest read/write access
 - Creates a desktop entry for the application menu
 
 ### Step 5 — Configure your robot IP
@@ -99,25 +99,31 @@ DroidDeck will now appear in Gaming Mode.
 
 ## SMB File Share
 
-The installer sets up a Samba share so you can transfer files to and from the Steam Deck without SSH or a USB cable. The share runs automatically in the background.
+The installer sets up a Samba share so you can transfer files to and from the Steam Deck without SSH or a USB cable. The share starts automatically on boot with guest read/write access — no password required.
 
-**Connect (no password required):**
+**Connect:**
 
 | Platform | Address |
 |----------|---------|
-| Mac | Finder → Go → Connect to Server → `smb://steamdeck/DroidDeck` |
-| Windows | Explorer → `\\steamdeck\DroidDeck` |
+| Mac | Finder → `Cmd+K` → `smb://10.1.1.x/DroidDeck` |
+| Windows | Explorer → `\\10.1.1.x\DroidDeck` |
 
-If the hostname doesn't resolve, use the Steam Deck's IP address directly (`smb://10.1.1.x/DroidDeck`).
+The installer opens port 445 in firewalld automatically. If you reinstall SteamOS you will need to re-run the installer to restore this.
 
 **Useful commands:**
-
 ```bash
-# Check share status
-systemctl --user status droiddeck-smb.service
+# Check status
+sudo systemctl status droiddeck-smb.service
 
 # Restart if needed
-systemctl --user restart droiddeck-smb.service
+sudo systemctl restart droiddeck-smb.service
+
+# View SMB log
+cat ~/.config/droiddeck-smb/smbd.log
+
+# Manually re-open port 445 if needed
+sudo firewall-cmd --permanent --add-port=445/tcp
+sudo firewall-cmd --reload
 ```
 
 ---
@@ -138,7 +144,7 @@ Use the **Update Server** button in the Settings screen. The backend service res
 
 ## Logs
 
-Session logs are written to `~/DroidDeck/logs/droiddeck.log`. The previous session is kept as `droiddeck.prev.log`. Access them via the SMB share or:
+Session logs are written to `~/DroidDeck/logs/droiddeck.log`. The previous session is kept as `droiddeck.prev.log`. Pull them off via the SMB share or:
 
 ```bash
 tail -f ~/DroidDeck/logs/droiddeck.log
@@ -186,12 +192,6 @@ Check the log: `cat ~/DroidDeck/logs/droiddeck.log`
 **Controller not responding**
 - Ensure the HID udev rule was installed (the installer does this automatically)
 - Check: `ls /etc/udev/rules.d/99-steamdeck-hid.rules`
-
-**SMB share not connecting**
-```bash
-systemctl --user status droiddeck-smb.service
-systemctl --user restart droiddeck-smb.service
-```
 
 **Container issues**
 ```bash

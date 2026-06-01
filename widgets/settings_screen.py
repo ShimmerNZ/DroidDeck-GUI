@@ -24,22 +24,6 @@ from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
 
-# ========================================
-# STEP 1: Add these imports at the top of your settings_screen.py file
-# ========================================
-
-# Add these new imports to the existing import section:
-import requests
-import socket
-import time
-from PyQt6.QtWidgets import QProgressDialog
-from PyQt6.QtCore import QThread, pyqtSignal
-
-# ========================================
-# STEP 2: Add the NetworkTestThread class INSIDE your settings_screen.py file
-# (Add this after your existing imports but before the main SettingsScreen class)
-# ========================================
-
 class NetworkTestThread(QThread):
     """Background thread for network connectivity testing"""
     
@@ -366,13 +350,29 @@ class UpdateThread(QThread):
             self.progress_updated.emit("Downloading update from GitHub...")
             temp_dir = Path(tempfile.mkdtemp())
             zip_path = temp_dir / "update.zip"
-            
-            response = requests.get(self.GITHUB_ZIP_URL, stream=True, timeout=30)
-            response.raise_for_status()
-            
+
+            # connect timeout, read timeout (seconds per chunk)
+            response = requests.get(self.GITHUB_ZIP_URL, stream=True, timeout=(15, 30))
+
+            if response.status_code == 404:
+                raise Exception(
+                    f"Branch '{self.branch}' not found on GitHub.\n"
+                    "Check the branch name and try again."
+                )
+            elif response.status_code == 403:
+                raise Exception(
+                    "GitHub rate limit reached or access denied.\n"
+                    "Wait a few minutes and try again."
+                )
+            elif response.status_code != 200:
+                raise Exception(
+                    f"GitHub returned an unexpected error (HTTP {response.status_code}).\n"
+                    "Try again later."
+                )
+
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            
+
             with open(zip_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
@@ -381,39 +381,42 @@ class UpdateThread(QThread):
                         if total_size:
                             percent = int((downloaded / total_size) * 100)
                             self.progress_updated.emit(f"Downloading: {percent}%")
-            
+
             # Step 2: Extract
             self.progress_updated.emit("Extracting files...")
             extract_dir = temp_dir / "extracted"
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
-            
+
             # Find the extracted folder (GitHub adds repo name prefix)
             extracted_folders = list(extract_dir.iterdir())
             if not extracted_folders:
-                raise Exception("No files found in downloaded archive")
-            
+                raise Exception("No files found in downloaded archive.")
+
             source_dir = extracted_folders[0]
-            
+
             # Step 3: Update files (skip protected configs)
             self.progress_updated.emit("Installing update...")
             self._update_files(source_dir, self.app_root)
-            
+
             self.update_completed.emit(True, "Update completed successfully! Please restart the application.")
-            
+
+        except requests.exceptions.ConnectionError:
+            self.update_completed.emit(False, "Could not reach GitHub. Check the network connection and try again.")
+        except requests.exceptions.Timeout:
+            self.update_completed.emit(False, "Download timed out. Check the network connection and try again.")
         except requests.exceptions.RequestException as e:
             self.update_completed.emit(False, f"Download failed: {str(e)}")
         except zipfile.BadZipFile:
-            self.update_completed.emit(False, "Downloaded file is corrupted")
+            self.update_completed.emit(False, "Downloaded file is corrupted. Try again.")
         except Exception as e:
             self.update_completed.emit(False, f"Update failed: {str(e)}")
         finally:
-            # Cleanup temp directory
             if temp_dir and temp_dir.exists():
                 try:
                     shutil.rmtree(temp_dir)
                 except Exception:
-                    pass  # Ignore cleanup errors
+                    pass
     
     def _update_files(self, source_dir: Path, target_dir: Path):
         """Copy files from source to target, protecting config files"""

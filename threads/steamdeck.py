@@ -32,7 +32,8 @@ from core.utils import error_boundary
 
 
 # HID device path for the Steam Deck built-in controller
-HIDRAW_PATH = b'/dev/hidraw3'
+HIDRAW_PATH     = b'/dev/hidraw3'
+HIDRAW_PATH_STR = '/dev/hidraw3'
 
 # Firmware command to enable IMU output in the HID report
 # Sourced from the hid-steam Linux kernel driver protocol
@@ -242,31 +243,35 @@ class SteamDeckControllerThread(QThread):
         self._cleanup_hid()
 
     def _init_hid(self):
-        """Open the raw HID device and start the bitsteam button reader"""
+        """Open the raw HID device using direct file I/O for sticks/buttons,
+        and bitsteam for IMU data (requires Steam gyro disabled in Desktop Config)."""
+        import os
         retry_delay = 2.0
         while self.running and not self.controller_active:
             try:
-                import hid
-                self._hid_device = hid.Device(path=HIDRAW_PATH)
-                self._hid_device.nonblocking = True
+                # Open hidraw directly — hidapi open_path fails inside the
+                # Distrobox container due to ACL/userns mapping.
+                fd = os.open(HIDRAW_PATH_STR, os.O_RDWR | os.O_NONBLOCK)
+                self._hid_device = fd
 
                 # Enable IMU output in firmware
-                self._hid_device.write(IMU_ENABLE_CMD)
+                os.write(fd, IMU_ENABLE_CMD)
                 time.sleep(0.3)
 
-                # bitsteam reads buttons from the same hidraw device independently
+                # bitsteam is used solely for IMU (pitch/yaw/roll) data.
+                # Buttons and sticks are parsed from raw bytes in _drain_hid.
+                # Requires Steam gyro set to None in Desktop Configuration.
                 from bitsteam import SteamDeck as BitSteamDeck
                 self._bitsteam_deck = BitSteamDeck()
                 self._bitsteam_deck.start()
                 time.sleep(0.2)
 
                 self.controller_active = True
-                self.logger.info(f"HID controller opened: {HIDRAW_PATH}")
+                self.logger.info(f"HID controller opened: {HIDRAW_PATH_STR}")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")
-                # Sleep in small increments so shutdown can interrupt quickly
                 deadline = time.monotonic() + retry_delay
                 while self.running and time.monotonic() < deadline:
                     time.sleep(0.1)
@@ -287,8 +292,9 @@ class SteamDeckControllerThread(QThread):
             self.logger.debug(f"bitsteam stop error: {e}")
 
         try:
-            if self._hid_device:
-                self._hid_device.close()
+            if self._hid_device is not None:
+                import os
+                os.close(self._hid_device)
                 self._hid_device = None
         except Exception as e:
             self.logger.debug(f"HID close error: {e}")
@@ -305,12 +311,19 @@ class SteamDeckControllerThread(QThread):
         The Steam Deck sends reports at ~250Hz but we poll at 50Hz. Without
         draining, the kernel FIFO builds up and reads become stale by seconds.
         """
+        import os
+        import select
         latest = None
         while True:
-            data = self._hid_device.read(64)
-            if not data:
+            r, _, _ = select.select([self._hid_device], [], [], 0)
+            if not r:
                 break
-            latest = bytes(data)
+            try:
+                data = os.read(self._hid_device, 64)
+                if data:
+                    latest = data
+            except BlockingIOError:
+                break
         return latest
 
     def _read_and_send(self, current_time: float):
@@ -319,7 +332,7 @@ class SteamDeckControllerThread(QThread):
         if not raw or len(raw) < 56:
             return
         axes    = self._parse_analog(raw)
-        buttons = self._parse_buttons()
+        buttons = self._parse_buttons(raw)
 
         # Toggle IMU on button press edge; add axes if enabled
         self._check_imu_toggle(buttons, raw)
@@ -359,26 +372,58 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _parse_imu(self, raw: bytes) -> Dict[str, float]:
-        """Parse accelerometer tilt axes relative to the calibration zero point"""
-        ax = struct.unpack_from('<h', raw, OFF_ACCEL_X)[0] - self.imu_zero_ax
-        ay = struct.unpack_from('<h', raw, OFF_ACCEL_Y)[0] - self.imu_zero_ay
-
-        roll  = self._norm_imu(ax)
-        pitch = self._norm_imu(ay)
-
-        return {
-            'imu_roll':  roll,
-            'imu_pitch': pitch,
-        }
-
-    def _parse_buttons(self) -> Dict[str, bool]:
-        """Read button state from bitsteam and remap to DroidDeck control names"""
+        """Read IMU tilt from bitsteam which handles the firmware activation.
+        Returns normalised roll and pitch in ±1.0 range with deadzone applied.
+        Requires Steam gyro set to None in Desktop Configuration.
+        """
         if not self._bitsteam_deck:
-            return {}
-        raw = self._bitsteam_deck.buttons
+            return {'imu_roll': 0.0, 'imu_pitch': 0.0}
+        try:
+            imu = self._bitsteam_deck.imu
+            roll  = self._norm_imu_rate(imu.get('roll',  0.0))
+            pitch = self._norm_imu_rate(imu.get('pitch', 0.0))
+            return {
+                'imu_roll':  roll,
+                'imu_pitch': pitch,
+            }
+        except Exception:
+            return {'imu_roll': 0.0, 'imu_pitch': 0.0}
+
+    def _parse_buttons(self, raw: bytes) -> Dict[str, bool]:
+        """Parse button state directly from the raw HID report bytes.
+        Byte/bit mapping verified against the bitsteam library source.
+        """
+        b8  = raw[8]
+        b9  = raw[9]
+        b10 = raw[10]
+        b11 = raw[11]
+        b13 = raw[13]
+        b14 = raw[14]
         return {
-            our_name: bool(raw.get(bs_name, False))
-            for bs_name, our_name in BUTTON_MAP.items()
+            'button_a':            bool(b8  & 0x80),
+            'button_b':            bool(b8  & 0x20),
+            'button_x':            bool(b8  & 0x40),
+            'button_y':            bool(b8  & 0x10),
+            'shoulder_left':       bool(b8  & 0x08),
+            'shoulder_right':      bool(b8  & 0x04),
+            'left_trigger_btn':    bool(b8  & 0x02),
+            'right_trigger_btn':   bool(b8  & 0x01),
+            'dpad_up':             bool(b9  & 0x01),
+            'dpad_down':           bool(b9  & 0x08),
+            'dpad_left':           bool(b9  & 0x04),
+            'dpad_right':          bool(b9  & 0x02),
+            'button_back':         bool(b9  & 0x10),
+            'button_guide':        bool(b9  & 0x20),
+            'button_menu':         bool(b9  & 0x40),
+            'grip_left_lower':     bool(b9  & 0x80),
+            'grip_right_lower':    bool(b10 & 0x01),
+            'stick_left_click':    bool(b10 & 0x40),
+            'button_left_pad':     (b10 & 0x0a) == 0x0a,
+            'button_right_pad':    (b10 & 0x14) == 0x14,
+            'stick_right_click':   bool(b11 & 0x04),
+            'grip_left_upper':     bool(b13 & 0x02),
+            'grip_right_upper':    bool(b13 & 0x04),
+            'button_quick_access': bool(b14 & 0x04),
         }
 
     def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
@@ -395,20 +440,10 @@ class SteamDeckControllerThread(QThread):
         self._prev_buttons = buttons
 
     def _toggle_imu(self, raw: bytes):
-        """Enable or disable IMU tilt control, calibrating zero on enable"""
+        """Enable or disable IMU tilt control via bitsteam."""
         if not self.imu_enabled:
-            # Capture current accelerometer values as the neutral reference
-            try:
-                self.imu_zero_ax = struct.unpack_from('<h', raw, OFF_ACCEL_X)[0]
-                self.imu_zero_ay = struct.unpack_from('<h', raw, OFF_ACCEL_Y)[0]
-            except Exception:
-                self.imu_zero_ax = 0
-                self.imu_zero_ay = 0
             self.imu_enabled = True
-            self.logger.info(
-                f"IMU tilt enabled — zero ref: "
-                f"roll={self.imu_zero_ax} pitch={self.imu_zero_ay}"
-            )
+            self.logger.info("IMU tilt enabled via bitsteam")
         else:
             self.imu_enabled = False
             self.logger.info("IMU tilt disabled")
@@ -430,6 +465,13 @@ class SteamDeckControllerThread(QThread):
     def _norm_imu(self, delta: int) -> float:
         """Normalise IMU delta value to ±1.0 with deadzone"""
         v = delta / IMU_MAX
+        return 0.0 if abs(v) < IMU_DEADZONE else max(-1.0, min(1.0, v))
+
+    def _norm_imu_rate(self, rate: float) -> float:
+        """Normalise bitsteam IMU rate (degrees/sec) to ±1.0 with deadzone.
+        Clamps at ±90 deg/sec as the practical tilt range for servo control.
+        """
+        v = rate / 90.0
         return 0.0 if abs(v) < IMU_DEADZONE else max(-1.0, min(1.0, v))
 
     def _send_controller_websocket(self, input_data: ControllerInputData):
