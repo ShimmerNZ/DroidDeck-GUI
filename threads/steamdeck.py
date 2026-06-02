@@ -6,17 +6,17 @@ SteamDeckControllerThread — HID-based input handler for DroidDeck
 Reads analog, IMU and button data directly from the Steam Deck's
 raw HID interface (/dev/hidraw3), bypassing the Steam Input layer.
 
-Analog and IMU are parsed from raw HID reports using verified byte offsets.
-Button state is read from bitsteam which handles the bitmask parsing.
-Both readers open the device independently — Linux hidraw allows concurrent
-readers, each receiving their own copy of every report.
+All input is read via the local SteamDeckExtended class in deck.py.
+No external bitsteam package required.
 
-Byte offsets verified by hardware orientation sweep testing:
+Byte offsets verified by hardware sweep testing (test_motion_standalone.py):
   Triggers:    44 (L), 46 (R)  — uint16, 0-32767
   Left stick:  48 (X), 50 (Y)  — int16,  ±32767
   Right stick: 52 (X), 54 (Y)  — int16,  ±32767
-  Accel roll:  24               — int16,  ±17000 (left=+, right=-)
-  Accel pitch: 26               — int16,  ±17000 (back=+, forward=-)
+  Accel X:     24               — int16,  ±16384 (roll,  left=+, right=-)
+  Accel Y:     26               — int16,  ±16384 (pitch, back=+, forward=-)
+  Accel Z:     28               — int16,  ±16384 (vertical)
+  Gyro X/Y/Z:  30/32/34        — int16,  raw gyroscope rates
 """
 
 import json
@@ -48,17 +48,14 @@ IMU_ENABLE_CMD = bytes([
 STICK_MAX   = 32767
 TRIGGER_MAX = 32767
 
-# IMU integration — accumulated angle range for ±1.0 normalisation.
-# ±90 degrees maps to full servo travel. Adjust to taste.
-IMU_ANGLE_MAX  = 90.0
-# Decay factor per frame at 50Hz — 0.995 = ~10s to drift back to zero when still.
-IMU_DECAY      = 0.995
+# Accelerometer full-scale range — 1g = 16384 LSB (verified by hardware sweep).
+ACCEL_MAX = 16384
 
 STICK_DEADZONE   = 0.05
 TRIGGER_DEADZONE = 0.02
 IMU_DEADZONE     = 0.04
 
-# bitsteam field name → DroidDeck control name
+# SteamDeckExtended field name → DroidDeck control name
 BUTTON_MAP = {
     'a':                'button_a',
     'b':                'button_b',
@@ -122,11 +119,10 @@ class SteamDeckControllerThread(QThread):
         self.last_input_sent = 0
 
         # IMU state
-        self.imu_enabled        = False
-        self._imu_angle_roll    = 0.0
-        self._imu_angle_pitch   = 0.0
-        self._last_imu_time     = None
-        self._prev_buttons      = {}
+        self.imu_enabled      = False
+        self._accel_zero_x    = 0
+        self._accel_zero_y    = 0
+        self._prev_buttons    = {}
         self.imu_toggle_buttons: set = set()
 
         # HID handles
@@ -243,16 +239,16 @@ class SteamDeckControllerThread(QThread):
         retry_delay = 2.0
         while self.running and not self.controller_active:
             try:
-                from bitsteam import SteamDeck as BitSteamDeck
-                self._bitsteam_deck = BitSteamDeck()
+                from core.deck import SteamDeckExtended
+                self._bitsteam_deck = SteamDeckExtended()
                 self._bitsteam_deck.start()
                 time.sleep(0.5)
 
                 if not self._bitsteam_deck.is_running:
-                    raise RuntimeError("bitsteam thread failed to start")
+                    raise RuntimeError("SteamDeckExtended thread failed to start")
 
                 self.controller_active = True
-                self.logger.info("bitsteam controller started")
+                self.logger.info("SteamDeckExtended controller started")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
 
             except Exception as e:
@@ -327,39 +323,19 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _parse_imu(self) -> Dict[str, float]:
-        """Integrate gyro rotation rates from bitsteam into accumulated angles.
+        """Read absolute tilt from the raw accelerometer.
 
-        Integrating rate × dt gives absolute tilt angle rather than speed,
-        so the servo holds position when the Deck is held still.
-        A slow decay prevents drift accumulating over time — the angle
-        bleeds back toward zero when the Deck is stationary.
+        Accelerometer values are gravity-relative — tilting the Deck changes
+        how much of 1g projects onto each axis. This gives stable absolute
+        tilt with no drift, no integration needed.
+        The zero reference is captured when IMU is toggled on.
         """
-        now = time.monotonic()
-        if self._last_imu_time is None:
-            self._last_imu_time = now
-            return {'imu_roll': 0.0, 'imu_pitch': 0.0}
+        m = self._bitsteam_deck.get_motion_values()
+        ax = m.get('accel_x', 0) - self._accel_zero_x
+        ay = m.get('accel_y', 0) - self._accel_zero_y
 
-        dt = now - self._last_imu_time
-        self._last_imu_time = now
-
-        imu = self._bitsteam_deck.get_imu_rates()
-        roll_rate  = float(imu.get('roll',  0.0))
-        pitch_rate = float(imu.get('pitch', 0.0))
-
-        # Integrate rate into angle
-        self._imu_angle_roll  += roll_rate  * dt
-        self._imu_angle_pitch += pitch_rate * dt
-
-        # Clamp to ±IMU_ANGLE_MAX degrees
-        self._imu_angle_roll  = max(-IMU_ANGLE_MAX, min(IMU_ANGLE_MAX, self._imu_angle_roll))
-        self._imu_angle_pitch = max(-IMU_ANGLE_MAX, min(IMU_ANGLE_MAX, self._imu_angle_pitch))
-
-        # Slow decay toward zero to prevent long-term drift
-        self._imu_angle_roll  *= IMU_DECAY
-        self._imu_angle_pitch *= IMU_DECAY
-
-        roll  = self._norm_imu_angle(self._imu_angle_roll)
-        pitch = self._norm_imu_angle(self._imu_angle_pitch)
+        roll  = self._norm_imu_accel(ax)
+        pitch = self._norm_imu_accel(ay)
 
         return {
             'imu_roll':  roll,
@@ -388,13 +364,19 @@ class SteamDeckControllerThread(QThread):
         self._prev_buttons = buttons
 
     def _toggle_imu(self):
-        """Enable or disable IMU tilt control. Resets accumulated angles on enable."""
+        """Enable or disable IMU tilt. Captures accelerometer zero ref on enable."""
         if not self.imu_enabled:
-            self._imu_angle_roll  = 0.0
-            self._imu_angle_pitch = 0.0
-            self._last_imu_time   = None
-            self.imu_enabled      = True
-            self.logger.info("IMU tilt enabled — angles reset to zero")
+            if self._bitsteam_deck:
+                m = self._bitsteam_deck.get_motion_values()
+                self._accel_zero_x = m.get('accel_x', 0)
+                self._accel_zero_y = m.get('accel_y', 0)
+            else:
+                self._accel_zero_x = 0
+                self._accel_zero_y = 0
+            self.imu_enabled = True
+            self.logger.info(
+                f"IMU tilt enabled — accel zero: x={self._accel_zero_x} y={self._accel_zero_y}"
+            )
         else:
             self.imu_enabled = False
             self.logger.info("IMU tilt disabled")
@@ -413,11 +395,11 @@ class SteamDeckControllerThread(QThread):
         """
         return max(-1.0, min(1.0, (raw_uint16 / TRIGGER_MAX) * 2.0 - 1.0))
 
-    def _norm_imu_angle(self, angle: float) -> float:
-        """Normalise accumulated angle (degrees) to ±1.0 with deadzone.
-        ±IMU_ANGLE_MAX degrees maps to ±1.0.
+    def _norm_imu_accel(self, counts: int) -> float:
+        """Normalise raw accelerometer counts to ±1.0 with deadzone.
+        ACCEL_MAX counts (1g) maps to ±1.0 full servo travel.
         """
-        v = angle / IMU_ANGLE_MAX
+        v = counts / ACCEL_MAX
         return 0.0 if abs(v) < IMU_DEADZONE else max(-1.0, min(1.0, v))
 
     def _send_controller_websocket(self, input_data: ControllerInputData):

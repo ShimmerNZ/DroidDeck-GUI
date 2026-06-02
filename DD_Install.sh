@@ -197,11 +197,7 @@ pip install python-dateutil==2.8.2
 echo "Installing optional packages..."
 pip install pygame==2.6.0     || echo "pygame install failed (optional)"
 pip install hid==1.0.6            || echo "hid install failed (optional)"
-pip install bitsteam           || echo "bitsteam install failed (optional)"
-# bitsteam pulls in a conflicting hid stub that shadows hid 1.0.6 —
-# uninstall the stub then reinstall the correct version.
-pip uninstall hid -y 2>/dev/null || true
-pip install hid==1.0.6            || echo "hid reinstall failed (optional)"
+pip install scipy              || echo "scipy install failed (optional)"
 pip install opencv-python==4.10.0.84 || echo "OpenCV install failed (optional)"
 pip install mediapipe==0.10.14       || echo "MediaPipe install failed (optional)"
 
@@ -214,8 +210,9 @@ print(f'PyQt6 {PyQt6.QtCore.qVersion()} OK')
 import pyqtgraph, websockets, requests, numpy, psutil
 print('Core dependencies OK')
 try:
-    import hid; hid.Device  # verify hid 1.0.6 API is present
-    print('hid 1.0.6 OK')
+    import hid; hid.Device  # verify hid 1.0.6 API
+    import scipy               # verify scipy for IMU quaternion maths
+    print('hid 1.0.6 + scipy OK')
 except Exception as e:
     print(f'hid not available: {e} (optional)')
 try:
