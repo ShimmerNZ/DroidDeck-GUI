@@ -48,9 +48,11 @@ IMU_ENABLE_CMD = bytes([
 STICK_MAX   = 32767
 TRIGGER_MAX = 32767
 
-# IMU gyro rate clamp — bitsteam provides degrees/sec rotation rates.
-# Clamped at ±180 deg/s as the practical tilt range for servo control.
-IMU_RATE_MAX = 180.0
+# IMU integration — accumulated angle range for ±1.0 normalisation.
+# ±90 degrees maps to full servo travel. Adjust to taste.
+IMU_ANGLE_MAX  = 90.0
+# Decay factor per frame at 50Hz — 0.995 = ~10s to drift back to zero when still.
+IMU_DECAY      = 0.995
 
 STICK_DEADZONE   = 0.05
 TRIGGER_DEADZONE = 0.02
@@ -120,10 +122,11 @@ class SteamDeckControllerThread(QThread):
         self.last_input_sent = 0
 
         # IMU state
-        self.imu_enabled       = False
-        self.imu_zero_ax       = 0
-        self.imu_zero_ay       = 0
-        self._prev_buttons     = {}
+        self.imu_enabled        = False
+        self._imu_angle_roll    = 0.0
+        self._imu_angle_pitch   = 0.0
+        self._last_imu_time     = None
+        self._prev_buttons      = {}
         self.imu_toggle_buttons: set = set()
 
         # HID handles
@@ -324,12 +327,40 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _parse_imu(self) -> Dict[str, float]:
-        """Read gyro rotation rates from bitsteam and normalise to ±1.0.
-        Rates are in degrees/sec; clamped at IMU_RATE_MAX for servo mapping.
+        """Integrate gyro rotation rates from bitsteam into accumulated angles.
+
+        Integrating rate × dt gives absolute tilt angle rather than speed,
+        so the servo holds position when the Deck is held still.
+        A slow decay prevents drift accumulating over time — the angle
+        bleeds back toward zero when the Deck is stationary.
         """
+        now = time.monotonic()
+        if self._last_imu_time is None:
+            self._last_imu_time = now
+            return {'imu_roll': 0.0, 'imu_pitch': 0.0}
+
+        dt = now - self._last_imu_time
+        self._last_imu_time = now
+
         imu = self._bitsteam_deck.get_imu_rates()
-        roll  = self._norm_imu_rate(float(imu.get('roll',  0.0)))
-        pitch = self._norm_imu_rate(float(imu.get('pitch', 0.0)))
+        roll_rate  = float(imu.get('roll',  0.0))
+        pitch_rate = float(imu.get('pitch', 0.0))
+
+        # Integrate rate into angle
+        self._imu_angle_roll  += roll_rate  * dt
+        self._imu_angle_pitch += pitch_rate * dt
+
+        # Clamp to ±IMU_ANGLE_MAX degrees
+        self._imu_angle_roll  = max(-IMU_ANGLE_MAX, min(IMU_ANGLE_MAX, self._imu_angle_roll))
+        self._imu_angle_pitch = max(-IMU_ANGLE_MAX, min(IMU_ANGLE_MAX, self._imu_angle_pitch))
+
+        # Slow decay toward zero to prevent long-term drift
+        self._imu_angle_roll  *= IMU_DECAY
+        self._imu_angle_pitch *= IMU_DECAY
+
+        roll  = self._norm_imu_angle(self._imu_angle_roll)
+        pitch = self._norm_imu_angle(self._imu_angle_pitch)
+
         return {
             'imu_roll':  roll,
             'imu_pitch': pitch,
@@ -357,10 +388,13 @@ class SteamDeckControllerThread(QThread):
         self._prev_buttons = buttons
 
     def _toggle_imu(self):
-        """Enable or disable IMU tilt control via bitsteam gyro rates."""
+        """Enable or disable IMU tilt control. Resets accumulated angles on enable."""
         if not self.imu_enabled:
-            self.imu_enabled = True
-            self.logger.info("IMU tilt enabled")
+            self._imu_angle_roll  = 0.0
+            self._imu_angle_pitch = 0.0
+            self._last_imu_time   = None
+            self.imu_enabled      = True
+            self.logger.info("IMU tilt enabled — angles reset to zero")
         else:
             self.imu_enabled = False
             self.logger.info("IMU tilt disabled")
@@ -379,9 +413,11 @@ class SteamDeckControllerThread(QThread):
         """
         return max(-1.0, min(1.0, (raw_uint16 / TRIGGER_MAX) * 2.0 - 1.0))
 
-    def _norm_imu_rate(self, rate: float) -> float:
-        """Normalise bitsteam gyro rate (deg/s) to ±1.0 with deadzone."""
-        v = rate / IMU_RATE_MAX
+    def _norm_imu_angle(self, angle: float) -> float:
+        """Normalise accumulated angle (degrees) to ±1.0 with deadzone.
+        ±IMU_ANGLE_MAX degrees maps to ±1.0.
+        """
+        v = angle / IMU_ANGLE_MAX
         return 0.0 if abs(v) < IMU_DEADZONE else max(-1.0, min(1.0, v))
 
     def _send_controller_websocket(self, input_data: ControllerInputData):
