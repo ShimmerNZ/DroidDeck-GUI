@@ -402,11 +402,26 @@ test_installation() {
 
     if distrobox enter "$CONTAINER_NAME" -- bash -c "
         source /home/deck/droiddeck_env/bin/activate 2>/dev/null &&
-        python -c 'import PyQt6, websockets, requests, numpy; print(\"Dependencies OK\")'
+        python -c 'import PyQt6, websockets, requests, numpy; print(\"Core dependencies OK\")'
     " 2>/dev/null; then
         print_success "Python dependencies OK"
     else
         print_warning "Dependency check failed — may still work at runtime"
+    fi
+
+    if distrobox enter "$CONTAINER_NAME" -- bash -c "
+        source /home/deck/droiddeck_env/bin/activate 2>/dev/null &&
+        python -c 'import hid; hid.Device; import scipy; print(\"IMU dependencies OK\")'
+    " 2>/dev/null; then
+        print_success "IMU dependencies OK (hid==1.0.6, scipy)"
+    else
+        print_warning "IMU dependencies check failed — IMU tilt control will not work"
+    fi
+
+    if [[ -f "$PROJECT_DIR/core/deck.py" ]]; then
+        print_success "deck.py present in core/"
+    else
+        print_warning "core/deck.py not found — IMU tilt control will not work until added"
     fi
 
     if [[ -x "$PROJECT_DIR/launch.sh" ]]; then
@@ -451,8 +466,9 @@ main() {
     echo ""
     print_info "Next steps:"
     print_info "  1. Configure your robot IP in resources/configs/steamdeck_config.json"
-    print_info "  2. Test: $PROJECT_DIR/launch.sh"
-    print_info "  3. Add to Steam Gaming Mode (see README.md)"
+    print_info "  2. Ensure core/deck.py is present (required for IMU tilt control)"
+    print_info "  3. Test: $PROJECT_DIR/launch.sh"
+    print_info "  4. Add to Steam Gaming Mode (see README.md)"
     echo ""
 }
 

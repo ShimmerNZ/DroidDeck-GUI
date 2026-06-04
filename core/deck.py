@@ -4,6 +4,22 @@ import struct
 import time
 from scipy.spatial.transform import Rotation as R
 
+# Steam Deck controller feature-report protocol (from Linux hid-steam.c).
+# In game mode, Steam strips accelerometer/gyro out of the HID report unless
+# the gyro is configured to a used mode. Sending this settings command tells
+# the controller firmware to keep raw accel and raw gyro in every report,
+# regardless of the Steam controller-layout gyro setting.
+_ID_SET_SETTINGS_VALUES = 0x87
+_SETTING_GYRO_MODE = 48
+_GYRO_MODE_SEND_RAW_ACCEL = 0x08
+_GYRO_MODE_SEND_RAW_GYRO = 0x10
+# Combined bitmask: keep both raw accelerometer and raw gyroscope in the report.
+_GYRO_MODE_VALUE = _GYRO_MODE_SEND_RAW_ACCEL | _GYRO_MODE_SEND_RAW_GYRO
+# Steam re-disables the sensors periodically, so the enable command must be
+# re-sent. SDL re-sends roughly every 800ms; matching that interval.
+_GYRO_REENABLE_INTERVAL = 0.8
+
+
 class SteamDeck:
     """
     A library to read and process input from a Steam Deck controller.
@@ -107,6 +123,25 @@ class SteamDeck:
 
         raise RuntimeError('Could not auto-discover the Steam Deck HID device.')
 
+    def _enable_motion_sensors(self, device):
+        """
+        Tell the controller firmware to include raw accel/gyro in every HID
+        report. Required in Steam game mode where the sensors are otherwise
+        stripped from the report. Safe to call repeatedly.
+        """
+        # Packet: [0x87, len, reg, val_lo, val_hi] padded to 64 bytes.
+        # A report ID of 0x00 is prepended for the feature report.
+        cmd = bytearray(64)
+        cmd[0] = _ID_SET_SETTINGS_VALUES
+        cmd[1] = 0x03
+        cmd[2] = _SETTING_GYRO_MODE
+        cmd[3] = _GYRO_MODE_VALUE & 0xFF
+        cmd[4] = (_GYRO_MODE_VALUE >> 8) & 0xFF
+        try:
+            device.send_feature_report(b'\x00' + bytes(cmd))
+        except Exception as e:
+            print(f"Failed to send motion-enable feature report: {e}")
+
     def _read_and_parse_thread(self):
         """
         Continuously reads and parses data from the HID device in a separate thread.
@@ -115,10 +150,16 @@ class SteamDeck:
             with hid.Device(path=self.device_path) as device:
                 self.is_running = True
                 print("Steam Deck reader thread started.")
+                self._enable_motion_sensors(device)
+                last_reenable = time.monotonic()
                 while self.is_running:
-                    data = device.read(64)
+                    data = device.read(64, timeout=200)
                     if data:
                         self._parse_input(data)
+                    now = time.monotonic()
+                    if now - last_reenable >= _GYRO_REENABLE_INTERVAL:
+                        self._enable_motion_sensors(device)
+                        last_reenable = now
         except Exception as e:
             print(f"Error reading from HID device: {e}")
         finally:

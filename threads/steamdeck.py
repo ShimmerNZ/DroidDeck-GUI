@@ -239,7 +239,7 @@ class SteamDeckControllerThread(QThread):
         retry_delay = 2.0
         while self.running and not self.controller_active:
             try:
-                from core.deck import SteamDeckExtended
+                from core.deck import SteamDeck as SteamDeckExtended
                 self._bitsteam_deck = SteamDeckExtended()
                 self._bitsteam_deck.start()
                 time.sleep(0.5)
