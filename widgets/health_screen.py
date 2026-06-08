@@ -51,13 +51,15 @@ class HealthScreen(BaseScreen):
         # Initialise early so signal handlers never find these missing
         self.status_labels = {}
         self.battery_voltage_data = deque(maxlen=100)
-        self.current_a0_data = deque(maxlen=100)
         self.current_a1_data = deque(maxlen=100)
         self.current_a2_data = deque(maxlen=100)
         self.time_data = deque(maxlen=100)
 
-        # Carry-forward cache so system_status messages don't wipe telemetry values
-        self._last_system_stats = {"cpu": "--", "memory": "--", "temperature": "--"}
+        # Carry-forward cache so zero/missing readings don't wipe displayed values
+        self._last_system_stats = {
+            "cpu": "--", "memory": "--", "temperature": "--",
+            "current_total": None, "current_tracks": None, "sabertooth_temp": None,
+        }
         # Last known throughput bytes for delta calculation
         self._last_net_bytes = None
         self._last_net_time = None
@@ -170,10 +172,8 @@ class HealthScreen(BaseScreen):
         self.graph_widget.addLegend(offset=(10, 20))
         self.graph_widget.getPlotItem().setContentsMargins(15, 15, 15, 15)
         
-        # Data storage with performance limits
         self.max_data_points = 100
         self.battery_voltage_data = deque(maxlen=self.max_data_points)
-        self.current_a0_data = deque(maxlen=self.max_data_points)
         self.current_a1_data = deque(maxlen=self.max_data_points)
         self.current_a2_data = deque(maxlen=self.max_data_points)
         self.time_data = deque(maxlen=self.max_data_points)
@@ -202,34 +202,26 @@ class HealthScreen(BaseScreen):
         # Current plots with theme colors
         primary = theme_manager.get("primary_color")
         primary_light = theme_manager.get("primary_light")
-        
-        self.current_a0_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color=primary, width=3), 
-            name="Left Track Current",
-            antialias=True
-        )
-        self.current_view.addItem(self.current_a0_plot)
-        
+
         self.current_a1_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color=primary_light, width=3), 
-            name="Right Track Current",
+            pen=pg.mkPen(color=primary, width=3),
+            name="Tracks Current",
             antialias=True
         )
         self.current_view.addItem(self.current_a1_plot)
 
-        orange = "#FF8C00"  # Orange color for electronics
+        orange = "#FF8C00"
         self.current_a2_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color=orange, width=3), 
-            name="Electronics Current",
+            pen=pg.mkPen(color=orange, width=3),
+            name="Total Current",
             antialias=True
         )
         self.current_view.addItem(self.current_a2_plot)
-        
+
         # Add current items to legend
         legend = self.graph_widget.addLegend(offset=(30, 30))
-        legend.addItem(self.current_a0_plot, "Left Track (A0)")
-        legend.addItem(self.current_a1_plot, "Right Track (A1)")
-        legend.addItem(self.current_a2_plot, "Electronics (A2)")
+        legend.addItem(self.current_a1_plot, "Tracks (A1)")
+        legend.addItem(self.current_a2_plot, "Total (A2)")
 
     def _update_graph_theme(self):
         """Update graph background and styling with theme colors"""
@@ -323,7 +315,9 @@ class HealthScreen(BaseScreen):
             ("mem", "Memory: 0%"),
             ("temp", "Temp: 0°C"),
             ("battery", "Battery: 0.0V"),
+            ("current_tracks", "Tracks: 0.0A"),
             ("current_total", "Total Current: 0.0A"),
+            ("sabertooth_temp", "Sabertooth: 0.0°C"),
             ("serial_fps", "Mixer: --Hz"),
             ("blend_ms", "Blend: --ms"),
             ("serial_cmds", "Cmds/s: --"),
@@ -470,12 +464,10 @@ class HealthScreen(BaseScreen):
                 green = theme_manager.get("green")
                 self.voltage_curve.setPen(pg.mkPen(color=green, width=4))
             
-            if hasattr(self, 'current_a0_plot') and hasattr(self, 'current_a1_plot'):
+            if hasattr(self, 'current_a1_plot'):
                 primary = theme_manager.get("primary_color")
-                primary_light = theme_manager.get("primary_light")
-                orange = "#FF8C00"  # Orange color for electronics
-                self.current_a0_plot.setPen(pg.mkPen(color=primary, width=3))
-                self.current_a1_plot.setPen(pg.mkPen(color=primary_light, width=3))
+                orange = "#FF8C00"
+                self.current_a1_plot.setPen(pg.mkPen(color=primary, width=3))
                 if hasattr(self, 'current_a2_plot'):
                     self.current_a2_plot.setPen(pg.mkPen(color=orange, width=3))
 
@@ -638,8 +630,8 @@ class HealthScreen(BaseScreen):
                     "memory": data.get("memory", "--"),
                     "temperature": data.get("temperature", "--"),
                     "battery_voltage": data.get("battery_voltage", 0.0),
-                    "current_left_track": data.get("current_left_track", 0.0),
-                    "current_right_track": data.get("current_right_track", 0.0),
+                    "sabertooth_temp": data.get("sabertooth_temp", 0.0),
+                    "current_tracks": data.get("current_tracks", 0.0),
                     "current_total": data.get("current_total", 0.0),
                     "adc_available": data.get("adc_available", False),
                     "audio_system": data.get("audio_system", {}),
@@ -678,14 +670,12 @@ class HealthScreen(BaseScreen):
             # Emit status updates
             self.status_update_signal.emit(data)
             
-            current_a0 = data.get("current_left_track",0.0)
-            current_a1 = data.get("current_right_track",0.0)
-            current_a2 = data.get("current_total",0.0)
-             
+            current_a1 = data.get("current_tracks", 0.0)
+            current_a2 = data.get("current_total", 0.0)
+
             relative_time = current_time - self.start_time
-            
+
             self.battery_voltage_data.append(float(battery_voltage))
-            self.current_a0_data.append(float(current_a0))
             self.current_a1_data.append(float(current_a1))
             self.current_a2_data.append(float(current_a2))
             self.time_data.append(relative_time)
@@ -740,8 +730,25 @@ class HealthScreen(BaseScreen):
         updates["temp"] = f"Temp: {self._last_system_stats['temperature']}°C"
 
         # Total current from A2 sensor
-        current_total = data.get("current_total", 0.0)
-        updates["current_total"] = f"Total Current: {current_total:.1f}A"
+        current_total = data.get("current_total")
+        if current_total is not None and current_total != 0.0:
+            self._last_system_stats["current_total"] = current_total
+        if self._last_system_stats["current_total"] is not None:
+            updates["current_total"] = f"Total Current: {self._last_system_stats['current_total']:.1f}A"
+
+        # Track current from A1 coulometer
+        current_tracks = data.get("current_tracks")
+        if current_tracks is not None and current_tracks != 0.0:
+            self._last_system_stats["current_tracks"] = current_tracks
+        if self._last_system_stats["current_tracks"] is not None:
+            updates["current_tracks"] = f"Tracks: {self._last_system_stats['current_tracks']:.1f}A"
+
+        # Sabertooth temperature from A0 TMP36GZ
+        sabertooth_temp = data.get("sabertooth_temp")
+        if sabertooth_temp is not None and sabertooth_temp != 0.0:
+            self._last_system_stats["sabertooth_temp"] = sabertooth_temp
+        if self._last_system_stats["sabertooth_temp"] is not None:
+            updates["sabertooth_temp"] = f"Sabertooth: {self._last_system_stats['sabertooth_temp']:.1f}C"
 
         # Update all text labels
         for key, text in updates.items():
@@ -873,19 +880,16 @@ class HealthScreen(BaseScreen):
         try:
             time_list = list(self.time_data)
             voltage_list = list(self.battery_voltage_data)
-            current_a0_list = list(self.current_a0_data)
             current_a1_list = list(self.current_a1_data)
             current_a2_list = list(self.current_a2_data)
-            
+
             if len(time_list) > 1 and len(voltage_list) > 1:
-                # Update curves
                 self.voltage_curve.setData(time_list, voltage_list)
-                self.current_a0_plot.setData(time_list, current_a0_list)
                 self.current_a1_plot.setData(time_list, current_a1_list)
                 self.current_a2_plot.setData(time_list, current_a2_list)
-                
+
                 self.graph_widget.update()
-                
+
         except Exception as e:
             self.logger.error(f"Failed to update graph: {e}")
 
