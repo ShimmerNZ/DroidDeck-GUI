@@ -5,7 +5,6 @@ WALL-E Control System - Health Monitoring Screen (Themed)
 Displays system telemetry, battery status, network quality, and performance graphs
 """
 
-import json
 import time
 from collections import deque
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget, 
@@ -76,9 +75,11 @@ class HealthScreen(BaseScreen):
         
 
         
-        # Connect WebSocket for telemetry updates
-        if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_telemetry)
+        # Telemetry subscriptions are visibility-scoped: when this screen is
+        # hidden the handlers are unregistered, so 4Hz telemetry costs nothing
+        # while the operator is on another screen
+        self.subscribe_while_visible("telemetry", self._on_telemetry_message)
+        self.subscribe_while_visible("system_status", self._on_system_status_message)
         
         # Connect signals for thread-safe updates
         self.voltage_update_signal.connect(self._update_voltage_display)
@@ -92,10 +93,23 @@ class HealthScreen(BaseScreen):
         self.startup_timer.timeout.connect(self._check_and_enable_alerts)
         self.startup_timer.start(500)  # Check every 500ms
 
-        # Periodic timer to poll system_status (for serial FPS stats)
+        # Periodic timer to poll system_status (for serial FPS stats).
+        # Started/stopped by showEvent/hideEvent so a hidden screen does not
+        # keep polling the backend for stats nobody is looking at.
         self.status_poll_timer = QTimer()
         self.status_poll_timer.timeout.connect(self._request_system_status)
-        self.status_poll_timer.start(2000)  # Poll every 2 seconds
+
+    def showEvent(self, event):
+        """Resume telemetry subscriptions and status polling when shown"""
+        super().showEvent(event)
+        if hasattr(self, 'status_poll_timer') and not self.status_poll_timer.isActive():
+            self.status_poll_timer.start(2000)
+
+    def hideEvent(self, event):
+        """Pause telemetry subscriptions and status polling when hidden"""
+        super().hideEvent(event)
+        if hasattr(self, 'status_poll_timer'):
+            self.status_poll_timer.stop()
 
     def _check_and_enable_alerts(self):
         """Check if application is ready and enable voltage alerts"""
@@ -603,73 +617,71 @@ class HealthScreen(BaseScreen):
         except Exception:
             pass
 
-    def handle_telemetry(self, message: str):
-        """Process incoming telemetry data and update displays"""
+    def _on_system_status_message(self, data: dict):
+        """Normalise a system_status message and update status displays only.
+        Graph and voltage updates are skipped to avoid injecting zeros."""
         current_time = time.time()
-        
+        if current_time - self.last_telemetry_update < self.telemetry_update_interval:
+            return
+
+        try:
+            hw = data.get("hardware", {})
+            m1 = hw.get("maestro1", {})
+            m2 = hw.get("maestro2", {})
+            normalised = {
+                "type": "telemetry",
+                "cpu": data.get("cpu", "--"),
+                "memory": data.get("memory", "--"),
+                "temperature": data.get("temperature", "--"),
+                "battery_voltage": data.get("battery_voltage", 0.0),
+                "sabertooth_temp": data.get("sabertooth_temp", 0.0),
+                "current_tracks": data.get("current_tracks", 0.0),
+                "current_total": data.get("current_total", 0.0),
+                "adc_available": data.get("adc_available", False),
+                "audio_system": data.get("audio_system", {}),
+                "maestro1": {
+                    "connected": m1.get("connected", False),
+                    "channel_count": m1.get("channel_count", 0),
+                    "error_flags": m1.get("error_flags", {"has_errors": False}),
+                },
+                "maestro2": {
+                    "connected": m2.get("connected", False),
+                    "channel_count": m2.get("channel_count", 0),
+                    "error_flags": m2.get("error_flags", {"has_errors": False}),
+                },
+                # Mixer stats pass through unchanged
+                "serial_fps": data.get("serial_fps"),
+                "blend_ms": data.get("blend_ms"),
+                "serial_cmds_sec": data.get("serial_cmds_sec"),
+                "active_channels": data.get("active_channels"),
+            }
+
+            self.status_update_signal.emit(normalised)
+            self.last_telemetry_update = current_time
+
+        except Exception as e:
+            self.logger.error(f"System status processing failed: {e}")
+
+    def _on_telemetry_message(self, data: dict):
+        """Process a telemetry message: voltage, graphs, and status displays"""
+        current_time = time.time()
+
         # Rate limiting
         if current_time - self.last_telemetry_update < self.telemetry_update_interval:
             return
-        
+
         try:
-            data = json.loads(message)
-            msg_type = data.get("type")
-
-            # Accept both telemetry and system_status message types
-            if msg_type not in ("telemetry", "system_status"):
-                return
-
-            # Normalise system_status into the same flat shape as telemetry
-            if msg_type == "system_status":
-                hw = data.get("hardware", {})
-                m1 = hw.get("maestro1", {})
-                m2 = hw.get("maestro2", {})
-                data = {
-                    "type": "telemetry",
-                    "cpu": data.get("cpu", "--"),
-                    "memory": data.get("memory", "--"),
-                    "temperature": data.get("temperature", "--"),
-                    "battery_voltage": data.get("battery_voltage", 0.0),
-                    "sabertooth_temp": data.get("sabertooth_temp", 0.0),
-                    "current_tracks": data.get("current_tracks", 0.0),
-                    "current_total": data.get("current_total", 0.0),
-                    "adc_available": data.get("adc_available", False),
-                    "audio_system": data.get("audio_system", {}),
-                    "maestro1": {
-                        "connected": m1.get("connected", False),
-                        "channel_count": m1.get("channel_count", 0),
-                        "error_flags": m1.get("error_flags", {"has_errors": False}),
-                    },
-                    "maestro2": {
-                        "connected": m2.get("connected", False),
-                        "channel_count": m2.get("channel_count", 0),
-                        "error_flags": m2.get("error_flags", {"has_errors": False}),
-                    },
-                    # Mixer stats pass through unchanged
-                    "serial_fps": data.get("serial_fps"),
-                    "blend_ms": data.get("blend_ms"),
-                    "serial_cmds_sec": data.get("serial_cmds_sec"),
-                    "active_channels": data.get("active_channels"),
-                }
-            
             self.logger.debug("Processing telemetry data")
-
-            # system_status only carries mixer stats — skip graph/voltage updates
-            # to avoid injecting zeros into the graph data
-            if msg_type == "system_status":
-                self.status_update_signal.emit(data)
-                self.last_telemetry_update = current_time
-                return
 
             # Emit signals for thread-safe updates
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
-            
+
             if battery_voltage > 0:
                 self.voltage_update_signal.emit(battery_voltage)
-            
+
             # Emit status updates
             self.status_update_signal.emit(data)
-            
+
             current_a1 = data.get("current_tracks", 0.0)
             current_a2 = data.get("current_total", 0.0)
 
@@ -679,14 +691,12 @@ class HealthScreen(BaseScreen):
             self.current_a1_data.append(float(current_a1))
             self.current_a2_data.append(float(current_a2))
             self.time_data.append(relative_time)
-            
+
             # Update graphs
             self._update_graphs()
-            
+
             self.last_telemetry_update = current_time
 
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON decode failed: {e}")
         except Exception as e:
             self.logger.error(f"Telemetry processing failed: {e}")
 

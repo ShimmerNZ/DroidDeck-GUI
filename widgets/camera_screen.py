@@ -1,18 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-WALL-E Control System - Camera Feed Screen (Cleaned & Fixed)
-- Integrated with fixed image_processor.py
-- Removed code duplication and unnecessary complexity
-- Proper integration with updated ImageProcessingThread
-- Fixed settings debouncer with better error handling
+WALL-E Control System - Camera Feed Screen
+Video display, ESP32 camera settings, stream control, and gesture detection.
+All HTTP requests to the camera proxy run asynchronously so an unreachable
+proxy can never freeze the GUI.
 """
 import os
 import time
-import requests
 from collections import deque
 from typing import Dict, Any, Callable
 
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
     QCheckBox, QWidget, QSizePolicy
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap
@@ -22,13 +22,14 @@ from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
+from core.http_client import get_http_client
 from core.utils import error_boundary
 from core.logger import get_logger
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 class CameraSettingsDebouncer:
     """
-    FIXED: Debounces camera settings changes to prevent excessive HTTP requests.
+    Debounces camera settings changes to prevent excessive HTTP requests.
     Collects multiple rapid changes and sends them as a single batch request.
     """
     
@@ -68,7 +69,7 @@ class CameraSettingsDebouncer:
             self.status_callback("Settings pending...", "#FFA500")  # Orange
     
     def _send_batched_settings(self):
-        """Send all pending settings as a batch request"""
+        """Send all pending settings as a batch request (asynchronous)"""
         if not self.pending_settings:
             return
         
@@ -77,50 +78,31 @@ class CameraSettingsDebouncer:
         
         self.logger.info(f"Sending batched settings: {list(settings_to_send.keys())}")
         
-        try:
+        if self.status_callback:
+            self.status_callback("Updating settings...", "#0088FF")  # Blue
+
+        url = f"{self.proxy_base_url}/camera/settings"
+        get_http_client().post_json(url, settings_to_send,
+                                    self._on_settings_response, timeout_ms=10000)
+
+    def _on_settings_response(self, response):
+        """Handle the batched settings response on the GUI thread"""
+        if response.ok and response.json:
+            message = response.json.get("message", "Settings updated successfully")
             if self.status_callback:
-                self.status_callback("Updating settings...", "#0088FF")  # Blue
-            
-            url = f"{self.proxy_base_url}/camera/settings"
-            response = requests.post(
-                url,
-                json=settings_to_send,
-                timeout=10,
-                headers={'Content-Type': 'application/json'}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                message = result.get("message", "Settings updated successfully")
-                if self.status_callback:
-                    self.status_callback(message, "#00AA00")  # Green
-                self.logger.info(f"✅ {message}")
-                
+                self.status_callback(message, "#00AA00")  # Green
+            self.logger.info(f"✅ {message}")
+        else:
+            if response.json and "message" in response.json:
+                error_message = response.json["message"]
+            elif response.error:
+                error_message = response.error
             else:
-                try:
-                    error_data = response.json()
-                    error_message = error_data.get("message", f"HTTP {response.status_code}")
-                except:
-                    error_message = f"HTTP {response.status_code}"
-                
-                if self.status_callback:
-                    self.status_callback(f"Update failed: {error_message}", "#FF0000")
-                self.logger.error(f"❌ Settings update failed: {error_message}")
-        
-        except requests.exceptions.Timeout:
+                error_message = f"HTTP {response.status}"
+
             if self.status_callback:
-                self.status_callback("Update failed: Timeout", "#FF0000")
-            self.logger.error("❌ Settings update timeout")
-            
-        except requests.exceptions.ConnectionError:
-            if self.status_callback:
-                self.status_callback("Update failed: Connection error", "#FF0000")
-            self.logger.error("❌ Settings update connection error")
-            
-        except Exception as e:
-            if self.status_callback:
-                self.status_callback(f"Update failed: {str(e)}", "#FF0000")
-            self.logger.error(f"❌ Settings update error: {e}")
+                self.status_callback(f"Update failed: {error_message}", "#FF0000")
+            self.logger.error(f"❌ Settings update failed: {error_message}")
     
     def force_send_now(self):
         """Force immediate sending of pending settings"""
@@ -171,9 +153,10 @@ class CameraControlsWidget(QWidget):
         theme_manager.register_callback(self._on_theme_changed)
 
         self.init_ui()
-        self.load_current_settings()
         self.initializing = False
-        self._sync_loaded_settings_to_esp32()
+        # Load settings asynchronously; the ESP32 sync is chained from the
+        # load callback so it always runs against the values just loaded
+        self.load_current_settings()
 
     def _update_status_display(self, message: str, color: str):
         """Update status display with color"""
@@ -191,12 +174,12 @@ class CameraControlsWidget(QWidget):
         self._update_panel_style()
 
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(12, 8, 12, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(15, 10, 15, 15)
+        main_layout.setSpacing(12)
 
         # Header
         self.header = QLabel("CAMERA SETTINGS")
-        self.header.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_header_style()
         main_layout.addWidget(self.header)
@@ -204,6 +187,7 @@ class CameraControlsWidget(QWidget):
         # ESP32 settings section
         esp32_section = self._create_esp32_section()
         main_layout.addWidget(esp32_section)
+        main_layout.addSpacing(10)
 
         # Actions section
         actions_section = self._create_actions_section()
@@ -240,9 +224,9 @@ class CameraControlsWidget(QWidget):
                 border: none;
                 background-color: rgba(0, 0, 0, 0.9);
                 color: {primary_color};
-                padding: 5px;
+                padding: 8px;
                 border-radius: 6px;
-                margin-bottom: 2px;
+                margin-bottom: 5px;
             }}
         """)
 
@@ -252,30 +236,69 @@ class CameraControlsWidget(QWidget):
         self.status_label.setStyleSheet(f"color: {grey_light}; border: none; padding: 3px; text-align: center;")
 
     def _create_esp32_section(self):
-        """Create ESP32 camera settings section with touch-friendly +/- controls"""
+        """Create ESP32 camera settings section"""
         esp32_frame = QWidget()
         esp32_frame.setObjectName("esp32Frame")
         self._update_section_frame_style(esp32_frame)
         esp32_layout = QVBoxLayout()
-        esp32_layout.setContentsMargins(12, 10, 12, 12)
+        esp32_layout.setContentsMargins(12, 8, 12, 22)
         esp32_layout.setSpacing(8)
 
-        # Resolution — combo box, large enough to tap
+        # Section header
+        self.esp32_header = QLabel("ESP32 SETTINGS")
+        self.esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.esp32_header)
+        esp32_layout.addWidget(self.esp32_header)
+
+        # Add this after your other controls in _create_esp32_section
+        xclk_layout = QHBoxLayout()
+        xclk_label = QLabel("X CLK:")
+        xclk_label.setFont(QFont("Arial", 12))
+        self._update_control_label_style(xclk_label)
+        xclk_label.setFixedWidth(80)
+
+        self.xclk_slider = QSlider(Qt.Orientation.Horizontal)
+        self.xclk_slider.setRange(10, 20)
+        self.xclk_slider.setValue(16)
+        self.xclk_slider.setFixedWidth(160)
+        self._update_slider_style(self.xclk_slider)
+
+        self.xclk_value_label = QLabel(str(16))
+        self.xclk_value_label.setFont(QFont("Arial", 12))
+        self._update_value_label_style(self.xclk_value_label)
+        self.xclk_value_label.setFixedWidth(30)
+        self.xclk_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Connect slider to update value label and send debounced setting
+        self.xclk_slider.valueChanged.connect(lambda val: self.xclk_value_label.setText(str(val)))
+        self.xclk_slider.valueChanged.connect(lambda val: self._handle_setting_change("xclk_freq", val))
+
+        xclk_layout = QHBoxLayout()
+        xclk_layout.setSpacing(8)
+        xclk_layout.addWidget(xclk_label)
+        xclk_layout.addWidget(self.xclk_slider)
+        xclk_layout.addWidget(self.xclk_value_label)
+        xclk_layout.addStretch()
+        esp32_layout.addLayout(xclk_layout)
+
+
+
+        # Resolution control
         res_layout = QHBoxLayout()
         res_label = QLabel("Resolution:")
-        res_label.setFont(QFont("Arial", 11))
+        res_label.setFont(QFont("Arial", 12))
         self._update_control_label_style(res_label)
-        res_label.setFixedWidth(90)
+        res_label.setFixedWidth(80)
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItems([
-            "QQVGA 160x120", "QCIF 176x144", "HQVGA 240x176", "QVGA 320x240",
-            "CIF 400x296", "VGA 640x480", "SVGA 800x600", "XGA 1024x768",
-            "SXGA 1280x1024", "UXGA 1600x1200"
+            "QQVGA(160x120)", "QCIF(176x144)", "HQVGA(240x176)", "QVGA(320x240)",
+            "CIF(400x296)", "VGA(640x480)", "SVGA(800x600)", "XGA(1024x768)",
+            "SXGA(1280x1024)", "UXGA(1600x1200)"
         ])
-        self.resolution_combo.setCurrentIndex(6)  # SVGA
-        self.resolution_combo.setFont(QFont("Arial", 12))
-        self.resolution_combo.setMinimumHeight(34)
+        self.resolution_combo.setCurrentIndex(5)  # VGA
+        self.resolution_combo.setFont(QFont("Arial", 11))
         self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
 
@@ -283,105 +306,53 @@ class CameraControlsWidget(QWidget):
         res_layout.addWidget(self.resolution_combo)
         esp32_layout.addLayout(res_layout)
 
-        # +/- stepper controls: (label, min, max, default, setting_name)
-        stepper_controls = [
-            ("Quality:",    4, 25,  10, "quality"),
-            ("Brightness:", -2, 2,   0, "brightness"),
-            ("Contrast:",   -2, 2,   0, "contrast"),
-            ("Saturation:", -2, 2,   0, "saturation"),
+        # Slider controls
+        slider_controls = [
+            ("Quality:", 4, 63, 12, "quality"),
+            ("Brightness:", -2, 2, 0, "brightness"),
+            ("Contrast:", -2, 2, 0, "contrast"),
+            ("Saturation:", -2, 2, 0, "saturation")
         ]
 
-        self.steppers = {}
-        for label_text, min_val, max_val, default_val, setting_name in stepper_controls:
-            row, value_label = self._create_stepper_control(
-                label_text, min_val, max_val, default_val, setting_name
-            )
-            self.steppers[setting_name] = value_label
-            esp32_layout.addLayout(row)
+        self.sliders = {}
+        for label_text, min_val, max_val, default_val, setting_name in slider_controls:
+            slider, layout = self.create_slider_control(label_text, min_val, max_val, default_val, setting_name)
+            self.sliders[setting_name] = slider
+            esp32_layout.addLayout(layout)
 
-        # Mirror toggle buttons — large tap targets
+        # Mirror controls
         mirror_layout = QHBoxLayout()
         mirror_label = QLabel("Mirror:")
-        mirror_label.setFont(QFont("Arial", 11))
+        mirror_label.setFont(QFont("Arial", 12))
         self._update_control_label_style(mirror_label)
-        mirror_label.setFixedWidth(90)
+        mirror_label.setFixedWidth(80)
 
-        self.h_mirror_btn = QPushButton("H-Mirror")
+        self.h_mirror_btn = QPushButton("Horizontal")
         self.h_mirror_btn.setCheckable(True)
-        self.h_mirror_btn.setMinimumHeight(40)
-        self.h_mirror_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.h_mirror_btn.setFixedSize(100, 30)
         self.h_mirror_btn.setFont(QFont("Arial", 11))
         self.h_mirror_btn.clicked.connect(
-            lambda checked: self._handle_setting_change("h_mirror", checked)
+            lambda checked: self.settings_debouncer.update_setting("h_mirror", checked)
         )
         self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
-        self.v_flip_btn = QPushButton("V-Flip")
+        self.v_flip_btn = QPushButton("Vertical")
         self.v_flip_btn.setCheckable(True)
-        self.v_flip_btn.setChecked(True)
-        self.v_flip_btn.setMinimumHeight(40)
-        self.v_flip_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.v_flip_btn.setFixedSize(100, 30)
         self.v_flip_btn.setFont(QFont("Arial", 11))
         self.v_flip_btn.clicked.connect(
-            lambda checked: self._handle_setting_change("v_flip", checked)
+            lambda checked: self.settings_debouncer.update_setting("v_flip", checked)
         )
         self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
 
         mirror_layout.addWidget(mirror_label)
         mirror_layout.addWidget(self.h_mirror_btn)
         mirror_layout.addWidget(self.v_flip_btn)
+        mirror_layout.addStretch()
         esp32_layout.addLayout(mirror_layout)
 
         esp32_frame.setLayout(esp32_layout)
         return esp32_frame
-
-    def _create_stepper_control(self, label_text, min_val, max_val, default_val, setting_name):
-        """Create a touch-friendly +/- stepper row for a camera setting"""
-        row = QHBoxLayout()
-        row.setSpacing(4)
-
-        label = QLabel(label_text)
-        label.setFont(QFont("Arial", 11))
-        self._update_control_label_style(label)
-        label.setFixedWidth(90)
-
-        minus_btn = QPushButton("−")
-        minus_btn.setMinimumSize(44, 40)
-        minus_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        minus_btn.setStyleSheet(self._get_stepper_button_style())
-
-        value_label = QLabel(str(default_val))
-        value_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self._update_value_label_style(value_label)
-        value_label.setFixedWidth(52)
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        value_label.setProperty("min_val", min_val)
-        value_label.setProperty("max_val", max_val)
-        value_label.setProperty("setting_name", setting_name)
-
-        plus_btn = QPushButton("+")
-        plus_btn.setMinimumSize(44, 40)
-        plus_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        plus_btn.setStyleSheet(self._get_stepper_button_style())
-
-        def step(delta):
-            current = int(value_label.text())
-            new_val = max(min_val, min(max_val, current + delta))
-            if new_val != current:
-                value_label.setText(str(new_val))
-                self._handle_setting_change(setting_name, new_val)
-
-        minus_btn.clicked.connect(lambda: step(-1))
-        plus_btn.clicked.connect(lambda: step(1))
-
-        row.addWidget(label)
-        row.addStretch()
-        row.addWidget(minus_btn)
-        row.addWidget(value_label)
-        row.addWidget(plus_btn)
-        return row, value_label
 
     def _handle_setting_change(self, setting_name, value):
         """Handle setting changes, but only if not initializing"""
@@ -400,37 +371,42 @@ class CameraControlsWidget(QWidget):
         actions_frame.setObjectName("actionsFrame")
         self._update_section_frame_style(actions_frame)
         actions_layout = QVBoxLayout()
-        actions_layout.setContentsMargins(12, 10, 12, 12)
+        actions_layout.setContentsMargins(12, 8, 12, 12)
         actions_layout.setSpacing(8)
 
-        # Reset button — full width
+        self.actions_header = QLabel("ACTIONS")
+        self.actions_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        self.actions_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_section_header_style(self.actions_header)
+        actions_layout.addWidget(self.actions_header)
+
+        # Reset button
         self.reset_btn = QPushButton("RESET TO DEFAULTS")
-        self.reset_btn.setFont(QFont("Arial", 11))
-        self.reset_btn.setMinimumHeight(36)
+        self.reset_btn.setFont(QFont("Arial", 12))
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         self.reset_btn.setStyleSheet(self._get_base_button_style())
         actions_layout.addWidget(self.reset_btn)
 
-        # Stream + Track side by side
+        # Toggle buttons row
         toggles_row = QHBoxLayout()
-        toggles_row.setSpacing(6)
+        toggles_row.setSpacing(10)
 
+        # Stream button
         self.stream_button.setText("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
-        self.stream_button.setMinimumHeight(44)
+        self.stream_button.setMinimumHeight(40)
         self.stream_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.stream_button.setFont(QFont("Arial", 11))
         self.stream_button.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
         toggles_row.addWidget(self.stream_button, stretch=1)
 
+        # Track button
         self.track_button.setText("Track Person")
         self.track_button.setCheckable(True)
         self.track_button.setChecked(False)
         self.track_button.setEnabled(False)
-        self.track_button.setMinimumHeight(44)
+        self.track_button.setMinimumHeight(40)
         self.track_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.track_button.setFont(QFont("Arial", 11))
         self.track_button.setStyleSheet(self._get_base_button_style() + self._get_green_checked_style())
         toggles_row.addWidget(self.track_button, stretch=1)
 
@@ -438,28 +414,42 @@ class CameraControlsWidget(QWidget):
         actions_frame.setLayout(actions_layout)
         return actions_frame
 
+    def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name):
+        """Create a slider control with debounced updates"""
+        layout = QHBoxLayout()
+        layout.setSpacing(8)
 
+        label = QLabel(label_text)
+        label.setFont(QFont("Arial", 12))
+        self._update_control_label_style(label)
+        label.setFixedWidth(80)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(min_val, max_val)
+        slider.setValue(default_val)
+        slider.setFixedWidth(160)
+        self._update_slider_style(slider)
+
+        value_label = QLabel(str(default_val))
+        value_label.setFont(QFont("Arial", 12))
+        self._update_value_label_style(value_label)
+        value_label.setFixedWidth(30)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        setattr(self, f'{setting_name}_value_label', value_label)
+
+        # Connect slider to update value label and debounced setting
+        slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
+        slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val)) 
+        
+        layout.addWidget(label)
+        layout.addWidget(slider)
+        layout.addWidget(value_label)
+        layout.addStretch()
+        return slider, layout
 
     # Style update methods (keeping these for theme support)
     def _get_base_button_style(self) -> str:
         return theme_manager.get_button_style("default")
-
-    def _get_stepper_button_style(self) -> str:
-        primary_color = theme_manager.get("primary_color")
-        return f"""
-        QPushButton {{
-            background-color: #2a2a2a;
-            color: {primary_color};
-            border: 2px solid {primary_color};
-            border-radius: 8px;
-            font-size: 18px;
-            font-weight: bold;
-        }}
-        QPushButton:pressed {{
-            background-color: {primary_color};
-            color: black;
-        }}
-        """
 
     def _get_yellow_checked_style(self) -> str:
         primary_color = theme_manager.get("primary_color")
@@ -513,6 +503,24 @@ class CameraControlsWidget(QWidget):
             }
         """)
 
+    def _update_slider_style(self, slider):
+        primary_color = theme_manager.get("primary_color")
+        slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                border: 1px solid #555;
+                height: 6px;
+                background: #333;
+                border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {primary_color};
+                border: 1px solid {primary_color};
+                width: 16px; height: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
+            }}
+        """)
+
     def _update_value_label_style(self, label):
         primary_color = theme_manager.get("primary_color")
         label.setStyleSheet(f"border: none; color: {primary_color};")
@@ -520,142 +528,159 @@ class CameraControlsWidget(QWidget):
     def _on_theme_changed(self):
         """Handle theme changes"""
         try:
+            # Update main panel styling
             self._update_panel_style()
             self._update_header_style()
             self._update_status_label_style()
-
-            for value_label in getattr(self, 'steppers', {}).values():
-                self._update_value_label_style(value_label)
-
+            
+            # Update section headers
+            if hasattr(self, 'esp32_header'):
+                self._update_section_header_style(self.esp32_header)
+            if hasattr(self, 'actions_header'):
+                self._update_section_header_style(self.actions_header)
+                
+            # Update all value labels (this is what's missing!)
+            if hasattr(self, 'xclk_value_label'):
+                self._update_value_label_style(self.xclk_value_label)
+            
+            # Update all slider value labels
+            for setting_name, slider in getattr(self, 'sliders', {}).items():
+                # Find the associated value label - they should be stored during creation
+                if hasattr(self, f'{setting_name}_value_label'):
+                    value_label = getattr(self, f'{setting_name}_value_label')
+                    self._update_value_label_style(value_label)
+            
+            # Update mirror buttons to use current theme colors instead of hardcoded yellow
             if hasattr(self, 'h_mirror_btn'):
                 self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
             if hasattr(self, 'v_flip_btn'):
                 self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
-
+                
+            # Update combobox styling
             if hasattr(self, 'resolution_combo'):
                 self._update_combobox_style(self.resolution_combo)
-
+                
+            # Update all sliders
+            if hasattr(self, 'xclk_slider'):
+                self._update_slider_style(self.xclk_slider)
+            for slider in getattr(self, 'sliders', {}).values():
+                self._update_slider_style(slider)
+                
         except Exception as e:
             self.logger.error(f"Error updating camera controls theme: {e}")
 
     @error_boundary
     def load_current_settings(self):
-        """Load current settings from camera proxy"""
-        try:
-            response = requests.get(f"{self.proxy_base_url}/camera/settings", timeout=3)
-            if response.status_code == 200:
-                settings = response.json()
-                self.current_settings = settings
+        """Load current settings from camera proxy (asynchronous)"""
+        get_http_client().get(f"{self.proxy_base_url}/camera/settings",
+                              self._on_settings_loaded, timeout_ms=3000, owner=self)
 
-                # Update UI controls
-                if "resolution" in settings:
-                    self.resolution_combo.setCurrentIndex(settings["resolution"])
-                if "quality" in settings and "quality" in self.steppers:
-                    self.steppers["quality"].setText(str(settings["quality"]))
-                if "brightness" in settings and "brightness" in self.steppers:
-                    self.steppers["brightness"].setText(str(settings["brightness"]))
-                if "contrast" in settings and "contrast" in self.steppers:
-                    self.steppers["contrast"].setText(str(settings["contrast"]))
-                if "saturation" in settings and "saturation" in self.steppers:
-                    self.steppers["saturation"].setText(str(settings["saturation"]))
-                if "h_mirror" in settings:
-                    self.h_mirror_btn.setChecked(settings["h_mirror"])
-                if "v_flip" in settings:
-                    self.v_flip_btn.setChecked(settings["v_flip"])
-
-                self._update_status_display("Settings loaded", "#44FF44")
-                self.logger.info("Loaded camera settings")
-        except Exception as e:
+    def _on_settings_loaded(self, response):
+        """Apply loaded settings to the UI, then sync them back to the ESP32"""
+        if not response.ok or response.json is None:
             self._update_status_display("Failed to load settings", "#FF4444")
-            self.logger.error(f"Failed to load camera settings: {e}")
+            self.logger.error(f"Failed to load camera settings: {response.error or response.status}")
+            return
+
+        settings = response.json
+        self.current_settings = settings
+
+        # Guard so applying loaded values doesn't bounce back through the
+        # debouncer as user changes
+        self.initializing = True
+        try:
+            if "resolution" in settings:
+                self.resolution_combo.setCurrentIndex(settings["resolution"])
+            if "quality" in settings and "quality" in self.sliders:
+                self.sliders["quality"].setValue(settings["quality"])
+            if "brightness" in settings and "brightness" in self.sliders:
+                self.sliders["brightness"].setValue(settings["brightness"])
+            if "contrast" in settings and "contrast" in self.sliders:
+                self.sliders["contrast"].setValue(settings["contrast"])
+            if "saturation" in settings and "saturation" in self.sliders:
+                self.sliders["saturation"].setValue(settings["saturation"])
+            if "h_mirror" in settings:
+                self.h_mirror_btn.setChecked(settings["h_mirror"])
+            if "xclk_freq" in settings:
+                self.xclk_slider.setValue(settings["xclk_freq"])
+            if "v_flip" in settings:
+                self.v_flip_btn.setChecked(settings["v_flip"])
+        finally:
+            self.initializing = False
+
+        self._update_status_display("Settings loaded", "#44FF44")
+        self.logger.info("Loaded camera settings")
+
+        self._sync_loaded_settings_to_esp32()
 
     def _sync_loaded_settings_to_esp32(self):
         """
-        ADDED: After loading settings from ESP32, send them back to ensure synchronization.
-        This replicates the old behavior where settings were sent on initialization.
+        After loading settings from the proxy, send them back to the ESP32 so
+        both ends hold the same values (asynchronous).
         """
         if not self.current_settings:
             self.logger.warning("No current settings to sync to ESP32")
             return
-        
-        try:
-            self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
-            
-            # Send the current settings back to ESP32 to ensure sync
-            url = f"{self.proxy_base_url}/camera/settings"
-            response = requests.post(
-                url,
-                json=self.current_settings,
-                timeout=5,
-                headers={'Content-Type': 'application/json'}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                message = result.get("message", "Settings synchronized")
-                self._update_status_display(message, "#00AA00")  # Green
-                self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
+
+        self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
+
+        url = f"{self.proxy_base_url}/camera/settings"
+        get_http_client().post_json(url, self.current_settings,
+                                    self._on_sync_response, timeout_ms=5000, owner=self)
+
+    def _on_sync_response(self, response):
+        """Handle the ESP32 sync response"""
+        if response.ok and response.json:
+            message = response.json.get("message", "Settings synchronized")
+            self._update_status_display(message, "#00AA00")  # Green
+            self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
+        else:
+            if response.json and "message" in response.json:
+                error_message = response.json["message"]
+            elif response.error:
+                error_message = response.error
             else:
-                try:
-                    error_data = response.json()
-                    error_message = error_data.get("message", f"HTTP {response.status_code}")
-                except:
-                    error_message = f"HTTP {response.status_code}"
-                
-                self._update_status_display(f"Sync failed: {error_message}", "#FF0000")
-                self.logger.error(f"Settings sync failed: {error_message}")
-        
-        except requests.exceptions.Timeout:
-            self._update_status_display("Sync failed: Timeout", "#FF0000")
-            self.logger.error("Settings sync timeout")
-            
-        except requests.exceptions.ConnectionError:
-            self._update_status_display("Sync failed: Connection error", "#FF0000") 
-            self.logger.error("Settings sync connection error")
-            
-        except Exception as e:
-            self._update_status_display(f"Sync error: {str(e)[:20]}", "#FF0000")
-            self.logger.error(f"Settings sync error: {e}")
+                error_message = f"HTTP {response.status}"
+
+            self._update_status_display(f"Sync failed: {error_message[:30]}", "#FF0000")
+            self.logger.error(f"Settings sync failed: {error_message}")
 
     @error_boundary
     def reset_to_defaults(self):
-        """Reset all settings to default values and send to ESP32"""
+        """Reset all settings to default values"""
         self.settings_debouncer.clear_pending()
-
+        
         defaults = {
-            "resolution": 6, "quality": 10,
+            "xclk_freq": 16, "resolution": 5, "quality": 12,
             "brightness": 0, "contrast": 0, "saturation": 0,
-            "h_mirror": False, "v_flip": True
+            "h_mirror": False, "v_flip": False
         }
 
-        # Suppress signals while updating UI so each control change
-        # doesn't queue a separate debounced request
-        self.initializing = True
+        # Update UI controls
+        self.xclk_slider.setValue(defaults["xclk_freq"])
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
-        self.steppers["quality"].setText(str(defaults["quality"]))
-        self.steppers["brightness"].setText(str(defaults["brightness"]))
-        self.steppers["contrast"].setText(str(defaults["contrast"]))
-        self.steppers["saturation"].setText(str(defaults["saturation"]))
+        self.sliders["quality"].setValue(defaults["quality"])
+        self.sliders["brightness"].setValue(defaults["brightness"])
+        self.sliders["contrast"].setValue(defaults["contrast"])
+        self.sliders["saturation"].setValue(defaults["saturation"])
         self.h_mirror_btn.setChecked(defaults["h_mirror"])
         self.v_flip_btn.setChecked(defaults["v_flip"])
-        self.initializing = False
 
-        # Send all defaults in a single request
-        try:
-            self._update_status_display("Resetting to defaults...", "#FFAA00")
-            response = requests.post(
-                f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3
-            )
-            if response.status_code == 200:
+        # Send defaults immediately (asynchronous)
+        self._update_status_display("Resetting to defaults...", "#FFAA00")
+
+        def _on_reset_response(response):
+            if response.ok:
                 self._update_status_display("Reset to defaults", "#44FF44")
-                self.current_settings = defaults.copy()
-                self.logger.info("Camera settings reset to defaults")
+                self.current_settings = defaults
+                self.settings_debouncer.clear_pending()
+                self.logger.info("Reset camera settings to defaults")
             else:
                 self._update_status_display("Reset failed", "#FF4444")
-                self.logger.error(f"Reset failed: HTTP {response.status_code}")
-        except Exception as e:
-            self._update_status_display(f"Error: {str(e)[:20]}", "#FF4444")
-            self.logger.error(f"Failed to reset to defaults: {e}")
+                self.logger.error(f"Reset failed: {response.error or f'HTTP {response.status}'}")
+
+        get_http_client().post_json(f"{self.proxy_base_url}/camera/settings", defaults,
+                                    _on_reset_response, timeout_ms=3000, owner=self)
 
     def cleanup(self):
         """Clean up debouncer on widget destruction"""
@@ -674,7 +699,7 @@ class CameraControlsWidget(QWidget):
 
 
 class CameraFeedScreen(BaseScreen):
-    """FIXED: Camera screen with proper image processor integration"""
+    """Camera screen with live video display, proxy control, and gesture detection"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -701,7 +726,7 @@ class CameraFeedScreen(BaseScreen):
 
         self.logger.info(f"Camera proxy URL: {camera_proxy_url}")
 
-        # FIXED: Use updated ImageProcessingThread with proper integration
+        # Image processing runs in its own thread; frames arrive via signal
         self.image_thread = ImageProcessingThread(camera_proxy_url)
         self.image_thread.frame_processed.connect(self.update_display)
         self.image_thread.stats_updated.connect(self.update_stats)
@@ -713,7 +738,6 @@ class CameraFeedScreen(BaseScreen):
         self.image_thread.start_processing()
         self.check_stream_status()
 
-
     def init_ui(self):
         # Video display
         self.video_label = QLabel()
@@ -722,12 +746,11 @@ class CameraFeedScreen(BaseScreen):
         self.video_label.setText("Connecting to camera...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Stream stats (updated by image thread)
-        self.stats_label = QLabel("Stream: Initializing...")
+        # Stats display
+        self.stats_label = QLabel("Stream Stats: Initializing...")
         self._update_stats_label_style()
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.stats_label.setFixedWidth(640)
-
 
         # Create control buttons
         self.setup_control_buttons()
@@ -752,12 +775,9 @@ class CameraFeedScreen(BaseScreen):
         """)
 
     def _update_stats_label_style(self):
-        self._update_stats_label_style_for(self.stats_label)
-
-    def _update_stats_label_style_for(self, label):
         grey = theme_manager.get("grey")
         grey_light = theme_manager.get("grey_light")
-        label.setStyleSheet(f"""
+        self.stats_label.setStyleSheet(f"""
             border: 1px solid {grey};
             border-radius: 4px;
             padding: 1px;
@@ -897,32 +917,32 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def toggle_stream(self, checked):
-        """FIXED: Toggle camera stream with proper image processor integration"""
+        """Toggle camera stream and notify the proxy (asynchronous)"""
         self.streaming_enabled = checked
         
         if self.streaming_enabled:
             self.logger.info("Starting camera stream")
-            self.stats_label.setText("Stream: Starting...")
+            self.stats_label.setText("Stream Stats: Starting stream...")
             
-            # FIXED: Tell image processor to start connecting
+            # Tell image processor to start connecting
             if hasattr(self, 'image_thread'):
                 self.image_thread.start_connecting()
             
             # Send start command to proxy
-            try:
-                if self.camera_proxy_base_url:
-                    response = requests.post(f"{self.camera_proxy_base_url}/stream/start", timeout=3)
-                    if response.status_code == 200:
+            if self.camera_proxy_base_url:
+                def _on_start_response(response):
+                    if response.ok:
                         self.logger.info("Stream start command sent to proxy")
                         self.tracking_button.setEnabled(True)
                     else:
-                        self.logger.warning(f"Stream start failed: HTTP {response.status_code}")
-            except Exception as e:
-                self.logger.error(f"Failed to start stream: {e}")
-                self.stats_label.setText(f"Stream Error: {str(e)[:50]}")
+                        self.logger.warning(f"Stream start failed: {response.error or f'HTTP {response.status}'}")
+                        self.stats_label.setText("Stream Error: proxy unreachable")
+
+                get_http_client().post(f"{self.camera_proxy_base_url}/stream/start",
+                                       _on_start_response, timeout_ms=3000, owner=self)
         else:
             self.logger.info("Stopping camera stream")
-            self.stats_label.setText("Stream: Stopping...")
+            self.stats_label.setText("Stream Stats: Stopping stream...")
 
             # Disable tracking when stream stops
             if self.tracking_enabled:
@@ -930,60 +950,61 @@ class CameraFeedScreen(BaseScreen):
                 self.toggle_tracking(False)
             self.tracking_button.setEnabled(False)
 
-            # FIXED: Tell image processor to stop connecting
+            # Tell image processor to stop connecting
             if hasattr(self, 'image_thread'):
                 self.image_thread.stop_connecting()
 
             # Send stop command to proxy
-            try:
-                if self.camera_proxy_base_url:
-                    response = requests.post(f"{self.camera_proxy_base_url}/stream/stop", timeout=3)
-                    if response.status_code == 200:
+            if self.camera_proxy_base_url:
+                def _on_stop_response(response):
+                    if response.ok:
                         self.logger.info("Stream stop command sent to proxy")
                     else:
-                        self.logger.warning(f"Stream stop failed: HTTP {response.status_code}")
-            except Exception as e:
-                self.logger.error(f"Failed to stop stream: {e}")
+                        self.logger.warning(f"Stream stop failed: {response.error or f'HTTP {response.status}'}")
+
+                get_http_client().post(f"{self.camera_proxy_base_url}/stream/stop",
+                                       _on_stop_response, timeout_ms=3000, owner=self)
 
         self.update_stream_button_appearance()
 
     @error_boundary
     def check_stream_status(self):
-        """Check camera proxy stream status and sync UI"""
-        try:
-            if not self.camera_proxy_base_url:
-                return
-                
-            response = requests.get(f"{self.camera_proxy_base_url}/stream/status", timeout=2)
-            if response.status_code == 200:
-                status = response.json()
-                is_streaming = status.get("streaming_enabled", False)
-                is_active = status.get("stream_active", False)
+        """Check camera proxy stream status and sync UI (asynchronous)"""
+        if not self.camera_proxy_base_url:
+            return
 
-                self.logger.info(f"Stream status: enabled={is_streaming}, active={is_active}")
+        get_http_client().get(f"{self.camera_proxy_base_url}/stream/status",
+                              self._on_stream_status, timeout_ms=2000, owner=self)
 
-                if is_streaming != self.streaming_enabled:
-                    self.streaming_enabled = is_streaming
-                    self.stream_button.setChecked(is_streaming)
-                    self.update_stream_button_appearance()
-                    self.tracking_button.setEnabled(is_streaming)
+    def _on_stream_status(self, response):
+        """Apply stream status response to the UI"""
+        if not response.ok or response.json is None:
+            self.logger.warning(f"Stream status check failed: {response.error or f'HTTP {response.status}'}")
+            return
 
-                if is_streaming and is_active:
-                    self.stats_label.setText("Stream: Active")
-                    # FIXED: Tell image processor to start if proxy is active
-                    if hasattr(self, 'image_thread'):
-                        self.image_thread.start_connecting()
-                else:
-                    self.stats_label.setText("Stream: Inactive")
-                    
-            else:
-                self.logger.warning(f"Stream status check failed: HTTP {response.status_code}")
-        except Exception as e:
-            self.logger.error(f"Stream status check error: {e}")
+        status = response.json
+        is_streaming = status.get("streaming_enabled", False)
+        is_active = status.get("stream_active", False)
+
+        self.logger.info(f"Stream status: enabled={is_streaming}, active={is_active}")
+
+        if is_streaming != self.streaming_enabled:
+            self.streaming_enabled = is_streaming
+            self.stream_button.setChecked(is_streaming)
+            self.update_stream_button_appearance()
+            self.tracking_button.setEnabled(is_streaming)
+
+        if is_streaming and is_active:
+            self.stats_label.setText("Stream Stats: Stream active")
+            # Tell image processor to start if proxy is active
+            if hasattr(self, 'image_thread'):
+                self.image_thread.start_connecting()
+        else:
+            self.stats_label.setText("Stream Stats: Stream inactive")
 
     @error_boundary
     def update_display(self, processed_data):
-        """ENHANCED: Update display with processed frame data supporting multiple gestures"""
+        """Update display with processed frame data supporting multiple gestures"""
         try:
             if processed_data is None:
                 self.video_label.setText("No frame data")
@@ -1017,30 +1038,33 @@ class CameraFeedScreen(BaseScreen):
 
 
     def update_stats(self, stats_dict):
-        """Update stream stats label from image thread"""
+        """Update statistics display"""
         try:
             if isinstance(stats_dict, dict):
                 fps = stats_dict.get('fps', 0)
+                frame_count = stats_dict.get('frame_count', 0)
                 running = stats_dict.get('running', False)
+                
                 if running:
-                    self.stats_label.setText(f"Stream: {fps:.1f} FPS")
+                    self.stats_label.setText(f"Stream Stats: {fps:.1f} FPS, {frame_count} frames")
                 else:
-                    self.stats_label.setText("Stream: Not running")
+                    self.stats_label.setText("Stream Stats: Not running")
             else:
-                self.stats_label.setText(f"Stream: {stats_dict}")
+                self.stats_label.setText(f"Stream Stats: {stats_dict}")
         except Exception as e:
             self.logger.error(f"Stats update error: {e}")
+            self.stats_label.setText("Stream Stats: Error")
 
     def _handle_gesture_detection(self, gesture_type):
         """
-        ENHANCED: Handle multiple gesture types with confidence buffering
+        Handle multiple gesture types with confidence buffering
         Uses SHARED stand-down timer for all gestures to prevent being too busy
         gesture_type: "left_wave", "right_wave", or "hands_up"
         """
         wave_config = config_manager.get_wave_config()
         current_time = time.time()
         
-        # Sample rate limiting - FIXED: More strict timing
+        # Sample rate limiting
         if current_time - self.last_sample_time < 1.0 / wave_config["sample_rate"]:
             return  # Don't process if we're sampling too fast
         
@@ -1079,13 +1103,13 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def toggle_tracking(self, checked=None):
-        """FIXED: Toggle tracking with proper image processor integration"""
+        """Toggle gesture tracking and inform the image processor"""
         if checked is not None:
             self.tracking_enabled = checked
         else:
             self.tracking_enabled = self.tracking_button.isChecked()
 
-        # FIXED: Tell image processor about tracking state
+        # Tell image processor about tracking state
         if hasattr(self, 'image_thread'):
             self.image_thread.set_tracking_enabled(self.tracking_enabled)
 
@@ -1097,8 +1121,6 @@ class CameraFeedScreen(BaseScreen):
             self.logger.info("Multi-gesture detection DISABLED")
 
         self.send_websocket_message("tracking", state=self.tracking_enabled)
-
-
 
     def cleanup(self):
         """Cleanup camera screen resources"""

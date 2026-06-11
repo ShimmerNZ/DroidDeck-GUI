@@ -122,9 +122,21 @@ class ServoConfigScreen(BaseScreen):
         self.position_update_timer.setSingleShot(True)
         self.position_update_timer.timeout.connect(self.send_position_to_backend)
         
-        # Add WebSocket message handling
+        # WebSocket messages route through the central dispatcher. Telemetry
+        # is visibility-scoped (high rate, only useful on screen); the rest
+        # are responses and events handled by their typed sub-handlers.
         if websocket:
-            websocket.textMessageReceived.connect(self.handle_message)
+            self.subscribe_while_visible("telemetry", self.handle_telemetry)
+            self.subscribe("maestro_info", self.handle_maestro_info)
+            self.subscribe("servo_position", self.handle_servo_position)
+            self.subscribe("all_servo_positions", self.handle_all_servo_positions)
+            self.subscribe("servo_config_response", self.handle_servo_config_response)
+            self.subscribe("nema_position_update", self.handle_nema_position_update)
+            self.subscribe("nema_sweep_status", self.handle_nema_sweep_status)
+            self.subscribe("nema_homing_complete", self.handle_nema_homing_complete)
+            self.subscribe("nema_status", self.handle_nema_status_update)
+            self.subscribe("nema_error", self.handle_nema_error)
+            self.subscribe("nema_enable_response", self.handle_nema_enable_response)
 
         # Register for theme change notifications
         theme_manager.register_callback(self._on_theme_changed)
@@ -217,47 +229,6 @@ class ServoConfigScreen(BaseScreen):
 # ========================================
     # WEBSOCKET MESSAGE HANDLING
     # ========================================
-    
-    def handle_message(self, message: str):
-        """Enhanced message handler to support NEMA WebSocket messages"""
-        try:
-            msg = json.loads(message)
-            msg_type = msg.get("type")
-            
-            # Handle existing message types first
-            if msg_type == "telemetry":
-                self.handle_telemetry(msg)
-            elif msg_type == "maestro_info":
-                self.handle_maestro_info(msg)
-            elif msg_type == "servo_position":
-                self.handle_servo_position(msg)
-            elif msg_type == "all_servo_positions":
-                self.handle_all_servo_positions(msg)
-            elif msg_type == "servo_config_response":
-                print("SERVO SCREEN: About to call handle_servo_config_response()")
-                self.handle_servo_config_response(msg)
-                print("SERVO SCREEN: handle_servo_config_response() completed")
-                
-            # ========================================
-            # NEW NEMA MESSAGE HANDLERS
-            # ========================================
-            elif msg_type == "nema_position_update":
-                self.handle_nema_position_update(msg)
-            elif msg_type == "nema_sweep_status":
-                self.handle_nema_sweep_status(msg)
-            elif msg_type == "nema_homing_complete":
-                self.handle_nema_homing_complete(msg)
-            elif msg_type == "nema_status":
-                self.handle_nema_status_update(msg)
-            elif msg_type == "nema_error":
-                self.handle_nema_error(msg)
-            elif msg_type == "nema_enable_response":
-                self.handle_nema_enable_response(msg)
-                
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse WebSocket message: {e}")
-        except Exception as e:
-            self.logger.error(f"Error handling message: {e}")
 
     def handle_nema_position_update(self, msg):
         """Handle position updates from NEMA controller"""
@@ -1882,11 +1853,6 @@ class ServoConfigScreen(BaseScreen):
     def update_maestro_selector_status(self):
         """Update the maestro selector to show which ones are detected"""
         pass
-
-    @error_boundary
-    def handle_websocket_message(self, message: str):
-        """Handle incoming WebSocket messages - calls the enhanced handler"""
-        self.handle_message(message)
 
     def update_servo_position_display(self, channel_key: str, position: int):
         """Thread-safe method to update servo position display"""

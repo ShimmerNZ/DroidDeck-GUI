@@ -1026,7 +1026,13 @@ class SceneScreen(BaseScreen):
         self.init_ui()
         
         if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_message)
+            # All scene-related messages route through the central dispatcher;
+            # registrations stay active while hidden so unsolicited updates
+            # (e.g. the Bottango watcher) keep this screen's data current
+            for msg_type in ("scene_list", "audio_files", "backend_refresh_response",
+                             "scenes_saved", "bottango_scenes_updated",
+                             "bottango_import_complete"):
+                self.subscribe(msg_type, self.handle_message)
             # Wait for connection before requesting audio files
             if self.websocket.is_connected():
                 self.request_audio_files()
@@ -1369,9 +1375,8 @@ class SceneScreen(BaseScreen):
         """)
 
     @error_boundary
-    def handle_message(self, message: str):
+    def handle_message(self, msg: dict):
         try:
-            msg = json.loads(message)
             msg_type = msg.get("type")
             
             green = theme_manager.get("green")

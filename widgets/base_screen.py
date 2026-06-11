@@ -21,20 +21,59 @@ class WidgetABCMeta(type(QWidget), type(ABC)):
 
 
 class BaseScreen(QWidget, ABC, metaclass=WidgetABCMeta):
-    """Abstract base class for all application screens"""
-    
+    """Abstract base class for all application screens.
+
+    WebSocket messages are consumed through the central dispatcher on the
+    WebSocketManager: subscribe() registers a handler that is always active,
+    while subscribe_while_visible() registers a handler only while the
+    screen is shown - high-rate types like telemetry then cost nothing on
+    hidden screens. Handlers receive parsed dicts.
+    """
+
     def __init__(self, websocket=None):
         super().__init__()
         self.logger = get_logger(self.__class__.__name__.lower())
         self.websocket = websocket
+        self._ws_subscriptions = []           # (msg_type, handler) always active
+        self._ws_visible_subscriptions = []   # (msg_type, handler) active while shown
+        self._visible_handlers_registered = False
         self.setStyleSheet("background-color: #1e1e1e; color: white;")
         self._setup_screen()
-    
+
     @abstractmethod
     def _setup_screen(self):
         """Setup screen-specific UI components"""
         pass
-    
+
+    def subscribe(self, msg_type: str, handler):
+        """Register a message handler that stays active regardless of visibility."""
+        if not self.websocket or not hasattr(self.websocket, "register_handler"):
+            return
+        self.websocket.register_handler(msg_type, handler)
+        self._ws_subscriptions.append((msg_type, handler))
+
+    def subscribe_while_visible(self, msg_type: str, handler):
+        """Register a message handler that is only active while the screen is shown."""
+        self._ws_visible_subscriptions.append((msg_type, handler))
+
+    def showEvent(self, event):
+        """Activate visibility-scoped message handlers."""
+        if (not self._visible_handlers_registered and self.websocket
+                and hasattr(self.websocket, "register_handler")):
+            for msg_type, handler in self._ws_visible_subscriptions:
+                self.websocket.register_handler(msg_type, handler)
+            self._visible_handlers_registered = True
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        """Deactivate visibility-scoped message handlers."""
+        if (self._visible_handlers_registered and self.websocket
+                and hasattr(self.websocket, "unregister_handler")):
+            for msg_type, handler in self._ws_visible_subscriptions:
+                self.websocket.unregister_handler(msg_type, handler)
+            self._visible_handlers_registered = False
+        super().hideEvent(event)
+
     def cleanup(self):
         """Override in subclasses for custom cleanup"""
         pass
@@ -81,8 +120,6 @@ class RightStatusWidget(QWidget):
 
     def set_websocket_connected(self, connected: bool):
         """Called by DynamicHeader when WebSocket connects or disconnects."""
-        if not self.flash_timer:
-            return
         self.ws_connected = connected
         if connected:
             self.wifi_color = "#44FF44"
@@ -94,7 +131,7 @@ class RightStatusWidget(QWidget):
 
     # ── WiFi flash helpers ────────────────────────────────────────────────────
     def _start_wifi_flash(self):
-        if self.flash_timer and not self.flash_timer.isActive():
+        if not self.flash_timer.isActive():
             self.flash_timer.start(500)
 
     def _stop_wifi_flash(self):
@@ -513,17 +550,6 @@ class DynamicHeader(QFrame):
 
     def cleanup(self):
         """Cleanup header resources"""
-        if hasattr(self, '_ws_poll_timer') and self._ws_poll_timer:
-            self._ws_poll_timer.stop()
-        if hasattr(self, 'right_widget') and self.right_widget:
-            self.right_widget.flash_timer.stop()
-        if hasattr(self, '_websocket') and self._websocket:
-            try:
-                self._websocket.connected.disconnect()
-                self._websocket.disconnected.disconnect()
-            except Exception:
-                pass
-            self._websocket = None
         if hasattr(self, 'network_monitor'):
             self.network_monitor.stop()
 

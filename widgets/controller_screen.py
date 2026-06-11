@@ -734,33 +734,24 @@ class ControllerConfigScreen(BaseScreen):
             self._config_loaded = True
             self._load_existing_configuration()
 
-    def handle_websocket_message(self, message):
-        """Handle WebSocket messages including maestro detection and system control commands"""
+    def _on_controller_config_data(self, msg: dict):
+        """Apply controller config received from the backend"""
         try:
-            self.handle_controller_input_for_status(message)
-            msg = json.loads(message)
-            msg_type = msg.get("type")
-
-            if msg_type == "maestro_info":
-                self._handle_maestro_info(msg)
-            elif msg_type == "controller_info":
-                self.handle_controller_info_response(msg)
-            elif msg_type == "controller_config_data":
-                self._load_config_from_backend_response(msg.get("config", {}))
-            elif msg_type == "controller_config_saved":
-                # Config was just saved — request it back so steamdeck.py
-                # picks up any imu_toggle mapping changes without a restart.
-                if msg.get("success"):
-                    self._suppress_grid_reload = True
-                    self.send_websocket_message("get_controller_config")
-            elif msg_type == "controller_input":
-                pass
-            elif msg_type == "system_control_command":
-                self._handle_system_control_command(msg)
-
+            self._load_config_from_backend_response(msg.get("config", {}))
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Error handling WebSocket message: {e}", exc_info=True)
+                self.logger.error(f"Error applying controller config: {e}", exc_info=True)
+
+    def _on_controller_config_saved(self, msg: dict):
+        """Config was just saved — request it back so steamdeck.py
+        picks up any imu_toggle mapping changes without a restart."""
+        try:
+            if msg.get("success"):
+                self._suppress_grid_reload = True
+                self.send_websocket_message("get_controller_config")
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error handling config saved: {e}", exc_info=True)
 
     def _handle_system_control_command(self, msg):
         """Handle system control commands routed from backend"""
@@ -903,25 +894,22 @@ class ControllerConfigScreen(BaseScreen):
                 self.logger.error(f"Error updating controller status: {e}")
 
 
-    def handle_controller_input_for_status(self, message: str):
-        """Handle WebSocket controller input for status display"""
+    def handle_controller_input_for_status(self, msg: dict):
+        """Feed steamdeck controller input to the status splash while it is open"""
         try:
             if hasattr(self, 'controller_status_splash') and self.controller_status_splash.isVisible():
-                msg = json.loads(message)
-                
-                if msg.get("type") == "steamdeck_controller":
-                    # Create ControllerInputData from WebSocket message
-                    from threads.steamdeck_controller import ControllerInputData
-                    
-                    input_data = ControllerInputData(
-                        axes=msg.get("axes", {}),
-                        buttons=msg.get("buttons", {}),
-                        timestamp=msg.get("timestamp", time.time()),
-                        sequence=msg.get("sequence", 0)
-                    )
-                    
-                    self.controller_status_splash.update_controller_input(input_data)
-                    
+                # Create ControllerInputData from WebSocket message
+                from threads.steamdeck_controller import ControllerInputData
+
+                input_data = ControllerInputData(
+                    axes=msg.get("axes", {}),
+                    buttons=msg.get("buttons", {}),
+                    timestamp=msg.get("timestamp", time.time()),
+                    sequence=msg.get("sequence", 0)
+                )
+
+                self.controller_status_splash.update_controller_input(input_data)
+
         except Exception as e:
             self.logger.error(f"Error handling controller input for status: {e}")
         
@@ -1035,8 +1023,16 @@ class ControllerConfigScreen(BaseScreen):
         self._init_ui()
         
         if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_controller_input)
-            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
+            # High-rate input streams are visibility-scoped: behaviour testing
+            # and the status splash only matter while this screen is shown
+            self.subscribe_while_visible("controller_input", self.handle_controller_input)
+            self.subscribe_while_visible("steamdeck_controller", self.handle_controller_input_for_status)
+            # Low-rate responses and events stay active regardless
+            self.subscribe("maestro_info", self._handle_maestro_info)
+            self.subscribe("controller_info", self.handle_controller_info_response)
+            self.subscribe("controller_config_data", self._on_controller_config_data)
+            self.subscribe("controller_config_saved", self._on_controller_config_saved)
+            self.subscribe("system_control_command", self._handle_system_control_command)
             # Request config immediately if already connected, otherwise wait for connection
             if self.websocket.is_connected():
                 QTimer.singleShot(500, self._request_config_from_backend)
@@ -2915,13 +2911,9 @@ class ControllerConfigScreen(BaseScreen):
             self.logger.error(f"Failed to save controller mappings: {e}")
 
     @error_boundary
-    def handle_controller_input(self, message):
+    def handle_controller_input(self, msg: dict):
         """Handle incoming controller input messages"""
         try:
-            msg = json.loads(message)
-            if msg.get("type") != "controller_input":
-                return
-            
             control_name = msg.get("control")
             raw_value = msg.get("value", 0.0)
             

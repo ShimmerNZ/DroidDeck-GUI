@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 DroidDeck Splash Screen with Steam Deck-style loading animations and audio
 """
@@ -174,11 +176,13 @@ class DroidDeckSplashScreen(QSplashScreen):
         self.close()
     
     def closeEvent(self, event):
-        """Clean up audio when closing"""
+        """Clean up audio and timers when closing"""
+        if hasattr(self, '_audio_poll_timer') and self._audio_poll_timer is not None:
+            self._audio_poll_timer.stop()
         if PYGAME_AVAILABLE:
             try:
                 pygame.mixer.music.stop()
-            except:
+            except Exception:
                 pass
         super().closeEvent(event)
     
@@ -375,7 +379,7 @@ class DroidDeckShutdownSplash(QSplashScreen):
         if PYGAME_AVAILABLE:
             try:
                 pygame.mixer.music.stop()
-            except:
+            except Exception:
                 pass
         super().closeEvent(event)
         

@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Bandwidth Test Progress Splash Screen
-Shows real-time progress of upload/download speed testing with controller calibration styling
 """
 
 import sys

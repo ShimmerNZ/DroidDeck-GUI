@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Utility Functions and Decorators
 """
@@ -24,19 +26,14 @@ def error_boundary(func: Callable) -> Callable:
 
 class MemoryManager:
     """Memory management utilities"""
-    
+
     @staticmethod
     def cleanup_widgets(widget):
-        """Recursively cleanup widget resources"""
+        """Recursively cleanup widget resources at shutdown"""
         if hasattr(widget, 'children'):
             for child in widget.children():
                 if hasattr(child, 'deleteLater'):
                     child.deleteLater()
-        gc.collect()
-    
-    @staticmethod
-    def periodic_cleanup():
-        """Periodic memory cleanup"""
         gc.collect()
 
 

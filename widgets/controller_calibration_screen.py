@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Bluetooth Controller Calibration Screen
 Wizard-style calibration with game controller visualization
@@ -917,12 +919,26 @@ class ControllerCalibrationDialog(QDialog):
         """
     
     def setup_websocket(self):
-        """Setup WebSocket communication"""
-        if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_websocket_message)
+        """Setup WebSocket communication via the central dispatcher"""
+        self._ws_handlers = [
+            ("controller_status", self.handle_controller_status),
+            ("calibration_data", self.handle_calibration_data),
+            ("controller_info", self.handle_controller_info),
+        ]
+        if self.websocket and hasattr(self.websocket, 'register_handler'):
+            for msg_type, handler in self._ws_handlers:
+                self.websocket.register_handler(msg_type, handler)
             
             # Start calibration mode
             self.send_websocket_message("start_calibration_mode")
+
+    def _unregister_ws_handlers(self):
+        """Remove dispatcher registrations - the dialog is transient, so
+        handlers must not outlive it"""
+        if self.websocket and hasattr(self.websocket, 'unregister_handler'):
+            for msg_type, handler in getattr(self, '_ws_handlers', []):
+                self.websocket.unregister_handler(msg_type, handler)
+        self._ws_handlers = []
     
     def setup_timers(self):
         """Setup update timers"""
@@ -937,24 +953,6 @@ class ControllerCalibrationDialog(QDialog):
             message = {"type": message_type, **kwargs}
             self.websocket.sendTextMessage(json.dumps(message))
             self.logger.debug(f"Sent message: {message_type}")
-    
-    def handle_websocket_message(self, message: str):
-        """Handle incoming WebSocket messages"""
-        try:
-            data = json.loads(message)
-            msg_type = data.get("type")
-            
-            if msg_type == "controller_status":
-                self.handle_controller_status(data)
-            elif msg_type == "calibration_data":
-                self.handle_calibration_data(data)
-            elif msg_type == "controller_info":
-                self.handle_controller_info(data)
-                
-        except json.JSONDecodeError:
-            self.logger.warning(f"Invalid JSON message: {message}")
-        except Exception as e:
-            self.logger.error(f"Error handling message: {e}")
     
     def handle_controller_status(self, data: Dict):
         """Handle controller connection status"""
@@ -1054,6 +1052,7 @@ class ControllerCalibrationDialog(QDialog):
         
         # Stop calibration mode
         self.send_websocket_message("stop_calibration_mode")
+        self._unregister_ws_handlers()
         
         # Emit completion signal
         self.calibration_completed.emit(calibration_data)
@@ -1064,10 +1063,12 @@ class ControllerCalibrationDialog(QDialog):
         """Handle dialog close"""
         # Stop calibration mode
         self.send_websocket_message("stop_calibration_mode")
+        self._unregister_ws_handlers()
         super().closeEvent(event)
     
     def reject(self):
         """Handle dialog cancellation"""
         # Stop calibration mode
         self.send_websocket_message("stop_calibration_mode")
+        self._unregister_ws_handlers()
         super().reject()

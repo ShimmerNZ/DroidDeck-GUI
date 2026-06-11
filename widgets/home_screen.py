@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+WALL-E Control System - Home Screen
+Scene selection dashboard with WebSocket-based controller navigation.
+"""
 import os
 import json
 import time
@@ -48,14 +54,17 @@ class HomeScreen(BaseScreen):
         # Simple navigation tracking
         self.current_scene_index = 0
 
-        # Add these to your existing __init__ method
         self.auto_advance_enabled = True
         self.is_playing_scene = False
         self.last_triggered_scene = None
 
-        # Connect to WebSocket messages for navigation and scene completion
-        if hasattr(self, 'websocket') and self.websocket:
-            self.websocket.textMessageReceived.connect(self._handle_websocket_message)
+        # Scene and navigation messages stay active regardless of visibility:
+        # scene state (playing/locked) must track reality even while the
+        # operator is on another screen. These are low-rate messages.
+        self.subscribe("scene_completed", self._on_scene_completed)
+        self.subscribe("scene_started", self._on_scene_started)
+        self.subscribe("scene_error", self._on_scene_error)
+        self.subscribe("navigation", self._on_navigation)
         
         # Remove focus policy - no local input handling
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -70,54 +79,51 @@ class HomeScreen(BaseScreen):
         self._init_audio()
 
 
-    def _handle_websocket_message(self, message: str):
-        """Handle WebSocket messages for scene completion - ENHANCED"""
+    def _on_scene_completed(self, msg: dict):
+        """Unlock navigation when a scene completes; auto-advance on success"""
         try:
-            import json
-            msg = json.loads(message)
-            msg_type = msg.get("type")
-            
-            if msg_type == "scene_completed":
-                scene_name = msg.get("scene_name", "")
-                success = msg.get("success", False)
-                
-                # FIXED: Always unlock navigation when scene completes
-                self._unlock_scene_state()
-                
-                if success and self.auto_advance_enabled:
-                    self._advance_to_next_scene()
-                    
-            elif msg_type == "scene_started":
-                scene_name = msg.get("scene_name", "")
-                self.last_triggered_scene = scene_name
-                # Keep navigation locked during scene playback
-                
-            elif msg_type == "scene_error":
-                # FIXED: Unlock navigation on scene error
-                self._unlock_scene_state()
+            success = msg.get("success", False)
 
-            elif msg_type == "navigation":
-                # Handle navigation commands from dpad/controller
-                action = msg.get("action")
-                if action == "left":
-                    self._navigate_categories(-1)
-                elif action == "right":
-                    self._navigate_categories(1)
-                elif action == "up":
-                    self._navigate_scenes(-1)
-                elif action == "down":
-                    self._navigate_scenes(1)
-                elif action == "select":
-                    self._trigger_selected_scene()
-                elif action == "exit":
-                    # Handle exit if needed - could go back to main menu or close app
-                    self.logger.debug("Exit action received")
-                
-                self.logger.debug(f"Navigation action received: {action}")
-                
+            # Always unlock navigation when a scene completes
+            self._unlock_scene_state()
+
+            if success and self.auto_advance_enabled:
+                self._advance_to_next_scene()
         except Exception as e:
-            self.logger.error(f"Error handling WebSocket message: {e}")
-            # Always unlock on error to prevent permanent lock
+            self.logger.error(f"Error handling scene_completed: {e}")
+            self._unlock_scene_state()
+
+    def _on_scene_started(self, msg: dict):
+        """Track the scene that just started; navigation stays locked"""
+        try:
+            self.last_triggered_scene = msg.get("scene_name", "")
+        except Exception as e:
+            self.logger.error(f"Error handling scene_started: {e}")
+
+    def _on_scene_error(self, msg: dict):
+        """Unlock navigation when a scene fails"""
+        self._unlock_scene_state()
+
+    def _on_navigation(self, msg: dict):
+        """Handle navigation commands from dpad/controller via the backend"""
+        try:
+            action = msg.get("action")
+            if action == "left":
+                self._navigate_categories(-1)
+            elif action == "right":
+                self._navigate_categories(1)
+            elif action == "up":
+                self._navigate_scenes(-1)
+            elif action == "down":
+                self._navigate_scenes(1)
+            elif action == "select":
+                self._trigger_selected_scene()
+            elif action == "exit":
+                self.logger.debug("Exit action received")
+
+            self.logger.debug(f"Navigation action received: {action}")
+        except Exception as e:
+            self.logger.error(f"Error handling navigation: {e}")
             self._unlock_scene_state()
 
     def _handle_navigation_command(self, action):
@@ -256,7 +262,7 @@ class HomeScreen(BaseScreen):
         if not hasattr(self, "categories") or not self.categories:
             return
             
-        # FIXED: Add more robust state checking
+        # Ignore triggers while a scene is playing or navigation is locked
         if (hasattr(self, 'is_playing_scene') and self.is_playing_scene) or self.navigation_locked:
             self.logger.debug("Scene playing or navigation locked, ignoring trigger")
             return
@@ -278,7 +284,7 @@ class HomeScreen(BaseScreen):
                 self.logger.debug(f"Scene {scene_name} is currently playing, ignoring trigger")
                 return
             
-            # FIXED: Lock navigation during scene trigger
+            # Lock navigation during scene trigger
             self.navigation_locked = True
             
             # Send WebSocket command to backend
@@ -318,7 +324,7 @@ class HomeScreen(BaseScreen):
         """Handle keyboard/D-pad input with improved debouncing"""
         key = event.key()
         
-        # FIXED: Check navigation lock first
+        # Check navigation lock first
         if self.navigation_locked:
             event.accept()  # Accept but don't process
             return
@@ -574,7 +580,7 @@ class HomeScreen(BaseScreen):
         if idx < 0 or idx >= len(self.category_buttons):
             return
         
-        # FIXED: Force clear ALL buttons first, regardless of current state
+        # Clear all buttons first so exactly one ends up selected
         for i, btn in enumerate(self.category_buttons):
             btn.setChecked(False)
             btn.setStyleSheet(self._get_category_button_style(selected=False))

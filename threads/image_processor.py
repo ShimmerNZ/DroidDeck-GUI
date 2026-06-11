@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Image Processing Thread - Enhanced Gesture Detection
-Handles camera stream processing and multiple gesture detection types.
-ENHANCED: Added left hand, right hand, and both hands detection
+Image Processing Thread - Camera stream and gesture detection.
+MediaPipe is imported lazily on first tracking enable so normal camera use
+has no startup cost and does not require MediaPipe to be installed.
 """
 
 import cv2
@@ -38,29 +39,13 @@ class ImageProcessingThread(QThread):
         
         self.logger.info(f"ImageProcessingThread initialized with URL: {camera_url}")
         
-        # Initialize MediaPipe if available
+        # MediaPipe state - initialised lazily when tracking is first enabled
+        # so startup is fast and MediaPipe is not required for basic streaming
         self.mp_pose = None
         self.pose = None
         self.mp_drawing = None
         self.pose_detection_available = False
-        
-        try:
-            import mediapipe as mp
-            self.mp_pose = mp.solutions.pose
-            self.pose = self.mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                enable_segmentation=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self.mp_drawing = mp.solutions.drawing_utils
-            self.pose_detection_available = True
-            self.logger.info("MediaPipe pose detection initialized")
-        except ImportError:
-            self.logger.warning("MediaPipe not available - pose detection disabled")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize MediaPipe: {e}")
+        self._mediapipe_load_attempted = False
 
     def start_processing(self):
         """Start the image processing thread"""
@@ -82,7 +67,31 @@ class ImageProcessingThread(QThread):
     def set_tracking_enabled(self, enabled):
         """Enable/disable gesture tracking"""
         self.tracking_enabled = enabled
+        if enabled and not self._mediapipe_load_attempted:
+            self._load_mediapipe()
         self.logger.info(f"Gesture tracking {'enabled' if enabled else 'disabled'}")
+
+    def _load_mediapipe(self):
+        """Lazily import and initialise MediaPipe on first tracking enable.
+        Only ever attempted once; subsequent calls are no-ops."""
+        self._mediapipe_load_attempted = True
+        try:
+            import mediapipe as mp
+            self.mp_pose = mp.solutions.pose
+            self.pose = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                enable_segmentation=False,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            self.mp_drawing = mp.solutions.drawing_utils
+            self.pose_detection_available = True
+            self.logger.info("MediaPipe pose detection initialised")
+        except ImportError:
+            self.logger.warning("MediaPipe not available - pose detection disabled")
+        except Exception as e:
+            self.logger.error(f"Failed to initialise MediaPipe: {e}")
 
     def run(self):
         """Main thread loop"""

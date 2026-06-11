@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # widgets/voltage_alert_splash.py
 
 import os
