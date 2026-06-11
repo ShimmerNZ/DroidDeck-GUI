@@ -7,7 +7,7 @@ Reads analog, IMU and button data directly from the Steam Deck's
 raw HID interface (/dev/hidraw3), bypassing the Steam Input layer.
 
 Analog and IMU are parsed from raw HID reports using verified byte offsets.
-Button state is read from bitsteam which handles the bitmask parsing.
+Button state is read from deck.SteamDeck which handles the bitmask parsing.
 Both readers open the device independently — Linux hidraw allows concurrent
 readers, each receiving their own copy of every report.
 
@@ -62,7 +62,7 @@ STICK_DEADZONE   = 0.05
 TRIGGER_DEADZONE = 0.02
 IMU_DEADZONE     = 0.04
 
-# bitsteam field name → DroidDeck control name
+# deck.SteamDeck field name → DroidDeck control name
 BUTTON_MAP = {
     'a':                'button_a',
     'b':                'button_b',
@@ -249,7 +249,7 @@ class SteamDeckControllerThread(QThread):
         self._cleanup_hid()
 
     def _init_hid(self):
-        """Open the raw HID device and start the bitsteam button reader"""
+        """Open the raw HID device and start the deck.SteamDeck button reader"""
         retry_delay = 2.0
         while self.running and not self.controller_active:
             try:
@@ -261,9 +261,9 @@ class SteamDeckControllerThread(QThread):
                 self._hid_device.write(IMU_ENABLE_CMD)
                 time.sleep(0.3)
 
-                # bitsteam reads buttons from the same hidraw device independently
-                from bitsteam import SteamDeck as BitSteamDeck
-                self._bitsteam_deck = BitSteamDeck()
+                # deck.SteamDeck reads buttons from the HID device independently
+                from deck import SteamDeck as DeckReader
+                self._bitsteam_deck = DeckReader()
                 self._bitsteam_deck.start()
                 time.sleep(0.2)
 
@@ -288,10 +288,10 @@ class SteamDeckControllerThread(QThread):
                 t.start()
                 t.join(timeout=2.0)
                 if t.is_alive():
-                    self.logger.warning("bitsteam stop() timed out — continuing shutdown")
+                    self.logger.warning("deck.SteamDeck stop() timed out - continuing shutdown")
                 self._bitsteam_deck = None
         except Exception as e:
-            self.logger.debug(f"bitsteam stop error: {e}")
+            self.logger.debug(f"deck.SteamDeck stop error: {e}")
 
         try:
             if self._hid_device:
@@ -390,7 +390,7 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _parse_buttons(self) -> Dict[str, bool]:
-        """Read button state from bitsteam and remap to DroidDeck control names"""
+        """Read button state from deck.SteamDeck and remap to DroidDeck control names"""
         if not self._bitsteam_deck:
             return {}
         raw = self._bitsteam_deck.buttons
