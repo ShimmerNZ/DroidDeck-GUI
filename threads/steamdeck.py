@@ -129,6 +129,10 @@ class SteamDeckControllerThread(QThread):
         self._hid_device    = None
         self._bitsteam_deck = None
 
+        # Last frame sent, for unchanged-frame skipping
+        self._last_sent_axes = None
+        self._last_sent_buttons = None
+
         self.stats = {
             "inputs_processed": 0,
             "inputs_sent":      0,
@@ -137,11 +141,14 @@ class SteamDeckControllerThread(QThread):
             "disconnections":   0,
         }
 
-        # Listen for controller_config_data messages so imu_toggle_button updates
-        # automatically when the user refreshes config from backend on a different device.
-        if websocket_manager:
+        # Reload imu_toggle_button mappings when a config save completes.
+        # Registered with the central dispatcher so this thread receives only
+        # controller_config_saved messages, already parsed, rather than every
+        # message on the socket.
+        if websocket_manager and hasattr(websocket_manager, 'register_handler'):
             try:
-                websocket_manager.textMessageReceived.connect(self._on_websocket_message)
+                websocket_manager.register_handler(
+                    "controller_config_saved", self._on_config_saved)
             except Exception:
                 pass
 
@@ -175,11 +182,11 @@ class SteamDeckControllerThread(QThread):
         except Exception as e:
             self.logger.error(f"Could not load controller config: {e}")
 
-    def _on_websocket_message(self, text: str):
-        """Reload controller config when a save completes."""
+    def _on_config_saved(self, data: dict):
+        """Reload controller config when a save completes (dispatcher handler).
+        Receives an already-parsed dict for the controller_config_saved type."""
         try:
-            data = json.loads(text)
-            if data.get("type") == "controller_config_saved" and data.get("success"):
+            if data.get("success"):
                 self._load_controller_config()
         except Exception:
             pass
@@ -195,11 +202,12 @@ class SteamDeckControllerThread(QThread):
         """Signal the poll loop to stop and wait for the thread to exit cleanly."""
         self.running = False
 
-        # Disconnect websocket signals before the thread tears down so there
+        # Unregister from the dispatcher before the thread tears down so there
         # are no dangling references to this object after cleanup.
-        if self.websocket_manager:
+        if self.websocket_manager and hasattr(self.websocket_manager, 'unregister_handler'):
             try:
-                self.websocket_manager.textMessageReceived.disconnect(self._on_websocket_message)
+                self.websocket_manager.unregister_handler(
+                    "controller_config_saved", self._on_config_saved)
             except Exception:
                 pass
 
@@ -215,6 +223,8 @@ class SteamDeckControllerThread(QThread):
         """Main 50 Hz polling loop"""
         self._init_hid()
 
+        next_stats_time = time.monotonic() + 5.0
+
         while self.running:
             current_time = time.monotonic()
 
@@ -224,8 +234,9 @@ class SteamDeckControllerThread(QThread):
                 except Exception as e:
                     self.logger.error(f"Input read error: {e}")
 
-            if int(current_time) % 5 == 0:
+            if current_time >= next_stats_time:
                 self._update_stats()
+                next_stats_time = current_time + 5.0
 
             elapsed = time.monotonic() - current_time
             sleep_time = self.poll_interval - elapsed
@@ -285,7 +296,7 @@ class SteamDeckControllerThread(QThread):
         return b'\x00' * 64
 
     def _read_and_send(self, current_time: float):
-        """Read all inputs from bitsteam and emit the websocket message."""
+        """Read all inputs from the deck reader and emit the websocket message."""
         if not self._bitsteam_deck or not self._bitsteam_deck.is_running:
             return
         axes    = self._parse_analog()
@@ -293,8 +304,23 @@ class SteamDeckControllerThread(QThread):
 
         # Toggle IMU on button press edge; add gyro axes if enabled
         self._check_imu_toggle(buttons)
+
+        # Skip frames identical to the last one sent. Sticks deadzone to exactly
+        # 0.0 at rest and buttons are discrete, so at idle this drops almost all
+        # of the 50Hz traffic. A keepalive frame still goes out once per second.
+        # IMU frames are never skipped - tilt values change continuously and the
+        # backend needs them live.
+        if (not self.imu_enabled
+                and axes == self._last_sent_axes
+                and buttons == self._last_sent_buttons
+                and current_time - self.last_input_sent < 1.0):
+            return
+
         if self.imu_enabled:
             axes.update(self._parse_imu())
+
+        self._last_sent_axes = dict(axes)
+        self._last_sent_buttons = dict(buttons)
 
         input_data = ControllerInputData(
             axes=axes,
