@@ -6,17 +6,17 @@ SteamDeckControllerThread — HID-based input handler for DroidDeck
 Reads analog, IMU and button data directly from the Steam Deck's
 raw HID interface (/dev/hidraw3), bypassing the Steam Input layer.
 
-Analog and IMU are parsed from raw HID reports using verified byte offsets.
-Button state is read from bitsteam which handles the bitmask parsing.
-Both readers open the device independently — Linux hidraw allows concurrent
-readers, each receiving their own copy of every report.
+All input is read via the local SteamDeckExtended class in deck.py.
+No external bitsteam package required.
 
-Byte offsets verified by hardware orientation sweep testing:
+Byte offsets verified by hardware sweep testing (test_motion_standalone.py):
   Triggers:    44 (L), 46 (R)  — uint16, 0-32767
   Left stick:  48 (X), 50 (Y)  — int16,  ±32767
   Right stick: 52 (X), 54 (Y)  — int16,  ±32767
-  Accel roll:  24               — int16,  ±17000 (left=+, right=-)
-  Accel pitch: 26               — int16,  ±17000 (back=+, forward=-)
+  Accel X:     24               — int16,  ±16384 (roll,  left=+, right=-)
+  Accel Y:     26               — int16,  ±16384 (pitch, back=+, forward=-)
+  Accel Z:     28               — int16,  ±16384 (vertical)
+  Gyro X/Y/Z:  30/32/34        — int16,  raw gyroscope rates
 """
 
 import json
@@ -44,25 +44,18 @@ IMU_ENABLE_CMD = bytes([
     0x00,
 ]) + bytes(43)
 
-# Raw HID report byte offsets (verified by hardware testing)
-OFF_LEFT_TRIGGER  = 44   # uint16  0–32767
-OFF_RIGHT_TRIGGER = 46   # uint16  0–32767
-OFF_LEFT_STICK_X  = 48   # int16   ±32767
-OFF_LEFT_STICK_Y  = 50   # int16   ±32767
-OFF_RIGHT_STICK_X = 52   # int16   ±32767
-OFF_RIGHT_STICK_Y = 54   # int16   ±32767
-OFF_ACCEL_X       = 24   # int16   ±17000  roll  (left=+, right=−)
-OFF_ACCEL_Y       = 26   # int16   ±17000  pitch (back=+, forward=−)
-
+# Normalisation constants
 STICK_MAX   = 32767
 TRIGGER_MAX = 32767
-IMU_MAX     = 17000
+
+# Accelerometer full-scale range — 1g = 16384 LSB (verified by hardware sweep).
+ACCEL_MAX = 16384
 
 STICK_DEADZONE   = 0.05
 TRIGGER_DEADZONE = 0.02
 IMU_DEADZONE     = 0.12
 
-# bitsteam field name → DroidDeck control name
+# SteamDeckExtended field name → DroidDeck control name
 BUTTON_MAP = {
     'a':                'button_a',
     'b':                'button_b',
@@ -126,15 +119,19 @@ class SteamDeckControllerThread(QThread):
         self.last_input_sent = 0
 
         # IMU state
-        self.imu_enabled       = False
-        self.imu_zero_ax       = 0
-        self.imu_zero_ay       = 0
-        self._prev_buttons     = {}
+        self.imu_enabled      = False
+        self._accel_zero_x    = 0
+        self._accel_zero_y    = 0
+        self._prev_buttons    = {}
         self.imu_toggle_buttons: set = set()
 
         # HID handles
         self._hid_device    = None
         self._bitsteam_deck = None
+
+        # Last frame sent, for unchanged-frame skipping
+        self._last_sent_axes = None
+        self._last_sent_buttons = None
 
         self.stats = {
             "inputs_processed": 0,
@@ -144,11 +141,14 @@ class SteamDeckControllerThread(QThread):
             "disconnections":   0,
         }
 
-        # Listen for controller_config_data messages so imu_toggle_button updates
-        # automatically when the user refreshes config from backend on a different device.
-        if websocket_manager:
+        # Reload imu_toggle_button mappings when a config save completes.
+        # Registered with the central dispatcher so this thread receives only
+        # controller_config_saved messages, already parsed, rather than every
+        # message on the socket.
+        if websocket_manager and hasattr(websocket_manager, 'register_handler'):
             try:
-                websocket_manager.textMessageReceived.connect(self._on_websocket_message)
+                websocket_manager.register_handler(
+                    "controller_config_saved", self._on_config_saved)
             except Exception:
                 pass
 
@@ -182,11 +182,11 @@ class SteamDeckControllerThread(QThread):
         except Exception as e:
             self.logger.error(f"Could not load controller config: {e}")
 
-    def _on_websocket_message(self, text: str):
-        """Reload controller config when a save completes."""
+    def _on_config_saved(self, data: dict):
+        """Reload controller config when a save completes (dispatcher handler).
+        Receives an already-parsed dict for the controller_config_saved type."""
         try:
-            data = json.loads(text)
-            if data.get("type") == "controller_config_saved" and data.get("success"):
+            if data.get("success"):
                 self._load_controller_config()
         except Exception:
             pass
@@ -202,11 +202,12 @@ class SteamDeckControllerThread(QThread):
         """Signal the poll loop to stop and wait for the thread to exit cleanly."""
         self.running = False
 
-        # Disconnect websocket signals before the thread tears down so there
+        # Unregister from the dispatcher before the thread tears down so there
         # are no dangling references to this object after cleanup.
-        if self.websocket_manager:
+        if self.websocket_manager and hasattr(self.websocket_manager, 'unregister_handler'):
             try:
-                self.websocket_manager.textMessageReceived.disconnect(self._on_websocket_message)
+                self.websocket_manager.unregister_handler(
+                    "controller_config_saved", self._on_config_saved)
             except Exception:
                 pass
 
@@ -222,6 +223,8 @@ class SteamDeckControllerThread(QThread):
         """Main 50 Hz polling loop"""
         self._init_hid()
 
+        next_stats_time = time.monotonic() + 5.0
+
         while self.running:
             current_time = time.monotonic()
 
@@ -231,8 +234,9 @@ class SteamDeckControllerThread(QThread):
                 except Exception as e:
                     self.logger.error(f"Input read error: {e}")
 
-            if int(current_time) % 5 == 0:
+            if current_time >= next_stats_time:
                 self._update_stats()
+                next_stats_time = current_time + 5.0
 
             elapsed = time.monotonic() - current_time
             sleep_time = self.poll_interval - elapsed
@@ -242,31 +246,24 @@ class SteamDeckControllerThread(QThread):
         self._cleanup_hid()
 
     def _init_hid(self):
-        """Open the raw HID device and start the bitsteam button reader"""
+        """Start the bitsteam controller thread — handles all inputs including IMU."""
         retry_delay = 2.0
         while self.running and not self.controller_active:
             try:
-                import hid
-                self._hid_device = hid.Device(path=HIDRAW_PATH)
-                self._hid_device.nonblocking = True
-
-                # Enable IMU output in firmware
-                self._hid_device.write(IMU_ENABLE_CMD)
-                time.sleep(0.3)
-
-                # bitsteam reads buttons from the same hidraw device independently
-                from bitsteam import SteamDeck as BitSteamDeck
-                self._bitsteam_deck = BitSteamDeck()
+                from core.deck import SteamDeck as SteamDeckExtended
+                self._bitsteam_deck = SteamDeckExtended()
                 self._bitsteam_deck.start()
-                time.sleep(0.2)
+                time.sleep(0.5)
+
+                if not self._bitsteam_deck.is_running:
+                    raise RuntimeError("SteamDeckExtended thread failed to start")
 
                 self.controller_active = True
-                self.logger.info(f"HID controller opened: {HIDRAW_PATH}")
+                self.logger.info("SteamDeckExtended controller started")
                 self.controller_connected.emit("Steam Deck", "steamdeck_hid")
 
             except Exception as e:
                 self.logger.warning(f"HID init failed: {e} — retrying in {retry_delay}s")
-                # Sleep in small increments so shutdown can interrupt quickly
                 deadline = time.monotonic() + retry_delay
                 while self.running and time.monotonic() < deadline:
                     time.sleep(0.1)
@@ -286,12 +283,7 @@ class SteamDeckControllerThread(QThread):
         except Exception as e:
             self.logger.debug(f"bitsteam stop error: {e}")
 
-        try:
-            if self._hid_device:
-                self._hid_device.close()
-                self._hid_device = None
-        except Exception as e:
-            self.logger.debug(f"HID close error: {e}")
+        # raw HID device not used — bitsteam manages the device
 
         # Only signal disconnect if we actually connected — avoids a spurious
         # "disconnected" event on startup failure or repeated stop() calls.
@@ -300,31 +292,35 @@ class SteamDeckControllerThread(QThread):
             self.controller_disconnected.emit("HID device closed")
 
     def _drain_hid(self) -> Optional[bytes]:
-        """Read all pending HID reports and return only the most recent.
-
-        The Steam Deck sends reports at ~250Hz but we poll at 50Hz. Without
-        draining, the kernel FIFO builds up and reads become stale by seconds.
-        """
-        latest = None
-        while True:
-            data = self._hid_device.read(64)
-            if not data:
-                break
-            latest = bytes(data)
-        return latest
+        """Not used — all data comes from bitsteam. Returns a sentinel value."""
+        return b'\x00' * 64
 
     def _read_and_send(self, current_time: float):
-        """Read one HID frame, parse all inputs, and emit the websocket message"""
-        raw = self._drain_hid()
-        if not raw or len(raw) < 56:
+        """Read all inputs from the deck reader and emit the websocket message."""
+        if not self._bitsteam_deck or not self._bitsteam_deck.is_running:
             return
-        axes    = self._parse_analog(raw)
+        axes    = self._parse_analog()
         buttons = self._parse_buttons()
 
-        # Toggle IMU on button press edge; add axes if enabled
-        self._check_imu_toggle(buttons, raw)
+        # Toggle IMU on button press edge; add gyro axes if enabled
+        self._check_imu_toggle(buttons)
+
+        # Skip frames identical to the last one sent. Sticks deadzone to exactly
+        # 0.0 at rest and buttons are discrete, so at idle this drops almost all
+        # of the 50Hz traffic. A keepalive frame still goes out once per second.
+        # IMU frames are never skipped - tilt values change continuously and the
+        # backend needs them live.
+        if (not self.imu_enabled
+                and axes == self._last_sent_axes
+                and buttons == self._last_sent_buttons
+                and current_time - self.last_input_sent < 1.0):
+            return
+
         if self.imu_enabled:
-            axes.update(self._parse_imu(raw))
+            axes.update(self._parse_imu())
+
+        self._last_sent_axes = dict(axes)
+        self._last_sent_buttons = dict(buttons)
 
         input_data = ControllerInputData(
             axes=axes,
@@ -340,31 +336,32 @@ class SteamDeckControllerThread(QThread):
         self.stats["last_input_time"]   = current_time
         self.last_input_sent            = current_time
 
-    def _parse_analog(self, raw: bytes) -> Dict[str, float]:
-        """Parse sticks and triggers from raw HID bytes, apply deadzone"""
-        lt = struct.unpack_from('<H', raw, OFF_LEFT_TRIGGER)[0]
-        rt = struct.unpack_from('<H', raw, OFF_RIGHT_TRIGGER)[0]
-        lx = struct.unpack_from('<h', raw, OFF_LEFT_STICK_X)[0]
-        ly = struct.unpack_from('<h', raw, OFF_LEFT_STICK_Y)[0]
-        rx = struct.unpack_from('<h', raw, OFF_RIGHT_STICK_X)[0]
-        ry = struct.unpack_from('<h', raw, OFF_RIGHT_STICK_Y)[0]
-
+    def _parse_analog(self) -> Dict[str, float]:
+        """Read sticks and triggers from bitsteam and apply deadzone."""
+        a = self._bitsteam_deck.get_analog_values()
         return {
-            'left_trigger':  self._norm_trigger(lt),
-            'right_trigger': self._norm_trigger(rt),
-            'left_stick_x':  self._norm_stick(lx),
-            'left_stick_y':  self._norm_stick(ly),
-            'right_stick_x': self._norm_stick(rx),
-            'right_stick_y': self._norm_stick(ry),
+            'left_trigger':  self._norm_trigger(a.get('left_trigger',  0)),
+            'right_trigger': self._norm_trigger(a.get('right_trigger', 0)),
+            'left_stick_x':  self._norm_stick(a.get('left_stick_x',   0)),
+            'left_stick_y':  self._norm_stick(a.get('left_stick_y',   0)),
+            'right_stick_x': self._norm_stick(a.get('right_stick_x',  0)),
+            'right_stick_y': self._norm_stick(a.get('right_stick_y',  0)),
         }
 
-    def _parse_imu(self, raw: bytes) -> Dict[str, float]:
-        """Parse accelerometer tilt axes relative to the calibration zero point"""
-        ax = struct.unpack_from('<h', raw, OFF_ACCEL_X)[0] - self.imu_zero_ax
-        ay = struct.unpack_from('<h', raw, OFF_ACCEL_Y)[0] - self.imu_zero_ay
+    def _parse_imu(self) -> Dict[str, float]:
+        """Read absolute tilt from the raw accelerometer.
 
-        roll  = self._norm_imu(ax)
-        pitch = self._norm_imu(ay)
+        Accelerometer values are gravity-relative — tilting the Deck changes
+        how much of 1g projects onto each axis. This gives stable absolute
+        tilt with no drift, no integration needed.
+        The zero reference is captured when IMU is toggled on.
+        """
+        m = self._bitsteam_deck.get_motion_values()
+        ax = m.get('accel_x', 0) - self._accel_zero_x
+        ay = m.get('accel_y', 0) - self._accel_zero_y
+
+        roll  = self._norm_imu_accel(ax)
+        pitch = self._norm_imu_accel(ay)
 
         return {
             'imu_roll':  roll,
@@ -372,16 +369,14 @@ class SteamDeckControllerThread(QThread):
         }
 
     def _parse_buttons(self) -> Dict[str, bool]:
-        """Read button state from bitsteam and remap to DroidDeck control names"""
-        if not self._bitsteam_deck:
-            return {}
+        """Read button state from bitsteam and remap to DroidDeck control names."""
         raw = self._bitsteam_deck.buttons
         return {
             our_name: bool(raw.get(bs_name, False))
             for bs_name, our_name in BUTTON_MAP.items()
         }
 
-    def _check_imu_toggle(self, buttons: Dict[str, bool], raw: bytes):
+    def _check_imu_toggle(self, buttons: Dict[str, bool]):
         """Detect a press edge on any configured IMU toggle button.
         All buttons are checked before deciding to toggle — no early exit."""
         triggered = False
@@ -391,23 +386,22 @@ class SteamDeckControllerThread(QThread):
             if current and not prev:
                 triggered = True
         if triggered:
-            self._toggle_imu(raw)
+            self._toggle_imu()
         self._prev_buttons = buttons
 
-    def _toggle_imu(self, raw: bytes):
-        """Enable or disable IMU tilt control, calibrating zero on enable"""
+    def _toggle_imu(self):
+        """Enable or disable IMU tilt. Captures accelerometer zero ref on enable."""
         if not self.imu_enabled:
-            # Capture current accelerometer values as the neutral reference
-            try:
-                self.imu_zero_ax = struct.unpack_from('<h', raw, OFF_ACCEL_X)[0]
-                self.imu_zero_ay = struct.unpack_from('<h', raw, OFF_ACCEL_Y)[0]
-            except Exception:
-                self.imu_zero_ax = 0
-                self.imu_zero_ay = 0
+            if self._bitsteam_deck:
+                m = self._bitsteam_deck.get_motion_values()
+                self._accel_zero_x = m.get('accel_x', 0)
+                self._accel_zero_y = m.get('accel_y', 0)
+            else:
+                self._accel_zero_x = 0
+                self._accel_zero_y = 0
             self.imu_enabled = True
             self.logger.info(
-                f"IMU tilt enabled — zero ref: "
-                f"roll={self.imu_zero_ax} pitch={self.imu_zero_ay}"
+                f"IMU tilt enabled — accel zero: x={self._accel_zero_x} y={self._accel_zero_y}"
             )
         else:
             self.imu_enabled = False
@@ -427,9 +421,11 @@ class SteamDeckControllerThread(QThread):
         """
         return max(-1.0, min(1.0, (raw_uint16 / TRIGGER_MAX) * 2.0 - 1.0))
 
-    def _norm_imu(self, delta: int) -> float:
-        """Normalise IMU delta value to ±1.0 with deadzone, rescaled for a smooth ramp from zero"""
-        v = delta / IMU_MAX
+    def _norm_imu_accel(self, counts: int) -> float:
+        """Normalise raw accelerometer counts to ±1.0 with deadzone, rescaled for a smooth ramp from zero.
+        ACCEL_MAX counts (1g) maps to ±1.0 full servo travel.
+        """
+        v = counts / ACCEL_MAX
         mag = abs(v)
         if mag < IMU_DEADZONE:
             return 0.0
