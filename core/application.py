@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Droid Deck Control System - Main Application Class with Front Splash & Shutdown
 """
 
 import os
-import re
 import time
 from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QHBoxLayout, QFrame, QWidget, QPushButton, QApplication
 from PyQt6.QtGui import QPixmap, QPalette, QBrush, QIcon, QFont
@@ -156,6 +153,7 @@ class DroidDeckApplication(QMainWindow):
 
         wave_config = config_manager.get_wave_config()
         proxy_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
+        import re
         ip_match = re.search(r'http://([^:]+)', proxy_url)
         self.pi_ip = ip_match.group(1) if ip_match else "10.42.0.1"
     
@@ -195,8 +193,9 @@ class DroidDeckApplication(QMainWindow):
             self.health_screen.connect_network_monitor(self.header.network_monitor)
     
     def _setup_navigation_step(self):
-        """Setup navigation"""
+        """Setup navigation and memory management"""
         self.nav_buttons = {}
+        self._setup_memory_management()
         self._setup_navigation()
         self.menuBar().hide()
         self._setup_hidden_exit()
@@ -211,15 +210,20 @@ class DroidDeckApplication(QMainWindow):
         
 
     def close_application(self):
-        """Safely close the application.
-
-        Routes through self.close() so closeEvent runs - that is where the
-        shutdown splash, controller thread stop, screen cleanup, and audio
-        wait all live. Calling QApplication.quit() directly would skip
-        every one of those steps.
-        """
+        """Safely close the application"""
         self.logger.info("Application exit requested")
-        self.close()
+        
+        # Cleanup health screen resources
+        if hasattr(self, 'health_screen'):
+            self.health_screen.cleanup()
+        
+        # Close websocket connections
+        if hasattr(self, 'websocket'):
+            self.websocket.close()
+        
+        # Exit application
+        from PyQt6.QtWidgets import QApplication
+        QApplication.quit()
 
     
     def _finalize_setup(self):
@@ -228,11 +232,7 @@ class DroidDeckApplication(QMainWindow):
         self._setup_controller_thread()
         self._apply_theme()
         self._center_main_window()
-
-        # Register for backend messages via the central dispatcher -
-        # messages arrive as parsed dicts, one json.loads per message
-        self.websocket.register_handler("telemetry", self._on_telemetry)
-        self.websocket.register_handler("failsafe_state", self._on_failsafe_state)
+        self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
     
     def _setup_controller_thread(self):
         """Initialize and start the Steam Deck controller thread with thread-safe WebSocket"""
@@ -320,6 +320,12 @@ class DroidDeckApplication(QMainWindow):
             self.websocket.send_command("get_failsafe_state")
             if hasattr(self, 'logger'):
                 self.logger.info("Requested failsafe state sync from backend")
+    
+    def _setup_memory_management(self):
+        """Setup periodic memory cleanup"""
+        self.memory_timer = QTimer()
+        self.memory_timer.timeout.connect(MemoryManager.periodic_cleanup)
+        self.memory_timer.start(30000)  # 30 seconds
  
     def _setup_navigation(self):
         """Setup navigation bar with screen buttons using themed icons"""
@@ -422,8 +428,8 @@ class DroidDeckApplication(QMainWindow):
         layout = QVBoxLayout()
         layout.setSpacing(0)
         
-        # Top spacing above the header
-        layout.addSpacing(75)
+        # CHANGE: Reduce top spacing to move header down by 5px
+        layout.addSpacing(75)  # Was 60, now 55 (5px less)
         
         # Header container
         header_container = QWidget()
@@ -437,8 +443,8 @@ class DroidDeckApplication(QMainWindow):
         layout.addWidget(self.stack)
         layout.addWidget(nav_frame)
         
-        # Bottom spacing below the navigation bar
-        layout.addSpacing(45)
+        # CHANGE: Reduce bottom spacing to move navigation up by 5px
+        layout.addSpacing(45)  # Was 35, now 30 (5px less)
         
         container = QWidget()
         container.setLayout(layout)
@@ -538,26 +544,29 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.setChecked(active)
         self.failsafe_button.blockSignals(False)
     
-    def _on_telemetry(self, data: dict):
-        """Update the header voltage display from telemetry messages"""
+    def _update_header_from_telemetry(self, message: str):
+        """Update header voltage from telemetry, and handle failsafe state sync"""
         try:
-            voltage = data.get("battery_voltage", 0.0)
-            if voltage > 0:
-                self.header.update_voltage(voltage)
+            import json
+            data = json.loads(message)
+            msg_type = data.get("type")
+
+            if msg_type == "telemetry":
+                voltage = data.get("battery_voltage", 0.0)
+                if voltage > 0:
+                    self.header.update_voltage(voltage)
+
+            elif msg_type == "failsafe_state":
+                # Backend is telling us the authoritative failsafe state -
+                # update the button without sending anything back
+                active = data.get("failsafe_active", True)
+                self._apply_failsafe_ui(active)
+                if hasattr(self, 'logger'):
+                    self.logger.info(f"Failsafe state synced from backend: {active}")
+
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Header update error: {e}")
-
-    def _on_failsafe_state(self, data: dict):
-        """Sync the failsafe button to the backend's authoritative state"""
-        try:
-            active = data.get("failsafe_active", True)
-            self._apply_failsafe_ui(active)
-            if hasattr(self, 'logger'):
-                self.logger.info(f"Failsafe state synced from backend: {active}")
-        except Exception as e:
-            if hasattr(self, 'logger'):
-                self.logger.error(f"Failsafe sync error: {e}")
     
     def closeEvent(self, event):
         """Handle application shutdown with shutdown splash"""
@@ -664,6 +673,10 @@ class DroidDeckApplication(QMainWindow):
         """Final resource cleanup"""
         # Unregister theme manager
         theme_manager.unregister_callback(self._apply_theme)
+        
+        # Stop timers
+        if hasattr(self, 'memory_timer'):
+            self.memory_timer.stop()
         
         # Final cleanup
         MemoryManager.cleanup_widgets(self)

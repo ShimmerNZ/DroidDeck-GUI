@@ -36,6 +36,11 @@ class MemoryManager:
                     child.deleteLater()
         gc.collect()
 
+    @staticmethod
+    def periodic_cleanup():
+        """Periodic memory cleanup, called on a timer while the app is running"""
+        gc.collect()
+
 
 class MediaPipeManager:
     """Manages MediaPipe initialization and state"""
