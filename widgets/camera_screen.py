@@ -1,13 +1,13 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-WALL-E Control System - Camera Feed Screen
-Video display, ESP32 camera settings, stream control, and gesture detection.
-All HTTP requests to the camera proxy run asynchronously so an unreachable
-proxy can never freeze the GUI.
+WALL-E Control System - Camera Feed Screen (Cleaned & Fixed)
+- Integrated with fixed image_processor.py
+- Removed code duplication and unnecessary complexity
+- Proper integration with updated ImageProcessingThread
+- Fixed settings debouncer with better error handling
 """
 import os
 import time
+import requests
 from collections import deque
 from typing import Dict, Any, Callable
 
@@ -22,107 +22,122 @@ from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
-from core.http_client import get_http_client
 from core.utils import error_boundary
 from core.logger import get_logger
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-# Minimum seconds between people updates sent to the backend (10 Hz)
-PEOPLE_SEND_INTERVAL = 0.1
-
 class CameraSettingsDebouncer:
     """
-    Debounces camera settings changes to prevent excessive HTTP requests.
+    FIXED: Debounces camera settings changes to prevent excessive HTTP requests.
     Collects multiple rapid changes and sends them as a single batch request.
     """
-    
+
     def __init__(self, proxy_base_url: str, delay_ms: int = 500):
         self.proxy_base_url = proxy_base_url
         self.delay_ms = delay_ms
         self.logger = get_logger("camera")
-        
+
         # Timer for debouncing
         self.debounce_timer = QTimer()
         self.debounce_timer.setSingleShot(True)
         self.debounce_timer.timeout.connect(self._send_batched_settings)
-        
+
         # Pending settings to send
         self.pending_settings: Dict[str, Any] = {}
-        
+
         # Status callback for UI updates
         self.status_callback: Callable[[str, str], None] = None
-    
+
     def set_status_callback(self, callback: Callable[[str, str], None]):
         """Set callback for status updates (message, color)"""
         self.status_callback = callback
-    
+
     def update_setting(self, key: str, value: Any):
         """Queue a setting change for debounced sending."""
         self.logger.debug(f"Queuing setting update: {key} = {value}")
-        
+
         # Add to pending settings
         self.pending_settings[key] = value
-        
+
         # Reset the debounce timer
         self.debounce_timer.stop()
         self.debounce_timer.start(self.delay_ms)
-        
+
         # Update status to show pending
         if self.status_callback:
             self.status_callback("Settings pending...", "#FFA500")  # Orange
-    
+
     def _send_batched_settings(self):
-        """Send all pending settings as a batch request (asynchronous)"""
+        """Send all pending settings as a batch request"""
         if not self.pending_settings:
             return
-        
+
         settings_to_send = self.pending_settings.copy()
         self.pending_settings.clear()
-        
+
         self.logger.info(f"Sending batched settings: {list(settings_to_send.keys())}")
-        
-        if self.status_callback:
-            self.status_callback("Updating settings...", "#0088FF")  # Blue
 
-        url = f"{self.proxy_base_url}/camera/settings"
-        get_http_client().post_json(url, settings_to_send,
-                                    self._on_settings_response, timeout_ms=10000)
-
-    def _on_settings_response(self, response):
-        """Handle the batched settings response on the GUI thread"""
-        if response.ok and response.json:
-            message = response.json.get("message", "Settings updated successfully")
+        try:
             if self.status_callback:
-                self.status_callback(message, "#00AA00")  # Green
-            self.logger.info(f"✅ {message}")
-        else:
-            if response.json and "message" in response.json:
-                error_message = response.json["message"]
-            elif response.error:
-                error_message = response.error
+                self.status_callback("Updating settings...", "#0088FF")  # Blue
+
+            url = f"{self.proxy_base_url}/camera/settings"
+            response = requests.post(
+                url,
+                json=settings_to_send,
+                timeout=10,
+                headers={'Content-Type': 'application/json'}
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                message = result.get("message", "Settings updated successfully")
+                if self.status_callback:
+                    self.status_callback(message, "#00AA00")  # Green
+                self.logger.info(f"✅ {message}")
+
             else:
-                error_message = f"HTTP {response.status}"
+                try:
+                    error_data = response.json()
+                    error_message = error_data.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_message = f"HTTP {response.status_code}"
 
+                if self.status_callback:
+                    self.status_callback(f"Update failed: {error_message}", "#FF0000")
+                self.logger.error(f"❌ Settings update failed: {error_message}")
+
+        except requests.exceptions.Timeout:
             if self.status_callback:
-                self.status_callback(f"Update failed: {error_message}", "#FF0000")
-            self.logger.error(f"❌ Settings update failed: {error_message}")
-    
+                self.status_callback("Update failed: Timeout", "#FF0000")
+            self.logger.error("❌ Settings update timeout")
+
+        except requests.exceptions.ConnectionError:
+            if self.status_callback:
+                self.status_callback("Update failed: Connection error", "#FF0000")
+            self.logger.error("❌ Settings update connection error")
+
+        except Exception as e:
+            if self.status_callback:
+                self.status_callback(f"Update failed: {str(e)}", "#FF0000")
+            self.logger.error(f"❌ Settings update error: {e}")
+
     def force_send_now(self):
         """Force immediate sending of pending settings"""
         self.debounce_timer.stop()
         self._send_batched_settings()
-    
+
     def clear_pending(self):
         """Clear all pending settings without sending"""
         self.pending_settings.clear()
         self.debounce_timer.stop()
         if self.status_callback:
             self.status_callback("Ready", "#888888")
-    
+
     def has_pending_changes(self):
         """Check if there are pending changes"""
         return len(self.pending_settings) > 0
-    
+
     def cleanup(self):
         """Cleanup debouncer resources"""
         self.debounce_timer.stop()
@@ -156,10 +171,9 @@ class CameraControlsWidget(QWidget):
         theme_manager.register_callback(self._on_theme_changed)
 
         self.init_ui()
-        self.initializing = False
-        # Load settings asynchronously; the ESP32 sync is chained from the
-        # load callback so it always runs against the values just loaded
         self.load_current_settings()
+        self.initializing = False
+        self._sync_loaded_settings_to_esp32()
 
     def _update_status_display(self, message: str, color: str):
         """Update status display with color"""
@@ -364,7 +378,7 @@ class CameraControlsWidget(QWidget):
 
     def _on_resolution_changed(self, index: int):
         """Handle resolution change - send immediately"""
-        if not self.initializing: 
+        if not self.initializing:
             self.settings_debouncer.update_setting("resolution", index)
             self.settings_debouncer.force_send_now()
 
@@ -442,8 +456,8 @@ class CameraControlsWidget(QWidget):
 
         # Connect slider to update value label and debounced setting
         slider.valueChanged.connect(lambda val: value_label.setText(str(val)))
-        slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val)) 
-        
+        slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val))
+
         layout.addWidget(label)
         layout.addWidget(slider)
         layout.addWidget(value_label)
@@ -535,124 +549,129 @@ class CameraControlsWidget(QWidget):
             self._update_panel_style()
             self._update_header_style()
             self._update_status_label_style()
-            
+
             # Update section headers
             if hasattr(self, 'esp32_header'):
                 self._update_section_header_style(self.esp32_header)
             if hasattr(self, 'actions_header'):
                 self._update_section_header_style(self.actions_header)
-                
+
             # Update all value labels (this is what's missing!)
             if hasattr(self, 'xclk_value_label'):
                 self._update_value_label_style(self.xclk_value_label)
-            
+
             # Update all slider value labels
             for setting_name, slider in getattr(self, 'sliders', {}).items():
                 # Find the associated value label - they should be stored during creation
                 if hasattr(self, f'{setting_name}_value_label'):
                     value_label = getattr(self, f'{setting_name}_value_label')
                     self._update_value_label_style(value_label)
-            
+
             # Update mirror buttons to use current theme colors instead of hardcoded yellow
             if hasattr(self, 'h_mirror_btn'):
                 self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
             if hasattr(self, 'v_flip_btn'):
                 self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
-                
+
             # Update combobox styling
             if hasattr(self, 'resolution_combo'):
                 self._update_combobox_style(self.resolution_combo)
-                
+
             # Update all sliders
             if hasattr(self, 'xclk_slider'):
                 self._update_slider_style(self.xclk_slider)
             for slider in getattr(self, 'sliders', {}).values():
                 self._update_slider_style(slider)
-                
+
         except Exception as e:
             self.logger.error(f"Error updating camera controls theme: {e}")
 
     @error_boundary
     def load_current_settings(self):
-        """Load current settings from camera proxy (asynchronous)"""
-        get_http_client().get(f"{self.proxy_base_url}/camera/settings",
-                              self._on_settings_loaded, timeout_ms=3000, owner=self)
-
-    def _on_settings_loaded(self, response):
-        """Apply loaded settings to the UI, then sync them back to the ESP32"""
-        if not response.ok or response.json is None:
-            self._update_status_display("Failed to load settings", "#FF4444")
-            self.logger.error(f"Failed to load camera settings: {response.error or response.status}")
-            return
-
-        settings = response.json
-        self.current_settings = settings
-
-        # Guard so applying loaded values doesn't bounce back through the
-        # debouncer as user changes
-        self.initializing = True
+        """Load current settings from camera proxy"""
         try:
-            if "resolution" in settings:
-                self.resolution_combo.setCurrentIndex(settings["resolution"])
-            if "quality" in settings and "quality" in self.sliders:
-                self.sliders["quality"].setValue(settings["quality"])
-            if "brightness" in settings and "brightness" in self.sliders:
-                self.sliders["brightness"].setValue(settings["brightness"])
-            if "contrast" in settings and "contrast" in self.sliders:
-                self.sliders["contrast"].setValue(settings["contrast"])
-            if "saturation" in settings and "saturation" in self.sliders:
-                self.sliders["saturation"].setValue(settings["saturation"])
-            if "h_mirror" in settings:
-                self.h_mirror_btn.setChecked(settings["h_mirror"])
-            if "xclk_freq" in settings:
-                self.xclk_slider.setValue(settings["xclk_freq"])
-            if "v_flip" in settings:
-                self.v_flip_btn.setChecked(settings["v_flip"])
-        finally:
-            self.initializing = False
+            response = requests.get(f"{self.proxy_base_url}/camera/settings", timeout=3)
+            if response.status_code == 200:
+                settings = response.json()
+                self.current_settings = settings
 
-        self._update_status_display("Settings loaded", "#44FF44")
-        self.logger.info("Loaded camera settings")
+                # Update UI controls
+                if "resolution" in settings:
+                    self.resolution_combo.setCurrentIndex(settings["resolution"])
+                if "quality" in settings and "quality" in self.sliders:
+                    self.sliders["quality"].setValue(settings["quality"])
+                if "brightness" in settings and "brightness" in self.sliders:
+                    self.sliders["brightness"].setValue(settings["brightness"])
+                if "contrast" in settings and "contrast" in self.sliders:
+                    self.sliders["contrast"].setValue(settings["contrast"])
+                if "saturation" in settings and "saturation" in self.sliders:
+                    self.sliders["saturation"].setValue(settings["saturation"])
+                if "h_mirror" in settings:
+                    self.h_mirror_btn.setChecked(settings["h_mirror"])
+                if "xclk_freq" in settings:
+                    self.xclk_slider.setValue(settings["xclk_freq"])
+                if "v_flip" in settings:
+                    self.v_flip_btn.setChecked(settings["v_flip"])
 
-        self._sync_loaded_settings_to_esp32()
+                self._update_status_display("Settings loaded", "#44FF44")
+                self.logger.info("Loaded camera settings")
+        except Exception as e:
+            self._update_status_display("Failed to load settings", "#FF4444")
+            self.logger.error(f"Failed to load camera settings: {e}")
 
     def _sync_loaded_settings_to_esp32(self):
         """
-        After loading settings from the proxy, send them back to the ESP32 so
-        both ends hold the same values (asynchronous).
+        ADDED: After loading settings from ESP32, send them back to ensure synchronization.
+        This replicates the old behavior where settings were sent on initialization.
         """
         if not self.current_settings:
             self.logger.warning("No current settings to sync to ESP32")
             return
 
-        self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
+        try:
+            self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
 
-        url = f"{self.proxy_base_url}/camera/settings"
-        get_http_client().post_json(url, self.current_settings,
-                                    self._on_sync_response, timeout_ms=5000, owner=self)
+            # Send the current settings back to ESP32 to ensure sync
+            url = f"{self.proxy_base_url}/camera/settings"
+            response = requests.post(
+                url,
+                json=self.current_settings,
+                timeout=5,
+                headers={'Content-Type': 'application/json'}
+            )
 
-    def _on_sync_response(self, response):
-        """Handle the ESP32 sync response"""
-        if response.ok and response.json:
-            message = response.json.get("message", "Settings synchronized")
-            self._update_status_display(message, "#00AA00")  # Green
-            self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
-        else:
-            if response.json and "message" in response.json:
-                error_message = response.json["message"]
-            elif response.error:
-                error_message = response.error
+            if response.status_code == 200:
+                result = response.json()
+                message = result.get("message", "Settings synchronized")
+                self._update_status_display(message, "#00AA00")  # Green
+                self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
             else:
-                error_message = f"HTTP {response.status}"
+                try:
+                    error_data = response.json()
+                    error_message = error_data.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_message = f"HTTP {response.status_code}"
 
-            self._update_status_display(f"Sync failed: {error_message[:30]}", "#FF0000")
-            self.logger.error(f"Settings sync failed: {error_message}")
+                self._update_status_display(f"Sync failed: {error_message}", "#FF0000")
+                self.logger.error(f"Settings sync failed: {error_message}")
+
+        except requests.exceptions.Timeout:
+            self._update_status_display("Sync failed: Timeout", "#FF0000")
+            self.logger.error("Settings sync timeout")
+
+        except requests.exceptions.ConnectionError:
+            self._update_status_display("Sync failed: Connection error", "#FF0000")
+            self.logger.error("Settings sync connection error")
+
+        except Exception as e:
+            self._update_status_display(f"Sync error: {str(e)[:20]}", "#FF0000")
+            self.logger.error(f"Settings sync error: {e}")
 
     @error_boundary
     def reset_to_defaults(self):
         """Reset all settings to default values"""
         self.settings_debouncer.clear_pending()
-        
+
         defaults = {
             "xclk_freq": 16, "resolution": 5, "quality": 12,
             "brightness": 0, "contrast": 0, "saturation": 0,
@@ -669,21 +688,21 @@ class CameraControlsWidget(QWidget):
         self.h_mirror_btn.setChecked(defaults["h_mirror"])
         self.v_flip_btn.setChecked(defaults["v_flip"])
 
-        # Send defaults immediately (asynchronous)
-        self._update_status_display("Resetting to defaults...", "#FFAA00")
-
-        def _on_reset_response(response):
-            if response.ok:
+        # Send defaults immediately
+        try:
+            self._update_status_display("Resetting to defaults...", "#FFAA00")
+            response = requests.post(f"{self.proxy_base_url}/camera/settings", json=defaults, timeout=3)
+            if response.status_code == 200:
                 self._update_status_display("Reset to defaults", "#44FF44")
                 self.current_settings = defaults
                 self.settings_debouncer.clear_pending()
                 self.logger.info("Reset camera settings to defaults")
             else:
                 self._update_status_display("Reset failed", "#FF4444")
-                self.logger.error(f"Reset failed: {response.error or f'HTTP {response.status}'}")
-
-        get_http_client().post_json(f"{self.proxy_base_url}/camera/settings", defaults,
-                                    _on_reset_response, timeout_ms=3000, owner=self)
+                self.logger.error(f"Reset failed: HTTP {response.status_code}")
+        except Exception as e:
+            self._update_status_display(f"Error: {str(e)[:20]}", "#FF4444")
+            self.logger.error(f"Failed to reset to defaults: {e}")
 
     def cleanup(self):
         """Clean up debouncer on widget destruction"""
@@ -702,7 +721,7 @@ class CameraControlsWidget(QWidget):
 
 
 class CameraFeedScreen(BaseScreen):
-    """Camera screen with live video display, proxy control, and gesture detection"""
+    """FIXED: Camera screen with proper image processor integration"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -719,7 +738,6 @@ class CameraFeedScreen(BaseScreen):
         }
         self.last_gesture_time = 0
         self.last_sample_time = 0
-        self.last_people_send_time = 0.0
 
         self.tracking_enabled = False
         self.streaming_enabled = False
@@ -730,22 +748,24 @@ class CameraFeedScreen(BaseScreen):
 
         self.logger.info(f"Camera proxy URL: {camera_proxy_url}")
 
-        # Image processing runs in its own thread; frames arrive via signal
+        # FIXED: Use updated ImageProcessingThread with proper integration
         self.image_thread = ImageProcessingThread(camera_proxy_url)
         self.image_thread.frame_processed.connect(self.update_display)
         self.image_thread.stats_updated.connect(self.update_stats)
 
-        # The backend reports which person it is focused on so the overlay can highlight them
-        register_handler = getattr(self.websocket, "register_handler", None)
-        if register_handler:
-            register_handler("attention_state", self._on_attention_state)
-
         # Build UI
         self.init_ui()
 
-        # Start processing and check initial status
+        # FIXED: Start processing and check initial status
         self.image_thread.start_processing()
         self.check_stream_status()
+
+        # Re-check whenever the backend connection is (re)established - a
+        # backend restart resets the camera proxy's own state (stream
+        # stopped, fresh process), so the cached button state here would
+        # otherwise go stale until manually toggled.
+        if self.websocket is not None:
+            self.websocket.connected.connect(self.check_stream_status)
 
     def init_ui(self):
         # Video display
@@ -844,23 +864,23 @@ class CameraFeedScreen(BaseScreen):
         """Get current status of gesture detection buffers (for debugging)"""
         if not hasattr(self, 'sample_buffers'):
             return "Gesture detection not initialized"
-        
+
         status = {}
         wave_config = config_manager.get_wave_config()
         current_time = time.time()
-        
+
         # Shared stand-down status
         time_since_last = current_time - self.last_gesture_time
         in_standdown = time_since_last < wave_config['stand_down_time']
         standdown_remaining = max(0, wave_config['stand_down_time'] - time_since_last)
-        
+
         status['shared_standdown'] = {
             'active': in_standdown,
             'time_since_last_gesture': f"{time_since_last:.1f}s",
             'remaining_time': f"{standdown_remaining:.1f}s" if in_standdown else "Ready",
             'standdown_period': f"{wave_config['stand_down_time']}s"
         }
-        
+
         # Individual gesture buffer status
         status['gestures'] = {}
         for gesture_type, buffer in self.sample_buffers.items():
@@ -874,11 +894,11 @@ class CameraFeedScreen(BaseScreen):
                 }
             else:
                 status['gestures'][gesture_type] = {
-                    'buffer_length': 0, 
+                    'buffer_length': 0,
                     'confidence': '0%',
                     'ready_to_trigger': False
                 }
-        
+
         return status
 
     def setup_layout(self):
@@ -926,29 +946,29 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def toggle_stream(self, checked):
-        """Toggle camera stream and notify the proxy (asynchronous)"""
+        """FIXED: Toggle camera stream with proper image processor integration"""
         self.streaming_enabled = checked
-        
+
         if self.streaming_enabled:
             self.logger.info("Starting camera stream")
             self.stats_label.setText("Stream Stats: Starting stream...")
-            
-            # Tell image processor to start connecting
+
+            # FIXED: Tell image processor to start connecting
             if hasattr(self, 'image_thread'):
                 self.image_thread.start_connecting()
-            
+
             # Send start command to proxy
-            if self.camera_proxy_base_url:
-                def _on_start_response(response):
-                    if response.ok:
+            try:
+                if self.camera_proxy_base_url:
+                    response = requests.post(f"{self.camera_proxy_base_url}/stream/start", timeout=3)
+                    if response.status_code == 200:
                         self.logger.info("Stream start command sent to proxy")
                         self.tracking_button.setEnabled(True)
                     else:
-                        self.logger.warning(f"Stream start failed: {response.error or f'HTTP {response.status}'}")
-                        self.stats_label.setText("Stream Error: proxy unreachable")
-
-                get_http_client().post(f"{self.camera_proxy_base_url}/stream/start",
-                                       _on_start_response, timeout_ms=3000, owner=self)
+                        self.logger.warning(f"Stream start failed: HTTP {response.status_code}")
+            except Exception as e:
+                self.logger.error(f"Failed to start stream: {e}")
+                self.stats_label.setText(f"Stream Error: {str(e)[:50]}")
         else:
             self.logger.info("Stopping camera stream")
             self.stats_label.setText("Stream Stats: Stopping stream...")
@@ -959,61 +979,60 @@ class CameraFeedScreen(BaseScreen):
                 self.toggle_tracking(False)
             self.tracking_button.setEnabled(False)
 
-            # Tell image processor to stop connecting
+            # FIXED: Tell image processor to stop connecting
             if hasattr(self, 'image_thread'):
                 self.image_thread.stop_connecting()
 
             # Send stop command to proxy
-            if self.camera_proxy_base_url:
-                def _on_stop_response(response):
-                    if response.ok:
+            try:
+                if self.camera_proxy_base_url:
+                    response = requests.post(f"{self.camera_proxy_base_url}/stream/stop", timeout=3)
+                    if response.status_code == 200:
                         self.logger.info("Stream stop command sent to proxy")
                     else:
-                        self.logger.warning(f"Stream stop failed: {response.error or f'HTTP {response.status}'}")
-
-                get_http_client().post(f"{self.camera_proxy_base_url}/stream/stop",
-                                       _on_stop_response, timeout_ms=3000, owner=self)
+                        self.logger.warning(f"Stream stop failed: HTTP {response.status_code}")
+            except Exception as e:
+                self.logger.error(f"Failed to stop stream: {e}")
 
         self.update_stream_button_appearance()
 
     @error_boundary
     def check_stream_status(self):
-        """Check camera proxy stream status and sync UI (asynchronous)"""
-        if not self.camera_proxy_base_url:
-            return
+        """Check camera proxy stream status and sync UI"""
+        try:
+            if not self.camera_proxy_base_url:
+                return
 
-        get_http_client().get(f"{self.camera_proxy_base_url}/stream/status",
-                              self._on_stream_status, timeout_ms=2000, owner=self)
+            response = requests.get(f"{self.camera_proxy_base_url}/stream/status", timeout=2)
+            if response.status_code == 200:
+                status = response.json()
+                is_streaming = status.get("streaming_enabled", False)
+                is_active = status.get("stream_active", False)
 
-    def _on_stream_status(self, response):
-        """Apply stream status response to the UI"""
-        if not response.ok or response.json is None:
-            self.logger.warning(f"Stream status check failed: {response.error or f'HTTP {response.status}'}")
-            return
+                self.logger.info(f"Stream status: enabled={is_streaming}, active={is_active}")
 
-        status = response.json
-        is_streaming = status.get("streaming_enabled", False)
-        is_active = status.get("stream_active", False)
+                if is_streaming != self.streaming_enabled:
+                    self.streaming_enabled = is_streaming
+                    self.stream_button.setChecked(is_streaming)
+                    self.update_stream_button_appearance()
+                    self.tracking_button.setEnabled(is_streaming)
 
-        self.logger.info(f"Stream status: enabled={is_streaming}, active={is_active}")
+                if is_streaming and is_active:
+                    self.stats_label.setText("Stream Stats: Stream active")
+                    # FIXED: Tell image processor to start if proxy is active
+                    if hasattr(self, 'image_thread'):
+                        self.image_thread.start_connecting()
+                else:
+                    self.stats_label.setText("Stream Stats: Stream inactive")
 
-        if is_streaming != self.streaming_enabled:
-            self.streaming_enabled = is_streaming
-            self.stream_button.setChecked(is_streaming)
-            self.update_stream_button_appearance()
-            self.tracking_button.setEnabled(is_streaming)
-
-        if is_streaming and is_active:
-            self.stats_label.setText("Stream Stats: Stream active")
-            # Tell image processor to start if proxy is active
-            if hasattr(self, 'image_thread'):
-                self.image_thread.start_connecting()
-        else:
-            self.stats_label.setText("Stream Stats: Stream inactive")
+            else:
+                self.logger.warning(f"Stream status check failed: HTTP {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Stream status check error: {e}")
 
     @error_boundary
     def update_display(self, processed_data):
-        """Update display with processed frame data supporting multiple gestures"""
+        """ENHANCED: Update display with processed frame data supporting multiple gestures"""
         try:
             if processed_data is None:
                 self.video_label.setText("No frame data")
@@ -1029,10 +1048,6 @@ class CameraFeedScreen(BaseScreen):
             # Handle gesture detection if tracking enabled
             if self.tracking_enabled and gesture_detected:
                 self._handle_gesture_detection(gesture_detected)
-
-            # Report who is in view to the backend for attention behaviour
-            if self.tracking_enabled and processed_data.people is not None:
-                self._send_people(processed_data.people)
 
             # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
@@ -1050,29 +1065,14 @@ class CameraFeedScreen(BaseScreen):
             self.video_label.setText(f"Display Error:\n{str(e)}")
 
 
-    def _on_attention_state(self, message):
-        """Pass the backend attention state to the image processor for the overlay"""
-        if hasattr(self, 'image_thread'):
-            self.image_thread.set_attention_state(message.get("state"), message.get("focus_id"))
-
-    def _send_people(self, people):
-        """Send the tracked people to the backend at a limited rate.
-        An empty list is sent too, so the backend can tell 'nobody in view'
-        apart from 'no updates'."""
-        now = time.monotonic()
-        if now - self.last_people_send_time < PEOPLE_SEND_INTERVAL:
-            return
-        self.last_people_send_time = now
-        self.send_websocket_message("people", people=people)
-
     def update_stats(self, stats_dict):
-        """Update statistics display"""
+        """FIXED: Update statistics display with better formatting"""
         try:
             if isinstance(stats_dict, dict):
                 fps = stats_dict.get('fps', 0)
                 frame_count = stats_dict.get('frame_count', 0)
                 running = stats_dict.get('running', False)
-                
+
                 if running:
                     self.stats_label.setText(f"Stream Stats: {fps:.1f} FPS, {frame_count} frames")
                 else:
@@ -1085,42 +1085,42 @@ class CameraFeedScreen(BaseScreen):
 
     def _handle_gesture_detection(self, gesture_type):
         """
-        Handle multiple gesture types with confidence buffering
+        ENHANCED: Handle multiple gesture types with confidence buffering
         Uses SHARED stand-down timer for all gestures to prevent being too busy
         gesture_type: "left_wave", "right_wave", or "hands_up"
         """
         wave_config = config_manager.get_wave_config()
         current_time = time.time()
-        
-        # Sample rate limiting
+
+        # Sample rate limiting - FIXED: More strict timing
         if current_time - self.last_sample_time < 1.0 / wave_config["sample_rate"]:
             return  # Don't process if we're sampling too fast
-        
+
         self.last_sample_time = current_time
-        
+
         # Add detection to the appropriate buffer
         self.sample_buffers[gesture_type].append(True)
-        
+
         # Check confidence for the detected gesture ONLY if buffer is full
         buffer = self.sample_buffers[gesture_type]
         if len(buffer) == buffer.maxlen:  # Wait for FULL buffer (3 seconds)
             confidence = sum(buffer) / len(buffer)
-            
+
             self.logger.debug(f"{gesture_type} buffer full: {confidence:.2%} confidence (need {wave_config['confidence_threshold']:.2%})")
-            
+
             if confidence >= wave_config["confidence_threshold"]:
                 # Check SHARED stand-down time for ALL gestures
                 if current_time - self.last_gesture_time >= wave_config["stand_down_time"]:
                     # Send the appropriate gesture message
                     self.send_websocket_message("gesture", name=gesture_type)
-                    
+
                     # Update the SHARED gesture timer (prevents any gesture for stand-down period)
                     self.last_gesture_time = current_time
-                    
+
                     # Clear ALL buffers to prevent other gestures from triggering immediately
                     for gesture in self.sample_buffers:
                         self.sample_buffers[gesture].clear()
-                    
+
                     # Log the detection
                     gesture_name = gesture_type.replace("_", " ").title()
                     self.logger.info(f"{gesture_name} gesture detected and sent! (Confidence: {confidence:.2%})")
@@ -1131,13 +1131,13 @@ class CameraFeedScreen(BaseScreen):
 
     @error_boundary
     def toggle_tracking(self, checked=None):
-        """Toggle gesture tracking and inform the image processor"""
+        """FIXED: Toggle tracking with proper image processor integration"""
         if checked is not None:
             self.tracking_enabled = checked
         else:
             self.tracking_enabled = self.tracking_button.isChecked()
 
-        # Tell image processor about tracking state
+        # FIXED: Tell image processor about tracking state
         if hasattr(self, 'image_thread'):
             self.image_thread.set_tracking_enabled(self.tracking_enabled)
 
@@ -1152,13 +1152,9 @@ class CameraFeedScreen(BaseScreen):
 
     def cleanup(self):
         """Cleanup camera screen resources"""
-        unregister_handler = getattr(self.websocket, "unregister_handler", None)
-        if unregister_handler:
-            unregister_handler("attention_state", self._on_attention_state)
-
         if hasattr(self, 'image_thread'):
             self.image_thread.stop_processing()
-        
+
         if hasattr(self, 'controls_widget'):
             self.controls_widget.cleanup()
 
