@@ -27,6 +27,9 @@ from core.utils import error_boundary
 from core.logger import get_logger
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# Minimum seconds between people updates sent to the backend (10 Hz)
+PEOPLE_SEND_INTERVAL = 0.1
+
 class CameraSettingsDebouncer:
     """
     Debounces camera settings changes to prevent excessive HTTP requests.
@@ -716,6 +719,7 @@ class CameraFeedScreen(BaseScreen):
         }
         self.last_gesture_time = 0
         self.last_sample_time = 0
+        self.last_people_send_time = 0.0
 
         self.tracking_enabled = False
         self.streaming_enabled = False
@@ -730,6 +734,11 @@ class CameraFeedScreen(BaseScreen):
         self.image_thread = ImageProcessingThread(camera_proxy_url)
         self.image_thread.frame_processed.connect(self.update_display)
         self.image_thread.stats_updated.connect(self.update_stats)
+
+        # The backend reports which person it is focused on so the overlay can highlight them
+        register_handler = getattr(self.websocket, "register_handler", None)
+        if register_handler:
+            register_handler("attention_state", self._on_attention_state)
 
         # Build UI
         self.init_ui()
@@ -1021,6 +1030,10 @@ class CameraFeedScreen(BaseScreen):
             if self.tracking_enabled and gesture_detected:
                 self._handle_gesture_detection(gesture_detected)
 
+            # Report who is in view to the backend for attention behaviour
+            if self.tracking_enabled and processed_data.people is not None:
+                self._send_people(processed_data.people)
+
             # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
             bytes_per_line = 3 * width
@@ -1036,6 +1049,21 @@ class CameraFeedScreen(BaseScreen):
             self.logger.error(f"Display update error: {e}")
             self.video_label.setText(f"Display Error:\n{str(e)}")
 
+
+    def _on_attention_state(self, message):
+        """Pass the backend attention state to the image processor for the overlay"""
+        if hasattr(self, 'image_thread'):
+            self.image_thread.set_attention_state(message.get("state"), message.get("focus_id"))
+
+    def _send_people(self, people):
+        """Send the tracked people to the backend at a limited rate.
+        An empty list is sent too, so the backend can tell 'nobody in view'
+        apart from 'no updates'."""
+        now = time.monotonic()
+        if now - self.last_people_send_time < PEOPLE_SEND_INTERVAL:
+            return
+        self.last_people_send_time = now
+        self.send_websocket_message("people", people=people)
 
     def update_stats(self, stats_dict):
         """Update statistics display"""
@@ -1124,6 +1152,10 @@ class CameraFeedScreen(BaseScreen):
 
     def cleanup(self):
         """Cleanup camera screen resources"""
+        unregister_handler = getattr(self.websocket, "unregister_handler", None)
+        if unregister_handler:
+            unregister_handler("attention_state", self._on_attention_state)
+
         if hasattr(self, 'image_thread'):
             self.image_thread.stop_processing()
         

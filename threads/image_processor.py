@@ -13,13 +13,21 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger
 from core.utils import error_boundary
+from threads.person_tracker import PersonTracker
+
+# Overlay colours are RGB, matching the frame buffer
+PERSON_BOX_COLOR = (230, 230, 230)
+FOCUS_BOX_COLOR = (255, 190, 0)
+ATTENTION_STATE_TIMEOUT = 5.0
+
 
 class ProcessedFrameData:
     """Container for processed frame data"""
-    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None):
+    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None, people=None):
         self.frame = frame
         self.gesture_detected = gesture_detected  # None, "left_wave", "right_wave", or "hands_up"
         self.pose_landmarks = pose_landmarks
+        self.people = people  # None when face detection is unavailable, else a list of tracked people
 
 class ImageProcessingThread(QThread):
     """Thread for processing camera stream with enhanced gesture detection"""
@@ -47,6 +55,23 @@ class ImageProcessingThread(QThread):
         self.pose_detection_available = False
         self._mediapipe_load_attempted = False
 
+        # Face detection feeds the person tracker used for attention behaviour
+        self.face_detector = None
+        self.face_detection_available = False
+        self.person_tracker = PersonTracker()
+        self._tracker_reset_pending = False
+
+        # Attention state reported by the backend, used to highlight the focused person
+        self._attention_state = None
+        self._attention_focus_id = None
+        self._attention_updated_at = 0.0
+
+    def set_attention_state(self, state, focus_id):
+        """Record the backend attention state for the overlay"""
+        self._attention_state = state
+        self._attention_focus_id = focus_id
+        self._attention_updated_at = time.monotonic()
+
     def start_processing(self):
         """Start the image processing thread"""
         if not self.running:
@@ -69,6 +94,8 @@ class ImageProcessingThread(QThread):
         self.tracking_enabled = enabled
         if enabled and not self._mediapipe_load_attempted:
             self._load_mediapipe()
+        if not enabled:
+            self._tracker_reset_pending = True
         self.logger.info(f"Gesture tracking {'enabled' if enabled else 'disabled'}")
 
     def _load_mediapipe(self):
@@ -90,8 +117,21 @@ class ImageProcessingThread(QThread):
             self.logger.info("MediaPipe pose detection initialised")
         except ImportError:
             self.logger.warning("MediaPipe not available - pose detection disabled")
+            return
         except Exception as e:
             self.logger.error(f"Failed to initialise MediaPipe: {e}")
+            return
+
+        try:
+            # model_selection=1 is the full-range model, suited to people up to ~5m away
+            self.face_detector = mp.solutions.face_detection.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.5
+            )
+            self.face_detection_available = True
+            self.logger.info("MediaPipe face detection initialised")
+        except Exception as e:
+            self.logger.error(f"Failed to initialise face detection: {e}")
 
     def run(self):
         """Main thread loop"""
@@ -267,7 +307,8 @@ class ImageProcessingThread(QThread):
             
             gesture_detected = None
             pose_landmarks = None
-            
+            people = self._detect_people(frame_rgb) if self.tracking_enabled else None
+
             # Gesture detection if available and tracking enabled
             if self.pose_detection_available and self.pose and self.tracking_enabled:
                 try:
@@ -301,15 +342,78 @@ class ImageProcessingThread(QThread):
                 except Exception as e:
                     self.logger.debug(f"Pose detection error: {e}")
             
+            if people is not None:
+                self._draw_people_overlay(frame_rgb, people)
+
             return ProcessedFrameData(
                 frame=frame_rgb,
                 gesture_detected=gesture_detected,
-                pose_landmarks=pose_landmarks
+                pose_landmarks=pose_landmarks,
+                people=people
             )
-            
+
         except Exception as e:
             self.logger.error(f"Frame processing error: {e}")
             return None
+
+    def _draw_people_overlay(self, frame_rgb, people):
+        """Draw a box and id for each tracked person, highlighting the focused one,
+        and show the attention state along the bottom edge."""
+        try:
+            height, width = frame_rgb.shape[:2]
+            state_fresh = (time.monotonic() - self._attention_updated_at) < ATTENTION_STATE_TIMEOUT
+            focus_id = self._attention_focus_id if state_fresh else None
+
+            for person in people:
+                focused = person["id"] == focus_id
+                color = FOCUS_BOX_COLOR if focused else PERSON_BOX_COLOR
+                thickness = 3 if focused else 1
+
+                half_w = person["w"] * width / 2.0
+                half_h = person["h"] * height / 2.0
+                x1 = int(person["cx"] * width - half_w)
+                y1 = int(person["cy"] * height - half_h)
+                x2 = int(person["cx"] * width + half_w)
+                y2 = int(person["cy"] * height + half_h)
+                cv2.rectangle(frame_rgb, (x1, y1), (x2, y2), color, thickness)
+
+                label = f"#{person['id']}"
+                label_y = y1 - 6 if y1 > 22 else y2 + 18
+                cv2.putText(frame_rgb, label, (x1, label_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            if state_fresh and self._attention_state and self._attention_state.upper() != "OFF":
+                cv2.putText(frame_rgb, self._attention_state.upper(), (10, height - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_BOX_COLOR, 2)
+        except Exception as e:
+            self.logger.debug(f"People overlay error: {e}")
+
+    def _detect_people(self, frame_rgb):
+        """Detect faces and return the tracked people as a list of dicts.
+        Returns None when face detection is unavailable so callers can tell
+        'nobody in view' (empty list) apart from 'not looking'."""
+        if not (self.face_detection_available and self.face_detector):
+            return None
+
+        if self._tracker_reset_pending:
+            self.person_tracker.reset()
+            self._tracker_reset_pending = False
+
+        try:
+            results = self.face_detector.process(frame_rgb)
+        except Exception as e:
+            self.logger.debug(f"Face detection error: {e}")
+            return None
+
+        detections = []
+        for detection in (results.detections or []):
+            box = detection.location_data.relative_bounding_box
+            cx = min(1.0, max(0.0, box.xmin + box.width / 2.0))
+            cy = min(1.0, max(0.0, box.ymin + box.height / 2.0))
+            score = detection.score[0] if detection.score else 0.0
+            detections.append((cx, cy, box.width, box.height, score))
+
+        return self.person_tracker.update(detections, time.monotonic())
 
     def _detect_gestures(self, landmarks):
         """

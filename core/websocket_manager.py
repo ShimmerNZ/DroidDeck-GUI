@@ -47,6 +47,7 @@ class WebSocketManager(QWebSocket):
         "steamdeck_controller",
         "controller_input",
         "frontend_controller",
+        "people",
     }
 
     def __init__(self, url: str, parent=None):
