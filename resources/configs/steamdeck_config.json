@@ -1,6 +1,6 @@
 {
   "current": {
-    "esp32_cam_url": "http://10.1.1.211:81/stream",
+    "esp32_cam_url": "http://10.43.0.80:81/stream",
     "camera_proxy_url": "http://10.1.1.236:8081/stream",
     "control_websocket_url": "ws://10.1.1.236:8766",
     "debug_level": "ERROR",
@@ -22,7 +22,7 @@
       "confidence_threshold": 0.7,
       "stand_down_time": 20
     },
-    "volume": 40
+    "volume": 10
   },
   "defaults": {
     "esp32_cam_url": "http://192.168.1.100:81/stream",

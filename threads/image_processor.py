@@ -271,6 +271,17 @@ class ImageProcessingThread(QThread):
                     jpeg_data = bytes_buffer[start_idx:end_idx + 2]
                     bytes_buffer = bytes_buffer[end_idx + 2:]
 
+                    # Discard this frame instead of processing it if a newer,
+                    # complete frame is already queued behind it. Without this,
+                    # a slow consumer (tracking enabled) falls further and
+                    # further behind over time instead of catching back up -
+                    # each processed frame gets staler, which is worse than
+                    # skipping frames for anything driven off frame position
+                    # (e.g. centering/tracking).
+                    next_start = bytes_buffer.find(b'\xff\xd8')
+                    if next_start != -1 and bytes_buffer.find(b'\xff\xd9', next_start) != -1:
+                        continue
+
                     # Process JPEG frame
                     if self._process_jpeg_frame(jpeg_data):
                         frame_count_local += 1
