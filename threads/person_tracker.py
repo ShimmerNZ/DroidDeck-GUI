@@ -49,10 +49,12 @@ class PersonTracker:
         at its last known position, so a single missed detection does not make
         the person appear to vanish
       - a track is kept for max_missed seconds so a person who reappears
-        briefly keeps the same ID
+        briefly keeps the same ID. This is longer than the backend's
+        lost_grace (2.0s), so someone who reappears before the backend gives
+        up on them is still recognised as the same person
     """
 
-    def __init__(self, max_missed: float = 1.5, report_grace: float = 0.4,
+    def __init__(self, max_missed: float = 2.5, report_grace: float = 0.4,
                  min_hits: int = 2, max_match_distance: float = 1.0):
         self.max_missed = max_missed
         self.report_grace = report_grace

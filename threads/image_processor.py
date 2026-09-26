@@ -29,6 +29,12 @@ MAX_TRACKED_PEOPLE = 4
 MIN_LANDMARK_VISIBILITY = 0.5
 # A pose needs at least this many visible landmarks to count as a person at all
 MIN_VISIBLE_LANDMARKS = 4
+# Elbow, wrist and hand landmarks (MediaPipe pose indices 13-22) are left out
+# of a person's bounding box: raised or outstretched arms would otherwise
+# drag the box edges, and the point the head aims at, toward the hands, and
+# hand landmarks flicker across the visibility cut-off far more than the
+# head, torso and legs do
+BOX_EXCLUDED_LANDMARKS = frozenset(range(13, 23))
 
 
 class ProcessedFrameData:
@@ -41,10 +47,10 @@ class ProcessedFrameData:
 
 class ImageProcessingThread(QThread):
     """Thread for processing camera stream with enhanced gesture detection"""
-    
+
     frame_processed = pyqtSignal(ProcessedFrameData)
     stats_updated = pyqtSignal(dict)
-    
+
     def __init__(self, camera_url):
         super().__init__()
         self.logger = get_logger("camera")
@@ -54,9 +60,9 @@ class ImageProcessingThread(QThread):
         self.frame_count = 0
         self.last_stats_time = time.time()
         self.tracking_enabled = False
-        
+
         self.logger.info(f"ImageProcessingThread initialized with URL: {camera_url}")
-        
+
         # MediaPipe state - initialised lazily when tracking is first enabled
         # so startup is fast and MediaPipe is not required for basic streaming
         self.mp_pose = None
@@ -170,7 +176,7 @@ class ImageProcessingThread(QThread):
         """Main thread loop"""
         reconnect_delay = 1
         max_reconnect_delay = 30
-        
+
         while self.running:
             if self.should_connect:
                 success = self._connect_to_stream()
@@ -200,7 +206,7 @@ class ImageProcessingThread(QThread):
                 return False
 
             self.logger.info(f"Connecting to camera stream: {self.camera_url}")
-            
+
             # Use requests with stream=True for MJPEG
             session = requests.Session()
             session.headers.update({
@@ -208,23 +214,23 @@ class ImageProcessingThread(QThread):
                 'Accept': 'multipart/x-mixed-replace',
                 'Connection': 'keep-alive'
             })
-            
+
             response = session.get(
                 self.camera_url,
                 stream=True,
                 timeout=10,
                 allow_redirects=True
             )
-            
+
             if response.status_code != 200:
                 self.logger.error(f"HTTP {response.status_code} from camera stream")
                 return False
-            
+
             self.logger.info("Connected to MJPEG stream, processing frames...")
-            
+
             # Process MJPEG stream
             return self._process_mjpeg_stream(response)
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.warning(f"Stream connection error: {e}")
             return False
@@ -239,37 +245,37 @@ class ImageProcessingThread(QThread):
             frame_count_local = 0
             last_frame_time = time.time()
             last_stats_time = time.time()
-            
+
             self.logger.info("Starting MJPEG frame processing...")
-            
+
             for chunk in response.iter_content(chunk_size=8192):
                 if not self.running or not self.should_connect:
                     self.logger.info("MJPEG processing stopped by request")
                     break
-                
+
                 bytes_buffer.extend(chunk)
-                
+
                 # Look for JPEG frames in the buffer
                 while True:
                     # Find JPEG start marker
                     start_idx = bytes_buffer.find(b'\xff\xd8')
                     if start_idx == -1:
                         break
-                    
+
                     # Find JPEG end marker
                     end_idx = bytes_buffer.find(b'\xff\xd9', start_idx)
                     if end_idx == -1:
                         break
-                    
+
                     # Extract JPEG frame
                     jpeg_data = bytes_buffer[start_idx:end_idx + 2]
                     bytes_buffer = bytes_buffer[end_idx + 2:]
-                    
+
                     # Process JPEG frame
                     if self._process_jpeg_frame(jpeg_data):
                         frame_count_local += 1
                         current_time = time.time()
-                        
+
                         # Emit stats every second
                         if current_time - last_stats_time >= 1.0:
                             fps = frame_count_local / (current_time - last_stats_time)
@@ -280,16 +286,16 @@ class ImageProcessingThread(QThread):
                             })
                             frame_count_local = 0
                             last_stats_time = current_time
-                        
+
                         # Limit frame rate to ~30 FPS
                         frame_delay = 1.0 / 30.0
                         elapsed = current_time - last_frame_time
                         if elapsed < frame_delay:
                             time.sleep(frame_delay - elapsed)
                         last_frame_time = time.time()
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"MJPEG stream processing error: {e}")
             return False
@@ -301,26 +307,26 @@ class ImageProcessingThread(QThread):
             # Decode JPEG
             nparr = np.frombuffer(jpeg_data, np.uint8)
             frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
+
             if frame_bgr is None:
                 return False
-            
+
             # Convert BGR to RGB for processing
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            
+
             # Process frame for gestures
             processed_data = self._process_frame(frame_rgb)
-            
+
             # Emit the processed frame
             if processed_data:
                 self.frame_processed.emit(processed_data)
                 self.frame_count += 1
                 self.logger.debug(f"Processed frame {self.frame_count}: {frame_rgb.shape}")
                 return True
-            
+
         except Exception as e:
             self.logger.debug(f"JPEG frame processing error: {e}")
-        
+
         return False
 
     @error_boundary
@@ -329,7 +335,7 @@ class ImageProcessingThread(QThread):
         try:
             if frame_rgb is None:
                 return None
-            
+
             # Resize frame if too large (for performance)
             height, width = frame_rgb.shape[:2]
             if width > 800:
@@ -337,7 +343,7 @@ class ImageProcessingThread(QThread):
                 new_width = int(width * scale)
                 new_height = int(height * scale)
                 frame_rgb = cv2.resize(frame_rgb, (new_width, new_height))
-            
+
             gesture_detected = None
             pose_landmarks = None
             people = self._detect_people(frame_rgb) if self.tracking_enabled else None
@@ -347,34 +353,34 @@ class ImageProcessingThread(QThread):
                 try:
                     # MediaPipe expects RGB, and we already have RGB
                     results = self.pose.process(frame_rgb)
-                    
+
                     if results.pose_landmarks:
                         pose_landmarks = results.pose_landmarks
-                        
+
                         # Draw pose landmarks on frame (convert to BGR for drawing, then back to RGB)
                         frame_bgr_for_drawing = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                         self.mp_drawing.draw_landmarks(
-                            frame_bgr_for_drawing, 
-                            results.pose_landmarks, 
+                            frame_bgr_for_drawing,
+                            results.pose_landmarks,
                             self.mp_pose.POSE_CONNECTIONS
                         )
                         frame_rgb = cv2.cvtColor(frame_bgr_for_drawing, cv2.COLOR_BGR2RGB)
-                        
+
                         # Enhanced gesture detection
                         gesture_detected = self._detect_gestures(results.pose_landmarks.landmark)
-                        
+
                         # Draw gesture indicator if detected
                         if gesture_detected:
                             frame_bgr_for_text = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                             gesture_text = gesture_detected.replace("_", " ").upper() + " DETECTED!"
                             color = (0, 255, 0) if gesture_detected != "hands_up" else (255, 165, 0)  # Green for waves, orange for hands up
-                            cv2.putText(frame_bgr_for_text, gesture_text, (10, 30), 
+                            cv2.putText(frame_bgr_for_text, gesture_text, (10, 30),
                                       cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                             frame_rgb = cv2.cvtColor(frame_bgr_for_text, cv2.COLOR_BGR2RGB)
-                
+
                 except Exception as e:
                     self.logger.debug(f"Pose detection error: {e}")
-            
+
             if people is not None:
                 self._draw_people_overlay(frame_rgb, people)
 
@@ -446,7 +452,9 @@ class ImageProcessingThread(QThread):
 
         detections = []
         for landmarks in result.pose_landmarks:
-            visible = [lm for lm in landmarks if lm.visibility >= MIN_LANDMARK_VISIBILITY]
+            visible = [lm for index, lm in enumerate(landmarks)
+                       if index not in BOX_EXCLUDED_LANDMARKS
+                       and lm.visibility >= MIN_LANDMARK_VISIBILITY]
             if len(visible) < MIN_VISIBLE_LANDMARKS:
                 continue
 
@@ -473,14 +481,14 @@ class ImageProcessingThread(QThread):
             left_wrist = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST]
             left_elbow = landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW]
             left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
-            
+
             right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
             right_elbow = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
             right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
-            
+
             # Check visibility thresholds
             visibility_threshold = 0.5
-            
+
             # Check if left arm is raised (waving position)
             left_arm_raised = (
                 left_wrist.y < left_elbow.y < left_shoulder.y and
@@ -488,15 +496,15 @@ class ImageProcessingThread(QThread):
                 left_elbow.visibility > visibility_threshold and
                 left_shoulder.visibility > visibility_threshold
             )
-            
-            # Check if right arm is raised (waving position) 
+
+            # Check if right arm is raised (waving position)
             right_arm_raised = (
                 right_wrist.y < right_elbow.y < right_shoulder.y and
                 right_wrist.visibility > visibility_threshold and
                 right_elbow.visibility > visibility_threshold and
                 right_shoulder.visibility > visibility_threshold
             )
-            
+
             # Determine gesture type based on arm positions
             if left_arm_raised and right_arm_raised:
                 return "hands_up"
@@ -506,7 +514,7 @@ class ImageProcessingThread(QThread):
                 return "left_wave"
             else:
                 return None
-                
+
         except Exception as e:
             self.logger.debug(f"Gesture detection error: {e}")
             return None
