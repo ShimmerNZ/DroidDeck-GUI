@@ -9,14 +9,14 @@ proxy can never freeze the GUI.
 import os
 import time
 from collections import deque
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
     QCheckBox, QWidget, QSizePolicy
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread
@@ -127,6 +127,19 @@ class CameraSettingsDebouncer:
         """Cleanup debouncer resources"""
         self.debounce_timer.stop()
         self.pending_settings.clear()
+
+
+class ClickableVideoLabel(QLabel):
+    """QLabel that reports where it was clicked, in its own local pixel
+    coordinates. Used to let the person tap a tracked person's box in the
+    camera view to manually select who the robot should focus on."""
+
+    clicked = pyqtSignal(QPoint)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(event.position().toPoint())
+        super().mousePressEvent(event)
 
 
 class CameraControlsWidget(QWidget):
@@ -724,6 +737,12 @@ class CameraFeedScreen(BaseScreen):
         self.tracking_enabled = False
         self.streaming_enabled = False
 
+        # Most recent tracked-people list and the frame size it was measured
+        # against, kept so a click on the video can be mapped back to a
+        # person's box and sent to the backend as a manual selection
+        self._last_people: List[Dict[str, float]] = []
+        self._last_frame_size: Optional[Tuple[int, int]] = None
+
         # Camera URLs
         camera_proxy_url = wave_config.get("camera_proxy_url", "")
         self.camera_proxy_base_url = camera_proxy_url.replace("/stream", "") if camera_proxy_url else ""
@@ -756,11 +775,12 @@ class CameraFeedScreen(BaseScreen):
 
     def init_ui(self):
         # Video display
-        self.video_label = QLabel()
+        self.video_label = ClickableVideoLabel()
         self.video_label.setFixedSize(640, 480)
         self._update_video_label_style()
         self.video_label.setText("Connecting to camera...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_label.clicked.connect(self._on_video_clicked)
 
         # Stats display
         self.stats_label = QLabel("Stream Stats: Initializing...")
@@ -1037,12 +1057,16 @@ class CameraFeedScreen(BaseScreen):
             if self.tracking_enabled and gesture_detected:
                 self._handle_gesture_detection(gesture_detected)
 
-            # Report who is in view to the backend for attention behaviour
+            # Report who is in view to the backend for attention behaviour,
+            # and cache the list so a click on the video can be matched
+            # against it
             if self.tracking_enabled and processed_data.people is not None:
+                self._last_people = processed_data.people
                 self._send_people(processed_data.people)
 
             # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
+            self._last_frame_size = (width, height)
             bytes_per_line = 3 * width
             q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
             pixmap = QPixmap.fromImage(q_img).scaled(
@@ -1056,6 +1080,51 @@ class CameraFeedScreen(BaseScreen):
             self.logger.error(f"Display update error: {e}")
             self.video_label.setText(f"Display Error:\n{str(e)}")
 
+    def _on_video_clicked(self, click_pos: QPoint):
+        """Map a click on the video to a tracked person's box, and tell the
+        backend to lock attention onto them. Clicking outside every box
+        clears the manual selection and returns to automatic picking."""
+        if not self.tracking_enabled or not self._last_people or not self._last_frame_size:
+            return
+
+        frame_w, frame_h = self._last_frame_size
+        if frame_w <= 0 or frame_h <= 0:
+            return
+
+        label_w = self.video_label.width()
+        label_h = self.video_label.height()
+
+        # Match the Qt.AspectRatioMode.KeepAspectRatio scaling used to build
+        # the displayed pixmap, so the click can be mapped back through the
+        # same letterboxing (the label centres a smaller pixmap within it)
+        scale = min(label_w / frame_w, label_h / frame_h)
+        disp_w = frame_w * scale
+        disp_h = frame_h * scale
+        offset_x = (label_w - disp_w) / 2.0
+        offset_y = (label_h - disp_h) / 2.0
+
+        x = click_pos.x() - offset_x
+        y = click_pos.y() - offset_y
+        if x < 0 or y < 0 or x > disp_w or y > disp_h:
+            return  # clicked in the letterbox padding, not on the frame itself
+
+        norm_x = x / disp_w
+        norm_y = y / disp_h
+
+        selected_id = None
+        for person in self._last_people:
+            half_w = max(person.get("w", 0.1), 0.02) / 2.0
+            half_h = max(person.get("h", 0.1), 0.02) / 2.0
+            if (person["cx"] - half_w <= norm_x <= person["cx"] + half_w and
+                    person["cy"] - half_h <= norm_y <= person["cy"] + half_h):
+                selected_id = person["id"]
+                break
+
+        self.send_websocket_message("select_person", id=selected_id)
+        if selected_id is not None:
+            self.logger.info(f"Manually selected person {selected_id}")
+        else:
+            self.logger.info("Cleared manual person selection")
 
     def _on_attention_state(self, message):
         """Pass the backend attention state to the image processor for the overlay"""
@@ -1147,6 +1216,10 @@ class CameraFeedScreen(BaseScreen):
         # Tell image processor about tracking state
         if hasattr(self, 'image_thread'):
             self.image_thread.set_tracking_enabled(self.tracking_enabled)
+
+        if not self.tracking_enabled:
+            # Stop reporting stale boxes to clicks once tracking is off
+            self._last_people = []
 
         if self.tracking_enabled:
             self.tracking_button.setToolTip("Gesture Detection: ENABLED\n(Left Wave, Right Wave, Hands Up)\nClick to disable")
