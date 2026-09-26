@@ -36,6 +36,9 @@ MIN_VISIBLE_LANDMARKS = 4
 # hand landmarks flicker across the visibility cut-off far more than the
 # head, torso and legs do
 BOX_EXCLUDED_LANDMARKS = frozenset(range(13, 23))
+# The single-person gesture model runs on 1 in this many frames; the frames in
+# between reuse its last result. Multi-person detection still runs every frame.
+GESTURE_DETECTION_INTERVAL = 4
 
 
 def _read_mjpeg_part(raw):
@@ -108,6 +111,11 @@ class ImageProcessingThread(QThread):
         self._mediapipe_load_attempted = False
         self._mp_module = None
 
+        # Last gesture model result, reused on frames where the model is skipped
+        self._gesture_frame_counter = 0
+        self._last_gesture_landmarks = None
+        self._last_gesture = None
+
         # Multi-pose body detection feeds the person tracker used for
         # attention behaviour - separate from self.pose above, which is a
         # single-person model used only for gesture detection
@@ -152,6 +160,9 @@ class ImageProcessingThread(QThread):
             self._load_mediapipe()
         if not enabled:
             self._tracker_reset_pending = True
+            self._gesture_frame_counter = 0
+            self._last_gesture_landmarks = None
+            self._last_gesture = None
         self.logger.info(f"Gesture tracking {'enabled' if enabled else 'disabled'}")
 
     def _load_mediapipe(self):
@@ -417,23 +428,32 @@ class ImageProcessingThread(QThread):
             # Gesture detection if available and tracking enabled
             if self.pose_detection_available and self.pose and self.tracking_enabled:
                 try:
-                    # MediaPipe expects RGB, and we already have RGB
-                    results = self.pose.process(frame_rgb)
+                    # Run the gesture model on 1 in GESTURE_DETECTION_INTERVAL
+                    # frames and reuse its last result on the frames between,
+                    # so gestures are still reported on every frame
+                    if self._gesture_frame_counter % GESTURE_DETECTION_INTERVAL == 0:
+                        # MediaPipe expects RGB, and we already have RGB
+                        results = self.pose.process(frame_rgb)
+                        self._last_gesture_landmarks = results.pose_landmarks
+                        self._last_gesture = (
+                            self._detect_gestures(results.pose_landmarks.landmark)
+                            if results.pose_landmarks else None
+                        )
+                    self._gesture_frame_counter += 1
 
-                    if results.pose_landmarks:
-                        pose_landmarks = results.pose_landmarks
+                    if self._last_gesture_landmarks:
+                        pose_landmarks = self._last_gesture_landmarks
 
                         # Draw pose landmarks on frame (convert to BGR for drawing, then back to RGB)
                         frame_bgr_for_drawing = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                         self.mp_drawing.draw_landmarks(
                             frame_bgr_for_drawing,
-                            results.pose_landmarks,
+                            pose_landmarks,
                             self.mp_pose.POSE_CONNECTIONS
                         )
                         frame_rgb = cv2.cvtColor(frame_bgr_for_drawing, cv2.COLOR_BGR2RGB)
 
-                        # Enhanced gesture detection
-                        gesture_detected = self._detect_gestures(results.pose_landmarks.landmark)
+                        gesture_detected = self._last_gesture
 
                         # Draw gesture indicator if detected
                         if gesture_detected:
