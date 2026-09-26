@@ -8,6 +8,7 @@ has no startup cost and does not require MediaPipe to be installed.
 
 import cv2
 import time
+import threading
 import requests
 import numpy as np
 from pathlib import Path
@@ -35,6 +36,41 @@ MIN_VISIBLE_LANDMARKS = 4
 # hand landmarks flicker across the visibility cut-off far more than the
 # head, torso and legs do
 BOX_EXCLUDED_LANDMARKS = frozenset(range(13, 23))
+
+
+def _read_mjpeg_part(raw):
+    """
+    Read the next part of a multipart MJPEG stream and return its JPEG bytes,
+    or None when the stream ends.
+
+    Parts are read by their Content-Length so each frame is returned as soon
+    as it has fully arrived. Reading fixed-size chunks instead blocks until
+    the chunk is full, which holds frames back and hands several over at once.
+    """
+    content_length = None
+    while True:
+        line = raw.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            if content_length is not None:
+                break
+            continue
+        name, _, value = line.partition(b':')
+        if name.strip().lower() == b'content-length':
+            try:
+                content_length = int(value.strip())
+            except ValueError:
+                content_length = None
+
+    data = bytearray()
+    while len(data) < content_length:
+        chunk = raw.read(content_length - len(data))
+        if not chunk:
+            return None
+        data.extend(chunk)
+    return bytes(data)
 
 
 class ProcessedFrameData:
@@ -239,77 +275,96 @@ class ImageProcessingThread(QThread):
             return False
 
     def _process_mjpeg_stream(self, response):
-        """Process MJPEG stream from requests response"""
+        """
+        Process an MJPEG stream from a requests response.
+
+        A reader thread drains the stream continuously and keeps only the
+        newest frame; this thread processes whichever frame is newest each
+        time it is ready for another. When processing is slower than the
+        frame rate (e.g. with tracking enabled) frames are skipped rather
+        than queued, so the display never falls behind the live feed.
+        """
+        latest = {'jpeg': None}
+        frame_lock = threading.Lock()
+        frame_ready = threading.Event()
+        reader_done = threading.Event()
+        reader_failed = threading.Event()
+
+        def read_frames():
+            try:
+                while self.running and self.should_connect:
+                    jpeg_data = _read_mjpeg_part(response.raw)
+                    if jpeg_data is None:
+                        break
+                    with frame_lock:
+                        latest['jpeg'] = jpeg_data
+                    frame_ready.set()
+            except Exception as e:
+                if self.running and self.should_connect:
+                    self.logger.warning(f"MJPEG read error: {e}")
+                    reader_failed.set()
+            finally:
+                reader_done.set()
+                frame_ready.set()
+
+        reader_thread = threading.Thread(target=read_frames, daemon=True)
+        reader_thread.start()
+
         try:
-            bytes_buffer = bytearray()
             frame_count_local = 0
             last_frame_time = time.time()
             last_stats_time = time.time()
 
             self.logger.info("Starting MJPEG frame processing...")
 
-            for chunk in response.iter_content(chunk_size=8192):
+            while True:
                 if not self.running or not self.should_connect:
                     self.logger.info("MJPEG processing stopped by request")
                     break
 
-                bytes_buffer.extend(chunk)
+                frame_ready.wait(timeout=0.5)
+                frame_ready.clear()
 
-                # Look for JPEG frames in the buffer
-                while True:
-                    # Find JPEG start marker
-                    start_idx = bytes_buffer.find(b'\xff\xd8')
-                    if start_idx == -1:
+                with frame_lock:
+                    jpeg_data = latest['jpeg']
+                    latest['jpeg'] = None
+
+                if jpeg_data is None:
+                    if reader_done.is_set():
                         break
+                    continue
 
-                    # Find JPEG end marker
-                    end_idx = bytes_buffer.find(b'\xff\xd9', start_idx)
-                    if end_idx == -1:
-                        break
+                if self._process_jpeg_frame(jpeg_data):
+                    frame_count_local += 1
+                    current_time = time.time()
 
-                    # Extract JPEG frame
-                    jpeg_data = bytes_buffer[start_idx:end_idx + 2]
-                    bytes_buffer = bytes_buffer[end_idx + 2:]
+                    # Emit stats every second
+                    if current_time - last_stats_time >= 1.0:
+                        fps = frame_count_local / (current_time - last_stats_time)
+                        self.stats_updated.emit({
+                            'fps': fps,
+                            'frame_count': self.frame_count,
+                            'running': True
+                        })
+                        frame_count_local = 0
+                        last_stats_time = current_time
 
-                    # Discard this frame instead of processing it if a newer,
-                    # complete frame is already queued behind it. Without this,
-                    # a slow consumer (tracking enabled) falls further and
-                    # further behind over time instead of catching back up -
-                    # each processed frame gets staler, which is worse than
-                    # skipping frames for anything driven off frame position
-                    # (e.g. centering/tracking).
-                    next_start = bytes_buffer.find(b'\xff\xd8')
-                    if next_start != -1 and bytes_buffer.find(b'\xff\xd9', next_start) != -1:
-                        continue
+                    # Limit frame rate to ~30 FPS
+                    frame_delay = 1.0 / 30.0
+                    elapsed = current_time - last_frame_time
+                    if elapsed < frame_delay:
+                        time.sleep(frame_delay - elapsed)
+                    last_frame_time = time.time()
 
-                    # Process JPEG frame
-                    if self._process_jpeg_frame(jpeg_data):
-                        frame_count_local += 1
-                        current_time = time.time()
-
-                        # Emit stats every second
-                        if current_time - last_stats_time >= 1.0:
-                            fps = frame_count_local / (current_time - last_stats_time)
-                            self.stats_updated.emit({
-                                'fps': fps,
-                                'frame_count': self.frame_count,
-                                'running': True
-                            })
-                            frame_count_local = 0
-                            last_stats_time = current_time
-
-                        # Limit frame rate to ~30 FPS
-                        frame_delay = 1.0 / 30.0
-                        elapsed = current_time - last_frame_time
-                        if elapsed < frame_delay:
-                            time.sleep(frame_delay - elapsed)
-                        last_frame_time = time.time()
-
-            return True
+            return not reader_failed.is_set()
 
         except Exception as e:
             self.logger.error(f"MJPEG stream processing error: {e}")
             return False
+
+        finally:
+            response.close()
+            reader_thread.join(timeout=2)
 
     @error_boundary
     def _process_jpeg_frame(self, jpeg_data):
