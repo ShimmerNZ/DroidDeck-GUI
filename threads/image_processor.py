@@ -10,6 +10,7 @@ import cv2
 import time
 import requests
 import numpy as np
+from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger
 from core.utils import error_boundary
@@ -20,6 +21,15 @@ PERSON_BOX_COLOR = (230, 230, 230)
 FOCUS_BOX_COLOR = (255, 190, 0)
 ATTENTION_STATE_TIMEOUT = 5.0
 
+# Person/body detection (separate from the single-person gesture pose below):
+# a multi-pose MediaPipe Tasks model, tracking up to this many people at once
+POSE_LANDMARKER_MODEL_FILENAME = "pose_landmarker_lite.task"
+MAX_TRACKED_PEOPLE = 4
+# A landmark counts toward a person's bounding box only above this visibility
+MIN_LANDMARK_VISIBILITY = 0.5
+# A pose needs at least this many visible landmarks to count as a person at all
+MIN_VISIBLE_LANDMARKS = 4
+
 
 class ProcessedFrameData:
     """Container for processed frame data"""
@@ -27,7 +37,7 @@ class ProcessedFrameData:
         self.frame = frame
         self.gesture_detected = gesture_detected  # None, "left_wave", "right_wave", or "hands_up"
         self.pose_landmarks = pose_landmarks
-        self.people = people  # None when face detection is unavailable, else a list of tracked people
+        self.people = people  # None when person detection is unavailable, else a list of tracked people
 
 class ImageProcessingThread(QThread):
     """Thread for processing camera stream with enhanced gesture detection"""
@@ -54,12 +64,16 @@ class ImageProcessingThread(QThread):
         self.mp_drawing = None
         self.pose_detection_available = False
         self._mediapipe_load_attempted = False
+        self._mp_module = None
 
-        # Face detection feeds the person tracker used for attention behaviour
-        self.face_detector = None
-        self.face_detection_available = False
+        # Multi-pose body detection feeds the person tracker used for
+        # attention behaviour - separate from self.pose above, which is a
+        # single-person model used only for gesture detection
+        self.person_landmarker = None
+        self.people_detection_available = False
         self.person_tracker = PersonTracker()
         self._tracker_reset_pending = False
+        self._pose_timestamp_ms = 0
 
         # Attention state reported by the backend, used to highlight the focused person
         self._attention_state = None
@@ -104,6 +118,7 @@ class ImageProcessingThread(QThread):
         self._mediapipe_load_attempted = True
         try:
             import mediapipe as mp
+            self._mp_module = mp
             self.mp_pose = mp.solutions.pose
             self.pose = self.mp_pose.Pose(
                 static_image_mode=False,
@@ -123,15 +138,33 @@ class ImageProcessingThread(QThread):
             return
 
         try:
-            # model_selection=1 is the full-range model, suited to people up to ~5m away
-            self.face_detector = mp.solutions.face_detection.FaceDetection(
-                model_selection=1,
-                min_detection_confidence=0.5
+            from mediapipe.tasks.python import BaseOptions
+            from mediapipe.tasks.python.vision import (
+                PoseLandmarker, PoseLandmarkerOptions, RunningMode
             )
-            self.face_detection_available = True
-            self.logger.info("MediaPipe face detection initialised")
+
+            model_path = Path(__file__).resolve().parent.parent / "resources" / "models" / POSE_LANDMARKER_MODEL_FILENAME
+            if not model_path.exists():
+                self.logger.error(
+                    f"Pose landmarker model not found at {model_path} - download "
+                    f"{POSE_LANDMARKER_MODEL_FILENAME} from the MediaPipe model zoo "
+                    "and place it there to enable person tracking"
+                )
+                return
+
+            options = PoseLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=str(model_path)),
+                running_mode=RunningMode.VIDEO,
+                num_poses=MAX_TRACKED_PEOPLE,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self.person_landmarker = PoseLandmarker.create_from_options(options)
+            self.people_detection_available = True
+            self.logger.info(f"MediaPipe multi-pose person detection initialised (max {MAX_TRACKED_PEOPLE})")
         except Exception as e:
-            self.logger.error(f"Failed to initialise face detection: {e}")
+            self.logger.error(f"Failed to initialise person detection: {e}")
 
     def run(self):
         """Main thread loop"""
@@ -389,10 +422,10 @@ class ImageProcessingThread(QThread):
             self.logger.debug(f"People overlay error: {e}")
 
     def _detect_people(self, frame_rgb):
-        """Detect faces and return the tracked people as a list of dicts.
-        Returns None when face detection is unavailable so callers can tell
+        """Detect bodies and return the tracked people as a list of dicts.
+        Returns None when person detection is unavailable so callers can tell
         'nobody in view' (empty list) apart from 'not looking'."""
-        if not (self.face_detection_available and self.face_detector):
+        if not (self.people_detection_available and self.person_landmarker):
             return None
 
         if self._tracker_reset_pending:
@@ -400,18 +433,33 @@ class ImageProcessingThread(QThread):
             self._tracker_reset_pending = False
 
         try:
-            results = self.face_detector.process(frame_rgb)
+            mp_image = self._mp_module.Image(
+                image_format=self._mp_module.ImageFormat.SRGB, data=frame_rgb
+            )
+            # Tasks API requires strictly increasing timestamps in VIDEO mode
+            timestamp_ms = max(int(time.monotonic() * 1000), self._pose_timestamp_ms + 1)
+            self._pose_timestamp_ms = timestamp_ms
+            result = self.person_landmarker.detect_for_video(mp_image, timestamp_ms)
         except Exception as e:
-            self.logger.debug(f"Face detection error: {e}")
+            self.logger.debug(f"Person detection error: {e}")
             return None
 
         detections = []
-        for detection in (results.detections or []):
-            box = detection.location_data.relative_bounding_box
-            cx = min(1.0, max(0.0, box.xmin + box.width / 2.0))
-            cy = min(1.0, max(0.0, box.ymin + box.height / 2.0))
-            score = detection.score[0] if detection.score else 0.0
-            detections.append((cx, cy, box.width, box.height, score))
+        for landmarks in result.pose_landmarks:
+            visible = [lm for lm in landmarks if lm.visibility >= MIN_LANDMARK_VISIBILITY]
+            if len(visible) < MIN_VISIBLE_LANDMARKS:
+                continue
+
+            xs = [lm.x for lm in visible]
+            ys = [lm.y for lm in visible]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            cx = min(1.0, max(0.0, (x_min + x_max) / 2.0))
+            cy = min(1.0, max(0.0, (y_min + y_max) / 2.0))
+            box_w = min(1.0, x_max - x_min)
+            box_h = min(1.0, y_max - y_min)
+            score = sum(lm.visibility for lm in visible) / len(visible)
+            detections.append((cx, cy, box_w, box_h, score))
 
         return self.person_tracker.update(detections, time.monotonic())
 
