@@ -1062,8 +1062,7 @@ class CameraFeedScreen(BaseScreen):
             # against it
             if self.tracking_enabled and processed_data.people is not None:
                 self._last_people = processed_data.people
-                self._send_people(processed_data.people, processed_data.frame_time,
-                                  processed_data.received_at)
+                self._send_people(processed_data.people)
 
             # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
@@ -1132,23 +1131,15 @@ class CameraFeedScreen(BaseScreen):
         if hasattr(self, 'image_thread'):
             self.image_thread.set_attention_state(message.get("state"), message.get("focus_id"))
 
-    def _send_people(self, people, frame_time=None, received_at=None):
+    def _send_people(self, people):
         """Send the tracked people to the backend at a limited rate.
         An empty list is sent too, so the backend can tell 'nobody in view'
-        apart from 'no updates'. When the frame carries the proxy's frame
-        time it is passed on, with how long this side held the frame, so the
-        backend can measure how old a reading is when it arrives."""
+        apart from 'no updates'."""
         now = time.monotonic()
         if now - self.last_people_send_time < PEOPLE_SEND_INTERVAL:
             return
         self.last_people_send_time = now
-
-        timing = {}
-        if frame_time is not None:
-            timing["frame_time"] = frame_time
-            if received_at is not None:
-                timing["deck_ms"] = round((now - received_at) * 1000.0, 1)
-        self.send_websocket_message("people", people=people, **timing)
+        self.send_websocket_message("people", people=people)
 
     def update_stats(self, stats_dict):
         """Update statistics display"""
