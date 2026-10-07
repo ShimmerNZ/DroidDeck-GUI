@@ -43,14 +43,17 @@ GESTURE_DETECTION_INTERVAL = 4
 
 def _read_mjpeg_part(raw):
     """
-    Read the next part of a multipart MJPEG stream and return its JPEG bytes,
-    or None when the stream ends.
+    Read the next part of a multipart MJPEG stream and return its JPEG bytes
+    and the proxy's frame time (the monotonic time the proxy received the
+    frame, or None when the stream does not provide one), or None when the
+    stream ends.
 
     Parts are read by their Content-Length so each frame is returned as soon
     as it has fully arrived. Reading fixed-size chunks instead blocks until
     the chunk is full, which holds frames back and hands several over at once.
     """
     content_length = None
+    frame_time = None
     while True:
         line = raw.readline()
         if not line:
@@ -61,11 +64,17 @@ def _read_mjpeg_part(raw):
                 break
             continue
         name, _, value = line.partition(b':')
-        if name.strip().lower() == b'content-length':
+        name = name.strip().lower()
+        if name == b'content-length':
             try:
                 content_length = int(value.strip())
             except ValueError:
                 content_length = None
+        elif name == b'x-frame-time':
+            try:
+                frame_time = float(value.strip())
+            except ValueError:
+                frame_time = None
 
     data = bytearray()
     while len(data) < content_length:
@@ -73,16 +82,19 @@ def _read_mjpeg_part(raw):
         if not chunk:
             return None
         data.extend(chunk)
-    return bytes(data)
+    return bytes(data), frame_time
 
 
 class ProcessedFrameData:
     """Container for processed frame data"""
-    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None, people=None):
+    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None, people=None,
+                 frame_time=None, received_at=None):
         self.frame = frame
         self.gesture_detected = gesture_detected  # None, "left_wave", "right_wave", or "hands_up"
         self.pose_landmarks = pose_landmarks
         self.people = people  # None when person detection is unavailable, else a list of tracked people
+        self.frame_time = frame_time  # The proxy's time for the frame, or None when the stream has none
+        self.received_at = received_at  # When this machine finished reading the frame (its own monotonic clock)
 
 class ImageProcessingThread(QThread):
     """Thread for processing camera stream with enhanced gesture detection"""
@@ -295,7 +307,7 @@ class ImageProcessingThread(QThread):
         frame rate (e.g. with tracking enabled) frames are skipped rather
         than queued, so the display never falls behind the live feed.
         """
-        latest = {'jpeg': None}
+        latest = {'jpeg': None, 'frame_time': None, 'received_at': None}
         frame_lock = threading.Lock()
         frame_ready = threading.Event()
         reader_done = threading.Event()
@@ -304,11 +316,13 @@ class ImageProcessingThread(QThread):
         def read_frames():
             try:
                 while self.running and self.should_connect:
-                    jpeg_data = _read_mjpeg_part(response.raw)
-                    if jpeg_data is None:
+                    part = _read_mjpeg_part(response.raw)
+                    if part is None:
                         break
+                    received_at = time.monotonic()
                     with frame_lock:
-                        latest['jpeg'] = jpeg_data
+                        latest['jpeg'], latest['frame_time'] = part
+                        latest['received_at'] = received_at
                     frame_ready.set()
             except Exception as e:
                 if self.running and self.should_connect:
@@ -338,6 +352,8 @@ class ImageProcessingThread(QThread):
 
                 with frame_lock:
                     jpeg_data = latest['jpeg']
+                    frame_time = latest['frame_time']
+                    received_at = latest['received_at']
                     latest['jpeg'] = None
 
                 if jpeg_data is None:
@@ -345,7 +361,7 @@ class ImageProcessingThread(QThread):
                         break
                     continue
 
-                if self._process_jpeg_frame(jpeg_data):
+                if self._process_jpeg_frame(jpeg_data, frame_time, received_at):
                     frame_count_local += 1
                     current_time = time.time()
 
@@ -378,7 +394,7 @@ class ImageProcessingThread(QThread):
             reader_thread.join(timeout=2)
 
     @error_boundary
-    def _process_jpeg_frame(self, jpeg_data):
+    def _process_jpeg_frame(self, jpeg_data, frame_time=None, received_at=None):
         """Process a single JPEG frame"""
         try:
             # Decode JPEG
@@ -392,7 +408,7 @@ class ImageProcessingThread(QThread):
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
             # Process frame for gestures
-            processed_data = self._process_frame(frame_rgb)
+            processed_data = self._process_frame(frame_rgb, frame_time, received_at)
 
             # Emit the processed frame
             if processed_data:
@@ -407,7 +423,7 @@ class ImageProcessingThread(QThread):
         return False
 
     @error_boundary
-    def _process_frame(self, frame_rgb):
+    def _process_frame(self, frame_rgb, frame_time=None, received_at=None):
         """Process a single frame with enhanced gesture detection"""
         try:
             if frame_rgb is None:
@@ -474,7 +490,9 @@ class ImageProcessingThread(QThread):
                 frame=frame_rgb,
                 gesture_detected=gesture_detected,
                 pose_landmarks=pose_landmarks,
-                people=people
+                people=people,
+                frame_time=frame_time,
+                received_at=received_at
             )
 
         except Exception as e:
