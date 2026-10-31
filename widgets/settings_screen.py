@@ -4,6 +4,7 @@ Settings Screen (Themed)
 import requests
 import socket
 import time
+import atexit
 import os
 import sys
 import zipfile
@@ -1641,8 +1642,46 @@ class SettingsScreen(BaseScreen):
 
         self.update_thread = UpdateThread(branch=branch)
         self.update_thread.progress_updated.connect(self._on_update_progress)
-        self.update_thread.update_completed.connect(self._on_update_complete)
+        self.update_thread.update_completed.connect(self._on_gui_update_complete)
         self.update_thread.start()
+
+    def _on_gui_update_complete(self, success: bool, message: str):
+        """Handle GUI update completion; offer to restart the app after a successful update"""
+        if not success:
+            self._on_update_complete(False, message)
+            return
+
+        if hasattr(self, 'update_progress'):
+            self.update_progress.close()
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Update Complete")
+        box.setText("The update was installed. DroidDeck needs to restart to use it.")
+        restart_btn = box.addButton("Restart Now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is restart_btn:
+            self._restart_application()
+
+    def _restart_application(self):
+        """Close the app normally, then relaunch the same command in place once shutdown finishes"""
+        argv = [sys.executable] + list(getattr(sys, "orig_argv", [sys.executable] + sys.argv)[1:])
+
+        def relaunch():
+            try:
+                os.execv(sys.executable, argv)
+            except Exception as e:
+                print(f"Restart failed, please start DroidDeck manually: {e}")
+
+        atexit.register(relaunch)
+        self.logger.info("Restarting application after update")
+        window = self.window()
+        if window is not None:
+            window.close()
+        else:
+            QApplication.quit()
 
     def check_for_server_updates(self):
         """Trigger a backend server update from GitHub"""
