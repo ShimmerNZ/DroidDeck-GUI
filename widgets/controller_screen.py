@@ -354,7 +354,12 @@ class DifferentialTracksHandler(BehaviorHandler):
                 left_speed, right_speed = self._calculate_differential_steering(0.0, forward_input)
             else:
                 return False
-            
+
+            if config.get('invert_left', False):
+                left_speed = -left_speed
+            if config.get('invert_right', False):
+                right_speed = -right_speed
+
             left_pulse = 1500 + int(left_speed * 500)
             right_pulse = 1500 + int(right_speed * 500)
             
@@ -2371,7 +2376,21 @@ class ControllerConfigScreen(BaseScreen):
             lambda text: self._update_row_config(row_data, 'right_servo', text)
         )
         self._add_param_row("Right Track:", right_servo_combo)
-        
+
+        invert_left_checkbox = QCheckBox("Invert Left Track")
+        invert_left_checkbox.setChecked(row_data['config'].get('invert_left', False))
+        invert_left_checkbox.toggled.connect(
+            lambda checked: self._set_tracks_invert(row_data, 'invert_left', checked)
+        )
+        self._add_param_row("", invert_left_checkbox)
+
+        invert_right_checkbox = QCheckBox("Invert Right Track")
+        invert_right_checkbox.setChecked(row_data['config'].get('invert_right', False))
+        invert_right_checkbox.toggled.connect(
+            lambda checked: self._set_tracks_invert(row_data, 'invert_right', checked)
+        )
+        self._add_param_row("", invert_right_checkbox)
+
         sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
         sensitivity_slider.setMinimum(1)
         sensitivity_slider.setMaximum(200) 
@@ -2728,6 +2747,24 @@ class ControllerConfigScreen(BaseScreen):
         widget.setStyleSheet(self._get_param_widget_style())
         self.params_layout.addWidget(widget)
         self.params_layout.addSpacing(6)
+
+    def _set_tracks_invert(self, row_data: Dict, key: str, checked: bool):
+        """Apply a track invert flag to every differential_tracks row driving the same
+        left/right channels, so the X and Y axis mappings always agree on motor polarity"""
+        self._update_row_config(row_data, key, checked)
+
+        left = row_data['config'].get('left_servo')
+        right = row_data['config'].get('right_servo')
+        if not left or not right:
+            return
+
+        for other in self.mapping_rows:
+            if other is row_data:
+                continue
+            if (other['behavior_combo'].currentText() == 'differential_tracks'
+                    and other['config'].get('left_servo') == left
+                    and other['config'].get('right_servo') == right):
+                other['config'][key] = checked
 
     def _update_row_config(self, row_data: Dict, key: str, value):
         """Update row configuration and refresh target display"""
