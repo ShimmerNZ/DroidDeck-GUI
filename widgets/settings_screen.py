@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QProgressDialog, QApplication
 )
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
@@ -451,53 +451,11 @@ class UpdateThread(QThread):
         return False
 
 
-class ServerUpdateThread(QThread):
-    """Background thread for triggering a backend update via WebSocket"""
-
-    progress_updated = pyqtSignal(str)
-    update_completed = pyqtSignal(bool, str)
-
-    GITHUB_REPO = "ShimmerNZ/DroidDeck-Backend"
-
-    def __init__(self, branch: str = "main", websocket_sender=None):
-        super().__init__()
-        self.branch = branch
-        self.websocket_sender = websocket_sender
-
-    def run(self):
-        """Send update command to backend via WebSocket"""
-        try:
-            if not self.websocket_sender:
-                self.update_completed.emit(False, "No WebSocket connection to backend")
-                return
-
-            self.progress_updated.emit(f"Sending update command to backend ({self.branch} branch)...")
-
-            message = {
-                "type": "server_update",
-                "branch": self.branch,
-                "repo": self.GITHUB_REPO,
-            }
-
-            self.websocket_sender(message)
-            self.progress_updated.emit("Update command sent - backend is downloading and restarting...")
-
-            # Give the backend time to restart before reporting done
-            import time
-            time.sleep(3)
-
-            self.update_completed.emit(
-                True,
-                f"Backend update triggered from branch '{self.branch}'.\n\n"
-                "The backend will restart automatically. Reconnect in a few seconds."
-            )
-
-        except Exception as e:
-            self.update_completed.emit(False, f"Failed to send update command: {str(e)}")
-
-
 class SettingsScreen(BaseScreen):
     """Configuration interface for system settings with theme manager integration"""
+
+    SERVER_UPDATE_REPO = "ShimmerNZ/Wall-e-Backend"
+    SERVER_UPDATE_TIMEOUT_MS = 120000
 
     # ---------- Lifecycle ----------
 
@@ -587,6 +545,10 @@ class SettingsScreen(BaseScreen):
         # Assemble
         root.addWidget(self.main_frame)
         self.setLayout(root)
+
+        self._server_update_pending = False
+        self.subscribe("server_update_progress", self._on_server_update_progress)
+        self.subscribe("server_update_complete", self._on_server_update_complete)
 
         # Load config on open
         self.load_config()
@@ -1709,11 +1671,39 @@ class SettingsScreen(BaseScreen):
         self.update_progress.setFixedSize(400, 120)
         self.update_progress.show()
 
-        sender = getattr(self, "send_websocket_message", None)
-        self.server_update_thread = ServerUpdateThread(branch=branch, websocket_sender=sender)
-        self.server_update_thread.progress_updated.connect(self._on_update_progress)
-        self.server_update_thread.update_completed.connect(self._on_update_complete)
-        self.server_update_thread.start()
+        self._server_update_pending = True
+        sent = self.send_websocket_message(
+            "server_update", branch=branch, repo=self.SERVER_UPDATE_REPO
+        )
+        if not sent:
+            self._server_update_pending = False
+            self._on_update_complete(False, "Could not send the update command - the backend is not connected.")
+            return
+
+        self._on_update_progress(f"Update command sent ({branch} branch) - waiting for backend...")
+        QTimer.singleShot(self.SERVER_UPDATE_TIMEOUT_MS, self._on_server_update_timeout)
+
+    def _on_server_update_progress(self, data: dict):
+        """Show backend update progress while an update started from this screen is running"""
+        if self._server_update_pending:
+            self._on_update_progress(data.get("message", ""))
+
+    def _on_server_update_complete(self, data: dict):
+        """Report the backend's actual update result"""
+        if not self._server_update_pending:
+            return
+        self._server_update_pending = False
+        self._on_update_complete(bool(data.get("success")), data.get("message", ""))
+
+    def _on_server_update_timeout(self):
+        """Release the progress dialog if the backend never reports a result"""
+        if not self._server_update_pending:
+            return
+        self._server_update_pending = False
+        self._on_update_complete(
+            False,
+            "The backend did not report a result. Check the backend log for 'server_update'."
+        )
 
     def _ask_branch(self, title: str) -> str:
         """Show a branch selection dialog. Returns 'main', 'dev', or None if cancelled."""
