@@ -295,6 +295,8 @@ class SteamDeckControllerThread(QThread):
         """Not used — all data comes from bitsteam. Returns a sentinel value."""
         return b'\x00' * 64
 
+    _STICK_AXES = ('left_stick_x', 'left_stick_y', 'right_stick_x', 'right_stick_y')
+
     def _read_and_send(self, current_time: float):
         """Read all inputs from the deck reader and emit the websocket message."""
         if not self._bitsteam_deck or not self._bitsteam_deck.is_running:
@@ -309,8 +311,13 @@ class SteamDeckControllerThread(QThread):
         # 0.0 at rest and buttons are discrete, so at idle this drops almost all
         # of the 50Hz traffic. A keepalive frame still goes out once per second.
         # IMU frames are never skipped - tilt values change continuously and the
-        # backend needs them live.
+        # backend needs them live. Frames are also never skipped while a stick is
+        # deflected: a stick held steady (e.g. at its limit) produces identical
+        # frames, and the backend stops the drive tracks if input goes quiet for
+        # longer than its 0.4s watchdog.
+        stick_deflected = any(axes.get(k, 0.0) != 0.0 for k in self._STICK_AXES)
         if (not self.imu_enabled
+                and not stick_deflected
                 and axes == self._last_sent_axes
                 and buttons == self._last_sent_buttons
                 and current_time - self.last_input_sent < 1.0):
