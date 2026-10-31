@@ -22,6 +22,13 @@ class WebSocketManager(QWebSocket):
     There is no attempt limit — the manager retries indefinitely until the
     backend is reachable again, which handles network switches cleanly.
 
+    Liveness: a backend that loses power or WiFi never sends a FIN/RST, so
+    the socket would otherwise report "connected" until TCP retransmits
+    finally give up. While connected, the manager pings the backend and
+    treats any received traffic (pong or message) as proof of life. If
+    nothing arrives for _DEAD_AFTER_S the socket is aborted and the normal
+    reconnect path takes over.
+
     Message dispatch: incoming messages are parsed once and routed to
     handlers registered per message type via register_handler(). Screens
     receive already-parsed dicts, so each message is json.loads'd exactly
@@ -36,6 +43,12 @@ class WebSocketManager(QWebSocket):
     # Backoff config
     _INITIAL_DELAY_MS = 1000
     _MAX_DELAY_MS     = 5000
+
+    # Liveness watchdog
+    _PING_INTERVAL_MS = 2000   # How often to ping and check for silence
+    _DEAD_AFTER_S     = 6.0    # Silence longer than this means the link is dead
+    _STALL_GRACE_S    = 4.0    # A tick this late means the event loop stalled, not the link
+    _CONNECT_TIMEOUT_MS = 5000 # A connect attempt still pending after this is abandoned
 
     # Pending command queue limits
     _PENDING_MAX = 50          # Maximum queued commands while disconnected
@@ -59,6 +72,15 @@ class WebSocketManager(QWebSocket):
         self.reconnect_timer.timeout.connect(self.attempt_reconnect)
         self.reconnect_attempts = 0
 
+        # Liveness watchdog state
+        self._last_rx = time.monotonic()
+        self._last_liveness_tick = self._last_rx
+        self._liveness_timer = QTimer(self)
+        self._liveness_timer.timeout.connect(self._check_liveness)
+        self._connect_timer = QTimer(self)
+        self._connect_timer.setSingleShot(True)
+        self._connect_timer.timeout.connect(self._on_connect_timeout)
+
         # Per-type message handlers: msg_type -> list of callables(dict)
         self._type_handlers: Dict[str, List[Callable]] = {}
 
@@ -69,6 +91,7 @@ class WebSocketManager(QWebSocket):
         self.disconnected.connect(self.on_disconnected)
         self.error.connect(self.on_error)
         self.textMessageReceived.connect(self._dispatch_message)
+        self.pong.connect(self._on_pong)
 
         self.connect_to_server()
 
@@ -93,6 +116,7 @@ class WebSocketManager(QWebSocket):
 
     def _dispatch_message(self, message: str) -> None:
         """Parse an incoming message once and route it to registered handlers."""
+        self._last_rx = time.monotonic()
         try:
             data = json.loads(message)
         except json.JSONDecodeError as e:
@@ -117,6 +141,7 @@ class WebSocketManager(QWebSocket):
             if not self.url.startswith("ws://") and not self.url.startswith("wss://"):
                 self.url = f"ws://{self.url}"
             self.open(QUrl(self.url))
+            self._connect_timer.start(self._CONNECT_TIMEOUT_MS)
         except Exception as e:
             self.logger.error(f"WebSocket connection error: {e}")
             self._schedule_reconnect()
@@ -126,6 +151,11 @@ class WebSocketManager(QWebSocket):
         self.logger.info(f"WebSocket connected to {self.url}")
         self.reconnect_attempts = 0
         self.reconnect_timer.stop()
+        self._connect_timer.stop()
+
+        self._last_rx = time.monotonic()
+        self._last_liveness_tick = self._last_rx
+        self._liveness_timer.start(self._PING_INTERVAL_MS)
 
         # Disable Nagle algorithm so controller frames are sent immediately
         # rather than being batched — reduces latency by up to 40ms
@@ -141,6 +171,7 @@ class WebSocketManager(QWebSocket):
     def on_disconnected(self):
         """Handle disconnection."""
         self.logger.warning(f"WebSocket disconnected from {self.url}")
+        self._liveness_timer.stop()
         self._schedule_reconnect()
 
     def on_error(self, error):
@@ -168,7 +199,53 @@ class WebSocketManager(QWebSocket):
         """Attempt to reconnect to WebSocket."""
         self.reconnect_attempts += 1
         self.logger.info(f"Reconnect attempt {self.reconnect_attempts}")
+
+        # A previous attempt that never completed (no error, no response)
+        # would otherwise stay in flight and block this one
+        if self.state() != QAbstractSocket.SocketState.UnconnectedState:
+            self.abort()
         self.connect_to_server()
+
+    def _on_connect_timeout(self):
+        """Abandon a connect attempt that is neither succeeding nor failing."""
+        if self.state() in (
+            QAbstractSocket.SocketState.ConnectedState,
+            QAbstractSocket.SocketState.UnconnectedState,
+        ):
+            return
+        self.logger.warning("Connection attempt timed out - retrying")
+        self.abort()
+        self._schedule_reconnect()
+
+    # ---- Liveness ----
+
+    def _on_pong(self, elapsed_ms, payload):
+        """Any pong proves the backend is still answering."""
+        self._last_rx = time.monotonic()
+
+    def _check_liveness(self):
+        """Ping the backend and drop the connection if it has gone silent."""
+        if self.state() != QAbstractSocket.SocketState.ConnectedState:
+            return
+
+        now = time.monotonic()
+
+        # If this tick fired late the event loop was blocked, so replies that
+        # are already waiting in the socket have not been processed yet
+        if now - self._last_liveness_tick > self._STALL_GRACE_S:
+            self._last_rx = now
+        self._last_liveness_tick = now
+
+        silent_for = now - self._last_rx
+        if silent_for > self._DEAD_AFTER_S:
+            self.logger.warning(
+                f"No traffic from backend for {silent_for:.1f}s - dropping stale connection"
+            )
+            self.abort()
+            self._schedule_reconnect()
+            return
+
+        self.ping()
 
     # ---- Sending ----
 
