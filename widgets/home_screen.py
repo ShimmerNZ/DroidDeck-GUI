@@ -39,6 +39,10 @@ class HomeScreen(BaseScreen):
     # Signal emitted when a scene should be triggered
     scene_triggered = pyqtSignal(str, int)  # category, scene_index
 
+    # Slightly longer than the backend's 0.5s re-trigger guard, so a press
+    # the backend would ignore is also ignored here
+    SCENE_RETRIGGER_GUARD_SECONDS = 0.6
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
@@ -50,6 +54,7 @@ class HomeScreen(BaseScreen):
         self.navigation_locked = False
         self.last_navigation_time = 0
         self.navigation_cooldown = 0.1
+        self._last_scene_trigger_time = 0.0
 
         # Simple navigation tracking
         self.current_scene_index = 0
@@ -80,10 +85,8 @@ class HomeScreen(BaseScreen):
 
 
     def _on_scene_completed(self, msg: dict):
-        """Unlock navigation when a scene completes; auto-advance on success"""
+        """Reset playing state when the current scene completes"""
         try:
-            success = msg.get("success", False)
-
             # A scene cut off by a newer selection is not the end of playback:
             # the newer scene is still running, so leave state and selection alone
             if msg.get("interrupted") or (
@@ -91,11 +94,9 @@ class HomeScreen(BaseScreen):
                     msg.get("scene_name") != self.last_triggered_scene):
                 return
 
-            # Unlock navigation when the current scene completes
+            # Unlock navigation when the current scene completes. The selection
+            # already advanced when the scene was triggered
             self._unlock_scene_state()
-
-            if success and self.auto_advance_enabled:
-                self._advance_to_next_scene()
         except Exception as e:
             self.logger.error(f"Error handling scene_completed: {e}")
             self._unlock_scene_state()
@@ -270,8 +271,14 @@ class HomeScreen(BaseScreen):
             return
             
         # A scene can be selected while another plays: the backend ends the
-        # current scene and starts this one, and ignores accidental
-        # double-presses within 0.5s of a scene starting
+        # current scene and starts this one. The backend ignores a press
+        # within 0.5s of a scene starting, so presses inside that window are
+        # dropped here too - otherwise the selection would move past a clip
+        # that never played
+        now = time.time()
+        if now - self._last_scene_trigger_time < self.SCENE_RETRIGGER_GUARD_SECONDS:
+            self.logger.debug("Scene select ignored - too soon after the last one")
+            return
         self._play_sound_effect("select.mp3")
 
         cat = self.categories[self.selected_category_idx]
@@ -292,6 +299,12 @@ class HomeScreen(BaseScreen):
 
                 self.is_playing_scene = True
                 self.last_triggered_scene = scene_name
+                self._last_scene_trigger_time = now
+
+                # Move the selection on straight away so repeated presses
+                # play clips in quick succession
+                if self.auto_advance_enabled:
+                    self._advance_to_next_scene()
 
                 # Fallback reset in case the completion message never
                 # arrives; ignored if a newer scene has been selected since
