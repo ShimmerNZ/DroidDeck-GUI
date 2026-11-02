@@ -64,6 +64,8 @@ class HealthScreen(BaseScreen):
             "cpu": "--", "memory": "--", "temperature": "--",
             "current_total": None, "current_tracks": None, "sabertooth_temp": None,
         }
+        # Latest pack voltage, used to force the runtime label critical
+        self._last_battery_voltage = None
         # Last known throughput bytes for delta calculation
         self._last_net_bytes = None
         self._last_net_time = None
@@ -321,7 +323,7 @@ class HealthScreen(BaseScreen):
             ("cpu", "CPU: 0%"),
             ("mem", "Memory: 0%"),
             ("temp", "Temp: 0°C"),
-            ("battery", "Battery: 0.0V"),
+            ("battery", "Runtime: --"),
             ("current_tracks", "Tracks: 0.0A"),
             ("current_total", "Total Current: 0.0A"),
             ("sabertooth_temp", "Sabertooth: 0.0°C"),
@@ -652,6 +654,7 @@ class HealthScreen(BaseScreen):
                         "channel_count": m2.get("channel_count", 0),
                         "error_flags": m2.get("error_flags", {"has_errors": False}),
                     },
+                    "battery_estimate": data.get("battery_estimate"),
                     # Mixer stats pass through unchanged
                     "serial_fps": data.get("serial_fps"),
                     "blend_ms": data.get("blend_ms"),
@@ -708,10 +711,8 @@ class HealthScreen(BaseScreen):
             self.logger.error(f"Telemetry processing failed: {e}")
 
     def _update_voltage_display(self, voltage: float):
-        """Thread-safe voltage display update"""
-        battery_text, battery_style = self.get_voltage_status_text(voltage)
-        self.status_labels["battery"].setText(battery_text)
-        self.status_labels["battery"].setStyleSheet(battery_style)
+        """Thread-safe voltage update - stores the pack voltage and checks alarms"""
+        self._last_battery_voltage = voltage
 
         # Only check voltage alarms if startup is complete AND alerts are enabled
         if (getattr(self, 'voltage_alerts_enabled', False) and
@@ -772,6 +773,11 @@ class HealthScreen(BaseScreen):
             if key in self.status_labels:
                 self.status_labels[key].setText(text)
 
+        # Battery run-time estimate (only present on system_status replies)
+        battery_estimate = data.get("battery_estimate")
+        if isinstance(battery_estimate, dict):
+            self._update_runtime_display(battery_estimate)
+
         # Sample /proc/net/dev for throughput on wlan0
         self._update_throughput_display(green)
 
@@ -807,6 +813,47 @@ class HealthScreen(BaseScreen):
 
         if active_ch is not None:
             self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
+
+    def _update_runtime_display(self, estimate: dict):
+        """Show estimated battery run-time with LOW/CRITICAL colour coding"""
+        if "battery" not in self.status_labels:
+            return
+
+        red = theme_manager.get("red")
+        primary = theme_manager.get("primary_color")
+        green = theme_manager.get("green")
+
+        minutes = estimate.get("estimated_minutes_remaining") or 0.0
+        soc = estimate.get("soc_percent")
+        confidence = estimate.get("confidence")
+
+        if confidence == "warming_up":
+            text = "Runtime: estimating"
+        elif minutes > 0:
+            total = int(round(minutes))
+            hours, mins = divmod(total, 60)
+            duration = f"{hours}h {mins}m" if hours else f"{mins}m"
+            text = f"Runtime: {duration}"
+            if soc is not None:
+                text += f" ({soc:.0f}%)"
+        else:
+            text = "Runtime: --"
+
+        voltage = self._last_battery_voltage
+        voltage_critical = voltage is not None and 0 < voltage < 13.2
+        has_minutes = confidence != "warming_up" and minutes > 0
+
+        if voltage_critical or (has_minutes and minutes < 15):
+            text += " CRITICAL"
+            style = f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
+        elif has_minutes and minutes < 30:
+            text += " LOW"
+            style = f"color: {primary}; font-weight: bold; padding: 1px; background: transparent;"
+        else:
+            style = f"color: {green}; padding: 1px; background: transparent;"
+
+        self.status_labels["battery"].setText(text)
+        self.status_labels["battery"].setStyleSheet(style)
 
     def _format_throughput(self, bytes_per_sec: float) -> str:
         """Convert bytes/sec to bits/sec, auto-scaled to kbps or Mbps"""
