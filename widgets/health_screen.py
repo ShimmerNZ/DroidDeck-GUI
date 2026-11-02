@@ -237,7 +237,7 @@ class HealthScreen(BaseScreen):
         self.setup_telemetry_graph()
 
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(98, 19, 15, 6)
+        main_layout.setContentsMargins(98, 41, 15, 6)
         main_layout.setSpacing(12)
 
         left_column = QVBoxLayout()
@@ -362,15 +362,18 @@ class HealthScreen(BaseScreen):
         pack_block.setSpacing(8)
         pack_block.addStretch(1)
 
-        pack_row = QHBoxLayout()
-        pack_row.setSpacing(10)
+        # Caption and state badge share a row so the voltage has the full width
+        pack_header = QHBoxLayout()
+        pack_header.setSpacing(10)
+        pack_header.addWidget(self._make_caption("PACK", 12), 0, Qt.AlignmentFlag.AlignVCenter)
+        pack_header.addStretch(1)
+        self.pack_badge = self._make_badge()
+        pack_header.addWidget(self.pack_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        pack_block.addLayout(pack_header)
+
         self.pack_value_label = self._make_value("--.-- V", 44)
         self.pack_value_label.setFont(self._font(44, bold=True))
-        self.pack_badge = self._make_badge()
-        pack_row.addWidget(self.pack_value_label)
-        pack_row.addWidget(self.pack_badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        pack_row.addStretch(1)
-        pack_block.addLayout(pack_row)
+        pack_block.addWidget(self.pack_value_label)
 
         self.soc_bar = QProgressBar()
         self.soc_bar.setRange(0, 100)
