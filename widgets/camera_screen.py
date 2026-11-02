@@ -937,7 +937,7 @@ class CameraFeedScreen(BaseScreen):
         video_layout.addWidget(self.video_label)
 
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(105, 31, 12, 6)
+        main_layout.setContentsMargins(105, 29, 12, 6)
         main_layout.setSpacing(CARD_GAP)
         main_layout.addWidget(self.video_card, 0, Qt.AlignmentFlag.AlignTop)
         main_layout.addWidget(self.controls_widget, 0, Qt.AlignmentFlag.AlignTop)
