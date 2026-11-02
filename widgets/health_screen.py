@@ -8,7 +8,7 @@ Displays system telemetry, battery status, network quality, and performance grap
 import json
 import time
 from collections import deque
-from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget, 
+from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget,
                             QGridLayout, QMessageBox, QPushButton, QGroupBox)
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -26,11 +26,11 @@ from widgets.bandwidth_test_splash import show_bandwidth_test_splash
 
 class HealthScreen(BaseScreen):
     """System health monitoring with telemetry graphs and status displays"""
-    
+
     # Qt signals for thread-safe updates
     voltage_update_signal = pyqtSignal(float)
     status_update_signal = pyqtSignal(dict)
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Register for theme change notifications
@@ -42,7 +42,7 @@ class HealthScreen(BaseScreen):
             theme_manager.unregister_callback(self._on_theme_changed)
         except Exception:
             pass
-    
+
     def _setup_screen(self):
         """Initialize health monitoring interface"""
         self.setFixedWidth(1180)
@@ -71,25 +71,25 @@ class HealthScreen(BaseScreen):
         # Rate limiting for telemetry updates
         self.last_telemetry_update = 0
         self.telemetry_update_interval = 0.25
-        
+
         # Voltage alarm state tracking
         self.last_voltage_alarm = None
-        
+
         # Track start time for relative time calculation
         self.start_time = time.time()
-        
 
-        
+
+
         # Connect WebSocket for telemetry updates
         if self.websocket:
             self.websocket.textMessageReceived.connect(self.handle_telemetry)
-        
+
         # Connect signals for thread-safe updates
         self.voltage_update_signal.connect(self._update_voltage_display)
         self.status_update_signal.connect(self._update_status_displays)
-        
+
         self.init_ui()
-        
+
 
         from PyQt6.QtCore import QTimer
         self.startup_timer = QTimer()
@@ -106,15 +106,15 @@ class HealthScreen(BaseScreen):
         try:
             # Check multiple conditions for application readiness
             app_ready = False
-            
-            if (hasattr(self, 'parent') and self.parent() and 
-                hasattr(self.parent(), 'isVisible') and 
+
+            if (hasattr(self, 'parent') and self.parent() and
+                hasattr(self.parent(), 'isVisible') and
                 self.parent().isVisible()):
-                
+
                 # Additional check - make sure we're not in startup/loading screen
                 # You can add more specific checks here based on your app structure
                 app_ready = True
-            
+
             if app_ready:
                 self.voltage_alerts_enabled = True
                 self.startup_complete = True  # Set both flags
@@ -124,14 +124,14 @@ class HealthScreen(BaseScreen):
                 # Keep checking but add a maximum timeout
                 if not hasattr(self, '_startup_check_count'):
                     self._startup_check_count = 0
-                
+
                 self._startup_check_count += 1
                 if self._startup_check_count > 20:  # 10 seconds maximum wait
                     self.voltage_alerts_enabled = True
                     self.startup_complete = True
                     self.startup_timer.stop()
                     self.logger.info("Voltage alerts enabled - timeout reached")
-                    
+
         except Exception as e:
             self.logger.warning(f"Error checking application state: {e}")
 
@@ -146,18 +146,18 @@ class HealthScreen(BaseScreen):
         # Simple flag check at the start
         if not getattr(self, 'voltage_alerts_enabled', False):
             return  # Skip all voltage alerts until enabled
-        
+
     def init_ui(self):
         """Initialize health monitoring UI with graphs and status displays"""
         # Main graph for battery voltage and current
         self.setup_telemetry_graph()
-        
+
         # Status display labels
         self.setup_status_displays()
-        
+
         # Layout assembly with styled control panel
         self.setup_layout()
-    
+
     def setup_telemetry_graph(self):
         """Setup battery voltage and current monitoring graph"""
         self.graph_widget = pg.PlotWidget()
@@ -166,16 +166,16 @@ class HealthScreen(BaseScreen):
         self.graph_widget.setTitle("Battery Voltage & Current Draw", color='white', size='14pt')
         self.graph_widget.setLabel('left', 'Battery Voltage (V)', color='white')
         self.graph_widget.setLabel('bottom', 'Time (s)', color='white')
-        
+
         # Set voltage range for 4S LiPo batteries
         self.graph_widget.setYRange(0, 20)
         self.graph_widget.setLimits(yMin=0, yMax=20)
         self.graph_widget.setMouseEnabled(x=False, y=False)
-        
+
         # Add legend
         self.graph_widget.addLegend(offset=(10, 20))
         self.graph_widget.getPlotItem().setContentsMargins(15, 15, 15, 15)
-        
+
         # Data buffers are unbounded deques; handle_telemetry prunes them by
         # elapsed time (self.graph_window_seconds) rather than point count, so
         # the graph always shows a fixed time window regardless of the actual
@@ -184,7 +184,7 @@ class HealthScreen(BaseScreen):
         self.current_a1_data = deque()
         self.current_a2_data = deque()
         self.time_data = deque()
-        
+
         # Voltage curve (primary Y-axis) - use theme green
         green = theme_manager.get("green")
         self.voltage_curve = self.graph_widget.plot(
@@ -192,7 +192,7 @@ class HealthScreen(BaseScreen):
             name="Battery Voltage",
             antialias=True
         )
-        
+
         # Current curves (secondary Y-axis)
         self.current_view = pg.ViewBox()
         self.graph_widget.scene().addItem(self.current_view)
@@ -200,12 +200,12 @@ class HealthScreen(BaseScreen):
         self.graph_widget.getPlotItem().getAxis('right').setLabel('Current (A)', color='white')
         self.graph_widget.getPlotItem().getAxis('right').linkToView(self.current_view)
 
-        self.current_view.setYRange(0, 70)  
+        self.current_view.setYRange(0, 70)
         self.current_view.setLimits(yMin=-5, yMax=100)
-        
+
         # Link the views
         self.graph_widget.getPlotItem().getViewBox().sigResized.connect(self.update_views)
-        
+
         # Current plots with theme colors
         primary = theme_manager.get("primary_color")
         primary_light = theme_manager.get("primary_light")
@@ -246,28 +246,28 @@ class HealthScreen(BaseScreen):
         control_panel.setObjectName("control_panel")
         control_panel.setFixedWidth(340)
         self._update_control_panel_style(control_panel)
-        
+
         panel_layout = QVBoxLayout()
         panel_layout.setContentsMargins(15, 5, 15, 10)
         panel_layout.setSpacing(10)
-        
+
         # Header with theme styling
         self.header = QLabel("SYSTEM HEALTH")
         self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_header_style()
         panel_layout.addWidget(self.header)
-        
+
         # Status display section
         status_section = self._create_status_display_section()
         panel_layout.addWidget(status_section)
-        
+
         panel_layout.addSpacing(10)
-        
+
         # System controls section
         system_section = self._create_system_controls_section()
         panel_layout.addWidget(system_section)
-        
+
         panel_layout.addStretch()
         control_panel.setLayout(panel_layout)
         self.control_panel = control_panel
@@ -309,11 +309,11 @@ class HealthScreen(BaseScreen):
         self.status_frame = QWidget()
         self.status_frame.setObjectName("status_frame")
         self._update_status_frame_style()
-        
+
         status_layout = QVBoxLayout()
         status_layout.setContentsMargins(12, 10, 12, 10)
         status_layout.setSpacing(6)
-        
+
         # Create status labels within the panel
         from PyQt6.QtWidgets import QSizePolicy
 
@@ -390,25 +390,25 @@ class HealthScreen(BaseScreen):
         """Create themed system control operations section"""
         self.system_frame = QWidget()
         self._update_system_frame_style()
-        
+
         system_layout = QVBoxLayout()
         system_layout.setContentsMargins(12, 8, 12, 12)
         system_layout.setSpacing(6)
-        
+
         # System header
         self.system_header = QLabel("NETWORK")
         self.system_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.system_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_section_header_style(self.system_header)
         system_layout.addWidget(self.system_header)
-        
+
         # Bandwidth test button with themed styling
         self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
         self.bandwidth_btn.setFont(QFont("Arial", 14))
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
         self._update_bandwidth_button_style()
         system_layout.addWidget(self.bandwidth_btn)
-        
+
         self.system_frame.setLayout(system_layout)
         return self.system_frame
 
@@ -462,15 +462,15 @@ class HealthScreen(BaseScreen):
                 self._update_control_panel_style(self.control_panel)
             if hasattr(self, 'header'):
                 self._update_header_style()
-            
+
             # Update graph theme
             self._update_graph_theme()
-            
+
             # Update graph plot colors
             if hasattr(self, 'voltage_curve'):
                 green = theme_manager.get("green")
                 self.voltage_curve.setPen(pg.mkPen(color=green, width=4))
-            
+
             if hasattr(self, 'current_a1_plot'):
                 primary = theme_manager.get("primary_color")
                 orange = "#FF8C00"
@@ -481,7 +481,7 @@ class HealthScreen(BaseScreen):
             # Update status section
             if hasattr(self, 'status_frame'):
                 self._update_status_frame_style()
-            
+
             # Update system section
             if hasattr(self, 'system_frame'):
                 self._update_system_frame_style()
@@ -489,11 +489,11 @@ class HealthScreen(BaseScreen):
                 self._update_section_header_style(self.system_header)
             if hasattr(self, 'bandwidth_btn'):
                 self._update_bandwidth_button_style()
-            
+
             # Update all status labels
             for label in self.status_labels.values():
                 self._update_status_label_style(label)
-            
+
             # Update graph frame
             if hasattr(self, 'graph_frame'):
                 panel_bg = theme_manager.get("panel_bg")
@@ -507,7 +507,7 @@ class HealthScreen(BaseScreen):
         """Setup main layout with full-height graph and wider control panel"""
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(98, 19, 15, 6)
-        
+
         # Graph container - full height with theme styling
         self.graph_frame = QFrame()
         primary = theme_manager.get("primary_color")
@@ -515,22 +515,22 @@ class HealthScreen(BaseScreen):
         self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
         graph_layout = QVBoxLayout(self.graph_frame)
         graph_layout.setContentsMargins(10, 10, 10, 10)
-        
+
         # Graph sizing - larger and full height
         self.graph_widget.setFixedWidth(690)
         self.graph_widget.setFixedHeight(455)  # Increased height
-        
+
         graph_layout.addWidget(self.graph_widget)
-        
+
         # Create styled control panel
         control_panel = self._create_control_panel()
-        
+
         # Add to main layout
         main_layout.addWidget(self.graph_frame)
         main_layout.addWidget(control_panel)
-        
+
         self.setLayout(main_layout)
-    
+
     def update_views(self):
         """Update the current view geometry to match the main plot"""
         self.current_view.setGeometry(
@@ -543,26 +543,26 @@ class HealthScreen(BaseScreen):
         # Disable button during test
         self.bandwidth_btn.setEnabled(False)
         self.bandwidth_btn.setText("TESTING...")
-        
+
         wave_config = _config_manager.get_wave_config()
         camera_proxy_url = wave_config.get("camera_proxy_url", "http://10.1.1.230:8081")
         if camera_proxy_url.endswith("/stream"):
             camera_proxy_url = camera_proxy_url[:-7]
-        
+
         # Show the bandwidth test splash screen
         results = show_bandwidth_test_splash(self, camera_proxy_url)
-        
+
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
         self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
-        
+
 
     def get_voltage_status_text(self, voltage: float) -> tuple:
         """Get voltage status with theme color coding"""
         red = theme_manager.get("red")
         primary = theme_manager.get("primary_color")
         green = theme_manager.get("green")
-        
+
         if voltage < 13.2:
             return f"Battery: {voltage:.2f}V CRITICAL", f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
         elif voltage < 14.0:
@@ -577,16 +577,16 @@ class HealthScreen(BaseScreen):
         red = theme_manager.get("red")
         primary = theme_manager.get("primary_color")
         green = theme_manager.get("green")
-        
+
         if not maestro_data or not maestro_data.get('connected', False):
             return f"{maestro_name}: Disconnected", f"color: {red}; background: transparent;"
-        
+
         # Extract detailed status
         channels = maestro_data.get('channel_count', 0)
         error_flags = maestro_data.get('error_flags', {})
         script_status = maestro_data.get('script_status', {}).get('status', 'unknown')
         moving = maestro_data.get('moving', False)
-        
+
         # Check for errors
         has_errors = error_flags.get('has_errors', False)
         if has_errors:
@@ -599,7 +599,7 @@ class HealthScreen(BaseScreen):
             move_text = "Moving" if moving else "Idle"
             status = f"{maestro_name}: {channels}ch, {script_status.title()}, {move_text}"
             color = f"color: {green}; background: transparent;"
-        
+
         return status, color
 
     @error_boundary
@@ -613,11 +613,11 @@ class HealthScreen(BaseScreen):
     def handle_telemetry(self, message: str):
         """Process incoming telemetry data and update displays"""
         current_time = time.time()
-        
+
         # Rate limiting
         if current_time - self.last_telemetry_update < self.telemetry_update_interval:
             return
-        
+
         try:
             data = json.loads(message)
             msg_type = data.get("type")
@@ -658,7 +658,7 @@ class HealthScreen(BaseScreen):
                     "serial_cmds_sec": data.get("serial_cmds_sec"),
                     "active_channels": data.get("active_channels"),
                 }
-            
+
             self.logger.debug("Processing telemetry data")
 
             # system_status only carries mixer stats — skip graph/voltage updates
@@ -670,13 +670,13 @@ class HealthScreen(BaseScreen):
 
             # Emit signals for thread-safe updates
             battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
-            
+
             if battery_voltage > 0:
                 self.voltage_update_signal.emit(battery_voltage)
-            
+
             # Emit status updates
             self.status_update_signal.emit(data)
-            
+
             current_a1 = data.get("current_tracks", 0.0)
             current_a2 = data.get("current_total", 0.0)
 
@@ -696,10 +696,10 @@ class HealthScreen(BaseScreen):
                 self.battery_voltage_data.popleft()
                 self.current_a1_data.popleft()
                 self.current_a2_data.popleft()
-            
+
             # Update graphs
             self._update_graphs()
-            
+
             self.last_telemetry_update = current_time
 
         except json.JSONDecodeError as e:
@@ -712,9 +712,9 @@ class HealthScreen(BaseScreen):
         battery_text, battery_style = self.get_voltage_status_text(voltage)
         self.status_labels["battery"].setText(battery_text)
         self.status_labels["battery"].setStyleSheet(battery_style)
-        
+
         # Only check voltage alarms if startup is complete AND alerts are enabled
-        if (getattr(self, 'voltage_alerts_enabled', False) and 
+        if (getattr(self, 'voltage_alerts_enabled', False) and
             getattr(self, 'startup_complete', False)):
             self.check_voltage_alarms(voltage)
         else:
@@ -809,13 +809,11 @@ class HealthScreen(BaseScreen):
             self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
 
     def _format_throughput(self, bytes_per_sec: float) -> str:
-        """Auto-scale bytes/sec to KB/s or MB/s"""
-        if bytes_per_sec >= 1_048_576:
-            return f"{bytes_per_sec / 1_048_576:.1f} MB/s"
-        elif bytes_per_sec >= 1024:
-            return f"{bytes_per_sec / 1024:.0f} KB/s"
-        else:
-            return f"{bytes_per_sec:.0f} B/s"
+        """Convert bytes/sec to bits/sec, auto-scaled to kbps or Mbps"""
+        bits_per_sec = max(bytes_per_sec, 0.0) * 8
+        if bits_per_sec >= 999_500:
+            return f"{bits_per_sec / 1_000_000:.1f} Mbps"
+        return f"{bits_per_sec / 1000:.0f} kbps"
 
     def _update_throughput_display(self, green: str):
         """Sample /proc/net/dev to calculate wlan0 TX/RX throughput"""
@@ -913,42 +911,42 @@ class HealthScreen(BaseScreen):
     def check_voltage_alarms(self, voltage: float):
         """Check and display voltage alarms when thresholds are crossed"""
         current_alarm = None
-        
+
         if voltage < 11.0:
             current_alarm = "CRITICAL"
         elif voltage < 12.0:
             current_alarm = "LOW"
-        
+
         # Only show splash if alarm state changed and we don't already have one open
-        if (current_alarm != self.last_voltage_alarm and 
-            current_alarm is not None and 
+        if (current_alarm != self.last_voltage_alarm and
+            current_alarm is not None and
             not hasattr(self, '_active_voltage_splash')):
-            
+
             # Create and show splash screen
             self._active_voltage_splash = VoltageAlertSplash(
                 alert_type=current_alarm,
                 voltage=voltage,
                 parent=self
             )
-            
+
             # Connect to cleanup when splash closes
             self._active_voltage_splash.splash_closed.connect(self._on_voltage_splash_closed)
-            
+
             self.logger.info(f"Showing {current_alarm.lower()} voltage alert: {voltage:.2f}V")
-        
+
         self.last_voltage_alarm = current_alarm
 
     def _on_voltage_splash_closed(self):
         """Handle voltage splash close event"""
         if hasattr(self, '_active_voltage_splash'):
             delattr(self, '_active_voltage_splash')
-        self.logger.debug("Voltage alert splash closed")    
+        self.logger.debug("Voltage alert splash closed")
 
     def get_battery_health_summary(self) -> str:
         """Get battery health summary for display"""
         if not self.battery_voltage_data:
             return "No battery data"
-        
+
         current_voltage = self.battery_voltage_data[-1]
         if len(self.battery_voltage_data) > 10:
             avg_voltage = sum(list(self.battery_voltage_data)[-10:]) / 10
@@ -960,7 +958,7 @@ class HealthScreen(BaseScreen):
                 voltage_trend = "Stable"
         else:
             voltage_trend = "Stable"
-        
+
         # Estimate remaining capacity (rough approximation for 4S LiPo)
         if current_voltage > 15.0:
             capacity = "90-100%"
@@ -974,7 +972,7 @@ class HealthScreen(BaseScreen):
             capacity = "10-25%"
         else:
             capacity = "<10%"
-        
+
         return f"{voltage_trend} | Est. Capacity: {capacity}"
 
     def cleanup(self):
@@ -983,5 +981,5 @@ class HealthScreen(BaseScreen):
         if hasattr(self, '_active_voltage_splash'):
             self._active_voltage_splash.close_splash()
             delattr(self, '_active_voltage_splash')
-        
+
         super().cleanup()
