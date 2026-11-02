@@ -237,7 +237,7 @@ class HealthScreen(BaseScreen):
         self.setup_telemetry_graph()
 
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(98, 41, 15, 6)
+        main_layout.setContentsMargins(101, 40, 12, 6)
         main_layout.setSpacing(12)
 
         left_column = QVBoxLayout()
@@ -701,6 +701,8 @@ class HealthScreen(BaseScreen):
         """Ask the backend to read and clear both Maestro error registers"""
         if self.send_websocket_message("clear_maestro_errors"):
             self.logger.info("Requested Maestro error clear")
+            # Refresh straight away rather than waiting for the next poll
+            QTimer.singleShot(300, self._request_system_status)
 
     @error_boundary
     def _request_system_status(self):
