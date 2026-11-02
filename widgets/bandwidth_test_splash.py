@@ -16,6 +16,51 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QRect
 from typing import Optional, Callable
 
 
+class _ProgressUploadReader:
+    """File-like upload body that reports throughput as requests reads it.
+
+    requests sends file-like bodies in small blocks, so each read() is one
+    block leaving for the network. __len__ keeps a normal Content-Length.
+    """
+
+    def __init__(self, total_size: int, on_progress: Callable[[int, float], None],
+                 is_cancelled: Callable[[], bool], interval: float = 0.1):
+        self._remaining = total_size
+        self._total = total_size
+        self._on_progress = on_progress
+        self._is_cancelled = is_cancelled
+        self._interval = interval
+        self._start = None
+        self._last_update = 0.0
+
+    def __len__(self):
+        return self._total
+
+    def read(self, size: int = -1) -> bytes:
+        if self._is_cancelled():
+            raise RuntimeError("Upload test cancelled")
+        if self._remaining <= 0:
+            return b''
+
+        now = time.time()
+        if self._start is None:
+            self._start = now
+            self._last_update = now
+
+        if size is None or size < 0 or size > self._remaining:
+            size = self._remaining
+        self._remaining -= size
+
+        sent = self._total - self._remaining
+        if now - self._last_update >= self._interval:
+            elapsed = now - self._start
+            if elapsed > 0:
+                self._on_progress(sent, elapsed)
+            self._last_update = now
+
+        return b'X' * size
+
+
 class BandwidthTestWorker(QThread):
     """Worker thread for bandwidth testing to avoid blocking UI"""
     
@@ -168,25 +213,25 @@ class BandwidthTestWorker(QThread):
     def _test_upload_speed(self) -> float:
         """Test upload speed"""
         try:
-            # Create test data
-            upload_data = b'X' * self.upload_data_size
-            
+            def report_progress(sent_bytes: int, elapsed: float):
+                self.speed_updated.emit("upload", (sent_bytes / (1024 * 1024)) / elapsed)
+
+            # Body is generated block by block as it is sent, so the speed
+            # updates live during the upload like the download test
+            upload_body = _ProgressUploadReader(
+                self.upload_data_size,
+                on_progress=report_progress,
+                is_cancelled=lambda: self.test_cancelled,
+            )
+
             start_time = time.time()
-            # Simulate progress updates during upload
             response = requests.post(
                 f"{self.camera_proxy_url}/bandwidth_upload",
-                data=upload_data,
+                data=upload_body,
                 headers={'Content-Type': 'application/octet-stream'},
                 timeout=60
             )
-            
-            # Emit real-time upload speed updates
-            current_time = time.time()
-            elapsed = current_time - start_time
-            if elapsed > 0.1:  # Avoid division by zero for very fast uploads
-                upload_speed = (self.upload_data_size / (1024 * 1024)) / elapsed
-                self.speed_updated.emit("upload", upload_speed)
-            
+
             duration = time.time() - start_time
             
             if duration > 0:
