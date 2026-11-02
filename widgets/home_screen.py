@@ -84,7 +84,14 @@ class HomeScreen(BaseScreen):
         try:
             success = msg.get("success", False)
 
-            # Always unlock navigation when a scene completes
+            # A scene cut off by a newer selection is not the end of playback:
+            # the newer scene is still running, so leave state and selection alone
+            if msg.get("interrupted") or (
+                    self.last_triggered_scene and
+                    msg.get("scene_name") != self.last_triggered_scene):
+                return
+
+            # Unlock navigation when the current scene completes
             self._unlock_scene_state()
 
             if success and self.auto_advance_enabled:
@@ -262,56 +269,43 @@ class HomeScreen(BaseScreen):
         if not hasattr(self, "categories") or not self.categories:
             return
             
-        # Ignore triggers while a scene is playing or navigation is locked
-        if (hasattr(self, 'is_playing_scene') and self.is_playing_scene) or self.navigation_locked:
-            self.logger.debug("Scene playing or navigation locked, ignoring trigger")
-            return
+        # A scene can be selected while another plays: the backend ends the
+        # current scene and starts this one, and ignores accidental
+        # double-presses within 0.5s of a scene starting
         self._play_sound_effect("select.mp3")
 
         cat = self.categories[self.selected_category_idx]
         scenes = self.category_to_scenes.get(cat, [])
-        
+
         current_row = self.queue_list.currentRow()
         if 0 <= current_row < len(scenes):
             scene = scenes[current_row]
             scene_name = scene.get("label", "Unknown")
-            
-            # Don't re-trigger same scene immediately
-            if (hasattr(self, 'last_triggered_scene') and 
-                scene_name == self.last_triggered_scene and 
-                hasattr(self, 'is_playing_scene') and 
-                self.is_playing_scene):
-                self.logger.debug(f"Scene {scene_name} is currently playing, ignoring trigger")
-                return
-            
-            # Lock navigation during scene trigger
-            self.navigation_locked = True
-            
+
             # Send WebSocket command to backend
             success = self.send_websocket_message("scene", emotion=scene_name)
-            
+
             if success:
                 # Emit signal and update UI
                 self.scene_triggered.emit(cat, current_row)
                 self.progress_label.setText(f"Progress: Playing '{scene_name}'")
-                
-                # Update state tracking
-                if hasattr(self, 'is_playing_scene'):
-                    self.is_playing_scene = True
-                    self.last_triggered_scene = scene_name
-                    
-                    # Reset scene state after estimated duration as fallback
-                    scene_duration = scene.get("duration", 3.0)
-                    fallback_timeout = int((scene_duration + 2) * 1000)  # Convert to ms
-                    
-                    # Unlock navigation after scene duration
-                    QTimer.singleShot(fallback_timeout, self._unlock_scene_state)
-                else:
-                    # No scene state tracking, unlock navigation quickly
-                    QTimer.singleShot(200, self._unlock_navigation)
-            else:
-                # Failed to send, unlock immediately
-                self._unlock_navigation()
+
+                self.is_playing_scene = True
+                self.last_triggered_scene = scene_name
+
+                # Fallback reset in case the completion message never
+                # arrives; ignored if a newer scene has been selected since
+                self._scene_trigger_token = getattr(self, "_scene_trigger_token", 0) + 1
+                token = self._scene_trigger_token
+                scene_duration = scene.get("duration", 3.0)
+                fallback_timeout = int((scene_duration + 2) * 1000)  # Convert to ms
+                QTimer.singleShot(fallback_timeout,
+                                  lambda: self._fallback_unlock_scene_state(token))
+
+    def _fallback_unlock_scene_state(self, token: int):
+        """Reset scene state if no newer scene has been selected since"""
+        if token == getattr(self, "_scene_trigger_token", 0):
+            self._unlock_scene_state()
 
     def _unlock_scene_state(self):
         """Unlock scene state after playback"""

@@ -687,19 +687,23 @@ class EnhancedSceneRow(QWidget):
         layout.addWidget(self.script_cb)
         layout.addWidget(self.bottango_combo)
         
-        # Duration section (plain text input)
-        duration_label = QLabel("Duration(s):")
-        duration_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; min-width: 68px; border: none; background: transparent;")
-        
-        self.duration_input = QLineEdit()
-        self.duration_input.setText(str(self.scene_data.get("duration", 1.0)))
-        self.duration_input.setPlaceholderText("1.0")
-        self.duration_input.setMaximumWidth(60)  # Smaller input
-        self.update_text_input_style(self.duration_input)
-        self.duration_input.textChanged.connect(lambda text: self.validate_float_input(text, self.duration_input))
-        
+        # Duration section - calculated by the backend, shown read-only
+        duration_label = QLabel("Duration:")
+        duration_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; border: none; background: transparent;")
+
+        duration_tooltip = "Calculated from the audio and Bottango scene lengths"
+        duration_label.setToolTip(duration_tooltip)
+
+        self.duration_value_label = QLabel()
+        self.duration_value_label.setToolTip(duration_tooltip)
+        primary = theme_manager.get("primary_color")
+        self.duration_value_label.setStyleSheet(
+            f"color: {primary}; font-weight: bold; font-size: 13px; min-width: 44px; border: none; background: transparent;"
+        )
+        self.set_calculated_duration(self.scene_data.get("duration", 1.0))
+
         layout.addWidget(duration_label)
-        layout.addWidget(self.duration_input)
+        layout.addWidget(self.duration_value_label)
         
         # Delay section (plain text input)
         delay_label = QLabel("Delay(ms):")
@@ -970,6 +974,14 @@ class EnhancedSceneRow(QWidget):
         """Delete this scene"""
         self.parent_screen.delete_scene_row(self.row_index)
     
+    def set_calculated_duration(self, duration):
+        """Show the backend-calculated scene duration"""
+        try:
+            self.calculated_duration = float(duration)
+        except (TypeError, ValueError):
+            self.calculated_duration = 1.0
+        self.duration_value_label.setText(f"{self.calculated_duration:.1f}s")
+
     def get_scene_data(self):
         """Extract current scene data from widgets"""
         audio_file = self.audio_file_combo.currentText() if self.audio_cb.isChecked() else ""
@@ -981,12 +993,10 @@ class EnhancedSceneRow(QWidget):
             if bottango_scene == "No scenes available":
                 bottango_scene = ""
         
-        # Parse duration and delay with defaults
-        try:
-            duration = float(self.duration_input.text()) if self.duration_input.text() else 1.0
-        except ValueError:
-            duration = 1.0
-        
+        # Duration is calculated by the backend on save; the last known
+        # value is passed through unchanged
+        duration = self.calculated_duration
+
         try:
             delay = int(self.delay_input.text()) if self.delay_input.text() else 0
         except ValueError:
@@ -1387,6 +1397,7 @@ class SceneScreen(BaseScreen):
                 if scenes:
                     self.scenes_data = scenes
                     self.update_scene_rows()
+                    self._sync_calculated_durations(scenes)
                     # Update refresh tracking
                     if hasattr(self, 'refresh_status'):
                         self.refresh_status["scenes_complete"] = True
@@ -1479,6 +1490,7 @@ class SceneScreen(BaseScreen):
             elif msg_type == "scenes_saved":
                 success = msg.get("success", False)
                 if success:
+                    self._sync_calculated_durations(msg.get("scenes", []), emit=False)
                     QMessageBox.information(self, "Saved", "Scenes saved successfully to backend.")
                     self.update_status("Saved successfully", green)
                     self.scenes_updated.emit()
@@ -1520,6 +1532,42 @@ class SceneScreen(BaseScreen):
             red = theme_manager.get("red")
             self.logger.error(f"Failed to handle message: {e}")
             self.update_status("Communication error", red)
+
+    def _sync_calculated_durations(self, backend_scenes, emit: bool = True):
+        """Copy the backend's calculated scene durations into the local scene
+        config (which the home screen reads) and into the editor rows."""
+        durations = {
+            s.get("label"): s.get("duration")
+            for s in backend_scenes
+            if isinstance(s, dict) and isinstance(s.get("duration"), (int, float))
+        }
+        if not durations:
+            return
+
+        for row in self.scene_rows:
+            label = row.name_edit.text()
+            if label in durations:
+                row.set_calculated_duration(durations[label])
+
+        local = config_manager.get_config("resources/configs/scenes_config.json")
+        if not isinstance(local, list):
+            return
+        changed = False
+        for scene in local:
+            if not isinstance(scene, dict):
+                continue
+            new_duration = durations.get(scene.get("label"))
+            if new_duration is not None and scene.get("duration") != new_duration:
+                scene["duration"] = new_duration
+                changed = True
+
+        if changed:
+            if config_manager.save_config("resources/configs/scenes_config.json", local):
+                self.logger.info("Updated local scene durations from backend")
+                if emit:
+                    self.scenes_updated.emit()
+            else:
+                self.logger.warning("Could not save calculated scene durations locally")
 
     def check_refresh_completion(self):
         """Check if refresh is complete and update status accordingly"""
