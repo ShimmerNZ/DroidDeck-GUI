@@ -268,13 +268,13 @@ class HomeScreen(BaseScreen):
         self.navigation_cooldown = 0.1
         self._last_scene_trigger_time = 0.0
 
-        # Scene and navigation messages stay active regardless of visibility:
-        # scene state (playing/locked) must track reality even while the
-        # operator is on another screen. These are low-rate messages.
+        # Scene messages stay active regardless of visibility: scene state
+        # (playing/locked) must track reality even while the operator is on
+        # another screen. D-pad navigation only applies while Home is shown.
         self.subscribe("scene_completed", self._on_scene_completed)
         self.subscribe("scene_started", self._on_scene_started)
         self.subscribe("scene_error", self._on_scene_error)
-        self.subscribe("navigation", self._on_navigation)
+        self.subscribe_while_visible("navigation", self._on_navigation)
         
         # Remove focus policy - no local input handling
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)

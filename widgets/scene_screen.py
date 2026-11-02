@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+WALL-E Control System - Scene Screen
+Scene list on the left, editor for the selected scene on the right.
+Text fields sit at the top of the editor so they stay visible above the
+on-screen keyboard.
+"""
 
-import json
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QWidget, QCheckBox, QComboBox, QMessageBox,
-    QLineEdit, QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem,
-    QHeaderView, QTableWidget, QTableWidgetItem, QFrame, QDialog,
-    QDialogButtonBox
+    QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QWidget,
+    QComboBox, QMessageBox, QLineEdit, QListWidget, QListWidgetItem,
+    QListView, QFrame, QSizePolicy, QAbstractButton
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup, QTimer
-from PyQt6.QtGui import QFont, QPainter, QPalette
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QPointF, QRectF, QRegularExpression
+from PyQt6.QtGui import (
+    QFont, QColor, QPainter, QPen, QPixmap, QPainterPath, QIcon, QRegularExpressionValidator
+)
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
-from core.theme_manager import theme_manager  # Import theme manager
+from core.theme_manager import theme_manager
 from core.utils import error_boundary
 
 # Category definitions with emojis
 CATEGORIES = {
     "Happy": "😊",
-    "Sad": "😢", 
+    "Sad": "😢",
     "Curious": "🤔",
     "Angry": "😠",
     "Surprise": "😲",
@@ -31,996 +36,371 @@ CATEGORIES = {
     "Sleepy": "😴"
 }
 
-SCENE_TYPE_SYMBOLS = {
-    "Audio": "🎵",
-    "Script": "🎬"
-}
+SCENES_CONFIG_PATH = "resources/configs/scenes_config.json"
+NO_BOTTANGO_SCENES = "No scenes available"
+FILTER_ALL = "All"
 
-class TouchFriendlyMultiSelect(QWidget):
-    """Touch-friendly multi-select widget with modal dialog"""
-    
-    def __init__(self, categories, selected_categories=None):
-        super().__init__()
-        self.categories = categories
-        self.selected_categories = selected_categories or []
-        self.setup_ui()
-    
-    def setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.display_label = QLabel(self.get_display_text())
-        self.update_style()
-        self.display_label.setMinimumHeight(45)
-        self.display_label.mousePressEvent = self.open_selector
-        
-        layout.addWidget(self.display_label)
-    
-    def update_style(self):
-        """Update styling based on current theme"""
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        card_bg = theme_manager.get("card_bg")
-        
-        self.display_label.setStyleSheet(f"""
-            QLabel {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 6px;
-                color: {primary};
-                padding: 10px 15px;
-                font-size: 14px;
-                font-weight: 500;
-            }}
-            QLabel:hover {{
-                background-color: #2d2d2d;
-                border-color: {primary_light};
-                color: {primary_light};
-            }}
-        """)
-        
-    def get_display_text(self):
-        if not self.selected_categories:
-            return "Select categories..."
-        elif len(self.selected_categories) <= 2:
-            return ", ".join(self.selected_categories)
-        else:
-            return f"{len(self.selected_categories)} categories selected"
-    
-    def open_selector(self, event):
-        dialog = CategorySelectorDialog(self.categories, self.selected_categories, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.selected_categories = dialog.get_selected_categories()
-            self.display_label.setText(self.get_display_text())
-    
-    def get_selected_categories(self):
-        return self.selected_categories.copy()
-    
-    def set_selected_categories(self, categories):
-        self.selected_categories = categories.copy()
-        self.display_label.setText(self.get_display_text())
+# Layout - matches the Health screen card positions
+CONTENT_WIDTH = 1061
+CONTENT_HEIGHT = 490
+CARD_GAP = 12
+CARD_HEIGHT = 434
+LIST_CARD_WIDTH = 470
+EDIT_CARD_WIDTH = 579
+BAR_HEIGHT = 44
+LIST_ROW_HEIGHT = 40
+LIST_ROW_SPACING = 4
+CATEGORIES_PER_ROW = 5
 
-class CategorySelectorDialog(QDialog):
-    """Modal dialog for category selection"""
-    
-    def __init__(self, categories, selected_categories, parent=None):
+CARD_OBJECT_NAME = "scene_card"
+
+# Fixed colours shared by every theme
+LABEL_GREY = "#9e9e9e"
+TEXT_SOFT = "#d6d6d6"
+TILE_BG = "#202020"
+ROW_BG = "#1f1f1f"
+ICON_GREY = "#8a8a8a"
+DIVIDER = "#2e2e2e"
+DIRTY_ORANGE = "#ff9800"
+
+
+def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0,
+            family: str = "Arial") -> QFont:
+    """Font sized in pixels so the layout matches the mockup"""
+    font = QFont(family)
+    if family != "Arial":
+        font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return font
+
+
+def rgba(color: str, alpha: float) -> str:
+    """CSS rgba() string for a theme colour at the given opacity"""
+    c = QColor(color)
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
+
+
+def card_style() -> str:
+    """Card frame: panel background with the theme colour as a soft border"""
+    primary = theme_manager.get("primary_color")
+    panel_bg = theme_manager.get("panel_bg")
+    return f"""
+        QFrame#{CARD_OBJECT_NAME} {{
+            background-color: {panel_bg};
+            border: 1px solid {rgba(primary, 0.45)};
+            border-radius: 12px;
+        }}
+        QLabel {{
+            border: none;
+            background: transparent;
+        }}
+    """
+
+
+def plain_button_style() -> str:
+    """Dark button used for secondary actions"""
+    primary = theme_manager.get("primary_color")
+    return f"""
+        QPushButton {{
+            background-color: #2e2e2e;
+            color: white;
+            border: 1px solid #666;
+            border-radius: 8px;
+        }}
+        QPushButton:hover {{
+            border-color: {primary};
+        }}
+        QPushButton:pressed {{
+            background-color: #1a1a1a;
+            border-color: {primary};
+        }}
+        QPushButton:disabled {{
+            background: #2a2a2a;
+            color: #666;
+            border-color: #444;
+        }}
+    """
+
+
+def filled_button_style(fill: str) -> str:
+    """Solid button for a main action"""
+    return f"""
+        QPushButton {{
+            background-color: {fill};
+            color: #111111;
+            border: 1px solid {fill};
+            border-radius: 8px;
+        }}
+        QPushButton:hover {{
+            border: 2px solid white;
+        }}
+        QPushButton:pressed {{
+            background-color: #2e2e2e;
+            color: {fill};
+        }}
+        QPushButton:disabled {{
+            background: #2a2a2a;
+            color: #666;
+            border-color: #444;
+        }}
+    """
+
+
+def outline_button_style(color: str, text: str) -> str:
+    """Transparent button with a coloured outline (destructive actions)"""
+    return f"""
+        QPushButton {{
+            background: transparent;
+            color: {text};
+            border: 1px solid {color};
+            border-radius: 8px;
+        }}
+        QPushButton:hover {{
+            background-color: {rgba(color, 0.15)};
+        }}
+        QPushButton:pressed {{
+            background-color: {rgba(color, 0.3)};
+        }}
+        QPushButton:disabled {{
+            color: #666;
+            border-color: #444;
+        }}
+    """
+
+
+def input_style() -> str:
+    primary = theme_manager.get("primary_color")
+    return f"""
+        QLineEdit {{
+            background-color: {TILE_BG};
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 0px 12px;
+            color: white;
+        }}
+        QLineEdit:focus {{
+            border: 2px solid {primary};
+            padding: 0px 11px;
+        }}
+        QLineEdit:disabled {{
+            color: #666;
+            border-color: #3a3a3a;
+        }}
+    """
+
+
+def combo_style() -> str:
+    primary = theme_manager.get("primary_color")
+    return f"""
+        QComboBox {{
+            background-color: {TILE_BG};
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 0px 12px;
+            color: white;
+        }}
+        QComboBox:focus, QComboBox:on {{
+            border-color: {primary};
+        }}
+        QComboBox:disabled {{
+            color: #666;
+            border-color: #3a3a3a;
+        }}
+        QComboBox::drop-down {{
+            border: none;
+            width: 28px;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {TILE_BG};
+            color: white;
+            border: 1px solid #555;
+            outline: none;
+            selection-background-color: {primary};
+            selection-color: #111111;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 38px;
+            padding: 0px 10px;
+        }}
+    """
+
+
+def _make_icon(kind: str, color: str) -> QPixmap:
+    """Small line icon for a scene type: 'audio' (note) or 'anim' (film)"""
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor(color), 1.6))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    if kind == "audio":
+        path = QPainterPath()
+        path.moveTo(5, 12)
+        path.lineTo(5, 2)
+        path.lineTo(13, 1)
+        path.lineTo(13, 11)
+        painter.drawPath(path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QPointF(3.2, 12.5), 2.2, 2.2)
+        painter.drawEllipse(QPointF(11.2, 11.5), 2.2, 2.2)
+    elif kind == "anim":
+        painter.drawRoundedRect(QRectF(1, 3, 14, 10), 1.5, 1.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        triangle = QPainterPath()
+        triangle.moveTo(6.5, 6)
+        triangle.lineTo(10.5, 8)
+        triangle.lineTo(6.5, 10)
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        triangle = QPainterPath()
+        triangle.moveTo(3, 1)
+        triangle.lineTo(14, 8)
+        triangle.lineTo(3, 15)
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+    painter.end()
+    return pixmap
+
+
+def _format_duration(value) -> str:
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return "--"
+
+
+class ToggleSwitch(QAbstractButton):
+    """On/off switch sized for touch"""
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.categories = categories
-        self.selected_categories = selected_categories.copy()
-        self.checkboxes = {}
-        self.setup_ui()
-        
-        # Connect state change handlers for Idle category exclusivity
-        for category, checkbox in self.checkboxes.items():
-            checkbox.stateChanged.connect(
-                lambda state, cat=category: self._on_category_changed(cat, state)
-            )
-        
-    def setup_ui(self):
-        self.setWindowTitle("Select Categories")
-        self.setModal(True)
-        self.setFixedSize(350, 450)
-        
-        primary = theme_manager.get("primary_color")
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: #222;
-                border: 3px solid {primary};
-                border-radius: 12px;
-            }}
-        """)
-        
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        
-        # Header
-        header = QLabel("Select Categories:")
-        header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        header.setStyleSheet(f"color: {primary}; padding: 15px;")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(header)
-        
-        # Scrollable area for categories
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        grey = theme_manager.get("grey")
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
-                border: 2px solid {grey};
-                border-radius: 8px;
-                background-color: #333;
-            }}
-        """)
-        
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setSpacing(5)
-        
-        # Create checkboxes for each category
-        for category in self.categories:
-            emoji = CATEGORIES.get(category, "⭐")
-            checkbox = QCheckBox(f"{emoji} {category}")
-            checkbox.setChecked(category in self.selected_categories)
-            
-            # Special styling for Idle category to highlight its exclusivity
-            if category == "Idle":
-                idle_color = "#88ccff"  # Light blue for Idle
-                checkbox.setStyleSheet(f"""
-                    QCheckBox {{
-                        color: {idle_color};
-                        font-size: 16px;
-                        padding: 12px;
-                        min-height: 40px;
-                        font-weight: bold;
-                        background-color: #2a2a3a;
-                        border-radius: 4px;
-                    }}
-                    QCheckBox::indicator {{
-                        width: 24px;
-                        height: 24px;
-                    }}
-                    QCheckBox::indicator:checked {{
-                        background-color: {idle_color};
-                        border: 2px solid {idle_color};
-                        border-radius: 4px;
-                    }}
-                    QCheckBox::indicator:unchecked {{
-                        background-color: #555;
-                        border: 2px solid {grey};
-                        border-radius: 4px;
-                    }}
-                    QCheckBox:hover {{
-                        background-color: #3a3a4a;
-                    }}
-                """)
-            else:
-                checkbox.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {primary};
-                    font-size: 16px;
-                    padding: 12px;
-                    min-height: 40px;
-                    font-weight: 500;
-                }}
-                QCheckBox::indicator {{
-                    width: 24px;
-                    height: 24px;
-                }}
-                QCheckBox::indicator:checked {{
-                    background-color: {primary};
-                    border: 2px solid {primary};
-                    border-radius: 4px;
-                }}
-                QCheckBox::indicator:unchecked {{
-                    background-color: #555;
-                    border: 2px solid {grey};
-                    border-radius: 4px;
-                }}
-                QCheckBox:hover {{
-                    background-color: #3a3a3a;
-                }}
-            """)
-            self.checkboxes[category] = checkbox
-            scroll_layout.addWidget(checkbox)
-        
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
-        
-        # Buttons
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        card_bg = theme_manager.get("card_bg")
-        primary_light = theme_manager.get("primary_light")
-        button_box.setStyleSheet(f"""
-            QDialogButtonBox QPushButton {{
-                background-color: {card_bg};
-                border: 2px solid {grey};
-                border-radius: 6px;
-                color: {primary};
-                font-weight: bold;
-                padding: 12px 24px;
-                font-size: 16px;
-                min-width: 80px;
-            }}
-            QDialogButtonBox QPushButton:hover {{
-                background-color: #333;
-                border: 2px solid {primary};
-                color: {primary_light};
-            }}
-        """)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-    
-    def get_selected_categories(self):
-        selected = []
-        for category, checkbox in self.checkboxes.items():
-            if checkbox.isChecked():
-                selected.append(category)
-        return selected
-    
-    def _on_category_changed(self, changed_category: str, state: int):
-        """
-        Handle category checkbox changes with Idle exclusivity rule
-        
-        Rule: Idle category is exclusive - cannot be combined with other categories
-        - If Idle is checked: uncheck all other categories
-        - If another category is checked while Idle is checked: uncheck Idle
-        """
-        from PyQt6.QtCore import Qt
-        
-        is_checked = (state == Qt.CheckState.Checked.value)
-        
-        if changed_category == "Idle" and is_checked:
-            # Idle was just checked → uncheck all other categories
-            for category, checkbox in self.checkboxes.items():
-                if category != "Idle" and checkbox.isChecked():
-                    checkbox.blockSignals(True)  # Prevent recursion
-                    checkbox.setChecked(False)
-                    checkbox.blockSignals(False)
-            
-            # Show info message
-            primary = theme_manager.get("primary_color")
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Icon.Information)
-            msg.setWindowTitle("Idle Category")
-            msg.setText("💤 Idle is an exclusive category")
-            msg.setInformativeText(
-                "Idle scenes use ADDITIVE blending and layer over joystick control.\n\n"
-                "For safety, Idle scenes should only contain subtle head/neck movements.\n\n"
-                "Other categories have been deselected."
-            )
-            msg.setStyleSheet(f"""
-                QMessageBox {{
-                    background-color: #222;
-                }}
-                QMessageBox QLabel {{
-                    color: {primary};
-                    font-size: 14px;
-                }}
-                QPushButton {{
-                    background-color: #333;
-                    border: 2px solid {primary};
-                    border-radius: 6px;
-                    color: {primary};
-                    padding: 8px 16px;
-                    font-weight: bold;
-                    min-width: 80px;
-                }}
-                QPushButton:hover {{
-                    background-color: #444;
-                }}
-            """)
-            msg.exec()
-            
-        elif changed_category != "Idle" and is_checked:
-            # Non-Idle category was checked → uncheck Idle if it's checked
-            idle_checkbox = self.checkboxes.get("Idle")
-            if idle_checkbox and idle_checkbox.isChecked():
-                idle_checkbox.blockSignals(True)
-                idle_checkbox.setChecked(False)
-                idle_checkbox.blockSignals(False)
+        self.setCheckable(True)
+        self.setFixedSize(52, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    
-class EnhancedSceneRow(QWidget):
-    """Enhanced expandable scene row with better styling and layout"""
-    
-    def __init__(self, scene_data, audio_files, bottango_scenes, row_index, parent_screen):
+    def sizeHint(self):
+        return QSize(52, 30)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            track = QColor("#2a2a2a")
+        elif self.isChecked():
+            track = QColor(theme_manager.get("green"))
+        else:
+            track = QColor("#3a3a3a")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(track)
+        painter.drawRoundedRect(QRectF(0, 0, 52, 30), 15, 15)
+        knob_x = 25 if self.isChecked() else 3
+        painter.setBrush(QColor("white") if self.isEnabled() else QColor("#666666"))
+        painter.drawEllipse(QRectF(knob_x, 3, 24, 24))
+        painter.end()
+
+
+class SceneListRow(QFrame):
+    """One scene in the list: marker, name, type icons, duration"""
+
+    def __init__(self, scene: dict):
         super().__init__()
-        self.scene_data = scene_data
-        self.audio_files = audio_files
-        self.bottango_scenes = bottango_scenes
-        self.row_index = row_index
-        self.parent_screen = parent_screen
-        self.is_expanded = False
-        self.details_widget = None
-        self.animation_group = None
-        self.setup_ui()
-        
-        # Register for theme changes
-        theme_manager.register_callback(self.update_theme)
-    
-    def setup_ui(self):
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
-        
-        # Create main row (always visible)
-        self.create_main_row()
-        
-        # Create details row (expandable)
-        self.create_details_row()
-        
-        # Initially hide details
-        self.details_widget.hide()
-    
-    def update_theme(self):
-        """Update styling when theme changes"""
-        self.update_main_row_style()
-        self.update_details_style()
-        self.update_name_edit_style()
-        self.update_button_theme_colors()
-        self.update_expand_indicator_style()  
-        if hasattr(self, 'category_selector'):
-            self.category_selector.update_style()
-    
-    def update_main_row_style(self):
-        """Update main row styling"""
-        card_bg = theme_manager.get("card_bg")
+        self.scene = scene
+        self.setObjectName("scene_list_row")
+        self.setFixedHeight(LIST_ROW_HEIGHT)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(10)
+
+        self.marker = QFrame()
+        self.marker.setFixedSize(4, 18)
+
+        self.name_label = QLabel()
+        self.name_label.setFont(px_font(16))
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+        icons_widget = QWidget()
+        icons_widget.setFixedWidth(38)
+        icons_widget.setStyleSheet("background: transparent;")
+        icons = QHBoxLayout(icons_widget)
+        icons.setContentsMargins(0, 0, 0, 0)
+        icons.setSpacing(6)
+        icons.addStretch(1)
+        self.audio_icon = QLabel()
+        self.audio_icon.setPixmap(_make_icon("audio", ICON_GREY))
+        self.anim_icon = QLabel()
+        self.anim_icon.setPixmap(_make_icon("anim", ICON_GREY))
+        icons.addWidget(self.audio_icon)
+        icons.addWidget(self.anim_icon)
+
+        self.duration_label = QLabel()
+        self.duration_label.setFont(px_font(13, family="Consolas"))
+        self.duration_label.setFixedWidth(40)
+        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addWidget(self.marker)
+        layout.addWidget(self.name_label, 1)
+        layout.addWidget(icons_widget)
+        layout.addWidget(self.duration_label)
+
+        self._selected = False
+        self.refresh()
+
+    def refresh(self):
+        """Redraw the row from its scene data"""
+        self.name_label.setText(self.scene.get("label", ""))
+        self.audio_icon.setVisible(bool(self.scene.get("audio_enabled")))
+        self.anim_icon.setVisible(bool(self.scene.get("script_enabled")))
+        self.duration_label.setText(_format_duration(self.scene.get("duration")))
+        self.set_selected(self._selected)
+
+    def set_selected(self, selected: bool):
+        self._selected = selected
         primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        grey = theme_manager.get("grey")
-        
-        if self.is_expanded:
-            self.main_row.setStyleSheet(f"""
-                QWidget {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {card_bg}, stop:1 #1f1f1f);
-                    border: 2px solid {primary};
-                    border-bottom: 1px solid {grey};
-                    border-radius: 8px 8px 0px 0px;
-                    margin: 2px;
-                    margin-bottom: 0px;
-                }}
-            """)
+        if selected:
+            background, border = rgba(primary, 0.14), f"1px solid {primary}"
         else:
-            self.main_row.setStyleSheet(f"""
-                QWidget {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {card_bg}, stop:1 #1f1f1f);
-                    border: 2px solid {grey};
-                    border-radius: 8px;
-                    margin: 2px;
-                }}
-                QWidget:hover {{
-                    border: 2px solid {primary};
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #2a2a2a, stop:1 #232323);
-                }}
-            """)
-    
-    def update_name_edit_style(self):
-        """Update name edit field styling"""
-        card_bg = theme_manager.get("card_bg")
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        
-        self.name_edit.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 6px;
-                color: {primary};
-                padding: 5px 15px;
-                font-size: 16px;
-                font-weight: bold;
+            background, border = ROW_BG, "1px solid transparent"
+        self.setStyleSheet(f"""
+            QFrame#scene_list_row {{
+                background-color: {background};
+                border: {border};
+                border-radius: 10px;
             }}
-            QLineEdit:focus {{
-                border-color: {primary_light};
-                background-color: #2a2a2a;
-            }}
-        """)
-    
-    def update_button_theme_colors(self):
-        """Update Audio and Script button colors based on theme"""
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        audio_enabled = self.audio_cb.isChecked() if hasattr(self, 'audio_cb') else self.scene_data.get("audio_enabled", False)
-        
-        # Check if any script is specified
-        if hasattr(self, 'script_m1_input') and hasattr(self, 'script_m2_input'):
-            has_m1 = self.script_m1_input.text().strip() != ""
-            has_m2 = self.script_m2_input.text().strip() != ""
-            script_enabled = has_m1 or has_m2
-        else:
-            script_enabled = (self.scene_data.get("script_maestro1") is not None or 
-                            self.scene_data.get("script_maestro2") is not None)
-        
-        # Update audio indicator
-        self.audio_indicator.setStyleSheet(f"""
             QLabel {{
-                font-size: 14px;
-                border: 2px solid {'#666' if not audio_enabled else primary};
-                background: {primary if audio_enabled else 'transparent'};
-                color: {'white' if audio_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-        
-        # Update script indicator  
-        self.script_indicator.setStyleSheet(f"""
-            QLabel {{
-                font-size: 14px;
-                border: 2px solid {'#666' if not script_enabled else primary};
-                background: {primary if script_enabled else 'transparent'};
-                color: {'white' if script_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-        
-    def update_expand_indicator_style(self):
-        """Update expand indicator color based on theme"""
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        
-        if self.is_expanded:
-            color = primary_light
-        else:
-            color = primary
-            
-        self.expand_indicator.setStyleSheet(f"""
-            QLabel {{
-                color: {color};
-                font-weight: bold;
-                font-size: 18px;
-                border: none;
                 background: transparent;
-            }}
-        """)
-
-    def create_main_row(self):
-        self.main_row = QWidget()
-        self.main_row.setFixedHeight(70)
-        self.update_main_row_style()
-        
-        # Make the main row clickable
-        self.main_row.mousePressEvent = self.toggle_expansion
-        
-        layout = QHBoxLayout(self.main_row)
-        layout.setContentsMargins(10, 15, 10, 15)
-        layout.setSpacing(15)
-        
-        # Expand/collapse indicator
-        self.expand_indicator = QLabel("▶")
-        primary = theme_manager.get("primary_color")
-        self.expand_indicator.setStyleSheet(f"""
-            QLabel {{
-                color: {primary};
-                font-weight: bold;
-                font-size: 18px;
                 border: none;
-                background: transparent;
             }}
         """)
-        self.expand_indicator.setFixedSize(40, 40)
-        self.expand_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.expand_indicator)
-        
-        # Name field
-        self.name_edit = QLineEdit(self.scene_data.get("label", ""))
-        self.update_name_edit_style()
-        self.name_edit.setMaxLength(32)
-        self.name_edit.setFixedSize(220, 45)
-        layout.addWidget(self.name_edit)
-        
-        # Categories multi-select
-        categories = list(CATEGORIES.keys())
-        selected_categories = self.scene_data.get("categories", [])
-        self.category_selector = TouchFriendlyMultiSelect(categories, selected_categories)
-        self.category_selector.setFixedSize(220, 45)
-        layout.addWidget(self.category_selector)
-        
-        # Type indicators
-        type_widget = QWidget()
-        type_widget.setFixedSize(220, 45)
-        type_widget.setStyleSheet("QWidget { border: none; }")
-        type_layout = QHBoxLayout(type_widget)
-        type_layout.setContentsMargins(0, 0, 0, 0)
-        type_layout.setSpacing(8)
+        marker = primary if selected else "transparent"
+        self.marker.setStyleSheet(f"background-color: {marker}; border: none; border-radius: 2px;")
+        name_color = "white" if selected else TEXT_SOFT
+        self.name_label.setStyleSheet(f"color: {name_color}; background: transparent; border: none;")
+        self.duration_label.setStyleSheet("color: #bdbdbd; background: transparent; border: none;")
 
-        # Audio indicator
-        audio_enabled = self.scene_data.get("audio_enabled", False)
-        self.audio_indicator = QLabel("🎵 Audio" if audio_enabled else "Audio")
-        grey = theme_manager.get("grey")
-        self.audio_indicator.setStyleSheet(f"""
-            QLabel {{
-                font-size: 14px;
-                border: 2px solid #666;
-                background: {primary if audio_enabled else 'transparent'};
-                color: {'white' if audio_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-        self.audio_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.audio_indicator.setFixedSize(100, 35)
-        type_layout.addWidget(self.audio_indicator)
-        
-        # Script indicator
-        script_enabled = self.scene_data.get("script_enabled", False)
-        self.script_indicator = QLabel("🎬 Script" if script_enabled else "Script")
-        self.script_indicator.setStyleSheet(f"""
-            QLabel {{
-                font-size: 14px;
-                border: 2px solid #666;
-                background: {primary if script_enabled else 'transparent'};
-                color: {'white' if script_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-        self.script_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.script_indicator.setFixedSize(100, 35)
-        type_layout.addWidget(self.script_indicator)
-        
-        layout.addWidget(type_widget)
-        
-        # Action buttons
-        actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(10)
-        actions_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        
-        self.test_btn = QPushButton("Test")
-        green = theme_manager.get("green")
-        green_gradient = theme_manager.get("green_gradient", f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {green}, stop:1 #2d8f2d)")
-        self.test_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {green_gradient};
-                border: 2px solid {green};
-                border-radius: 6px;
-                color: white;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 8px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #55dd55, stop:1 {green});
-            }}
-        """)
-        self.test_btn.setFixedSize(70, 35)
-        self.test_btn.clicked.connect(self.test_scene)
-        actions_layout.addWidget(self.test_btn)
-        
-        self.delete_btn = QPushButton("Delete")
-        red = theme_manager.get("red")
-        self.delete_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {red}, stop:1 #8b2635);
-                border: 2px solid {red};
-                border-radius: 6px;
-                color: white;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 8px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ee5555, stop:1 {red});
-            }}
-        """)
-        self.delete_btn.setFixedSize(80, 35)
-        self.delete_btn.clicked.connect(self.delete_scene)
-        actions_layout.addWidget(self.delete_btn)
-        
-        layout.addLayout(actions_layout)
-        self.main_layout.addWidget(self.main_row)
 
-    def create_details_row(self):
-        self.details_widget = QWidget()
-        self.details_widget.setFixedHeight(75)
-        self.update_details_style()
-        
-        layout = QHBoxLayout(self.details_widget)
-        layout.setContentsMargins(15, 15, 15, 15)  # Reduced from 20,15,25,15
-        layout.setSpacing(12)  # Reduced from 20
-        
-        # Audio section
-        self.audio_cb = QCheckBox("Audio:")
-        self.audio_cb.setChecked(self.scene_data.get("audio_enabled", False))
-        self.update_checkbox_style(self.audio_cb)
-        
-        # Audio file dropdown
-        self.audio_file_combo = QComboBox()
-        self.audio_file_combo.addItems(self.audio_files)
-        current_audio = self.scene_data.get("audio_file", "")
-        if current_audio and current_audio in self.audio_files:
-            self.audio_file_combo.setCurrentText(current_audio)
-        elif self.audio_files:
-            self.audio_file_combo.setCurrentIndex(0)
-        
-        self.audio_file_combo.setEnabled(self.audio_cb.isChecked())
-        self.audio_file_combo.setMaximumWidth(180)  # Limit width
-        self.update_combo_style(self.audio_file_combo)
-        
-        self.audio_cb.stateChanged.connect(
-            lambda state: self.audio_file_combo.setEnabled(state == Qt.CheckState.Checked.value)
-        )
-        self.audio_cb.stateChanged.connect(self.update_indicators)
-        
-        layout.addWidget(self.audio_cb)
-        layout.addWidget(self.audio_file_combo)
-        
-        # Script (Bottango Scene) section
-        self.script_cb = QCheckBox("Script:")
-        self.script_cb.setChecked(self.scene_data.get("script_enabled", False))
-        self.update_checkbox_style(self.script_cb)
-        
-        # Bottango scene dropdown
-        self.bottango_combo = QComboBox()
-        scene_names = [scene["name"] for scene in self.bottango_scenes]
-        if scene_names:
-            self.bottango_combo.addItems(scene_names)
-        else:
-            self.bottango_combo.addItem("No scenes available")
-        
-        current_bottango = self.scene_data.get("bottango_scene", "")
-        if current_bottango and current_bottango in scene_names:
-            self.bottango_combo.setCurrentText(current_bottango)
-        elif scene_names:
-            self.bottango_combo.setCurrentIndex(0)
-        
-        self.bottango_combo.setEnabled(self.script_cb.isChecked())
-        self.bottango_combo.setMaximumWidth(180)  # Limit width
-        self.update_combo_style(self.bottango_combo)
-        
-        self.script_cb.stateChanged.connect(
-            lambda state: self.bottango_combo.setEnabled(state == Qt.CheckState.Checked.value)
-        )
-        self.script_cb.stateChanged.connect(self.update_indicators)
-        
-        layout.addWidget(self.script_cb)
-        layout.addWidget(self.bottango_combo)
-        
-        # Duration section - calculated by the backend, shown read-only
-        duration_label = QLabel("Duration:")
-        duration_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; border: none; background: transparent;")
+class SceneList(QListWidget):
+    """Scene list whose rows always span the full list width"""
 
-        duration_tooltip = "Calculated from the audio and Bottango scene lengths"
-        duration_label.setToolTip(duration_tooltip)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = self.viewport().width()
+        for i in range(self.count()):
+            self.item(i).setSizeHint(QSize(width, LIST_ROW_HEIGHT))
 
-        self.duration_value_label = QLabel()
-        self.duration_value_label.setToolTip(duration_tooltip)
-        primary = theme_manager.get("primary_color")
-        self.duration_value_label.setStyleSheet(
-            f"color: {primary}; font-weight: bold; font-size: 13px; min-width: 44px; border: none; background: transparent;"
-        )
-        self.set_calculated_duration(self.scene_data.get("duration", 1.0))
-
-        layout.addWidget(duration_label)
-        layout.addWidget(self.duration_value_label)
-        
-        # Delay section (plain text input)
-        delay_label = QLabel("Delay(ms):")
-        delay_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px; min-width: 62px; border: none; background: transparent;")
-        
-        self.delay_input = QLineEdit()
-        self.delay_input.setText(str(self.scene_data.get("delay", 0)))
-        self.delay_input.setPlaceholderText("0")
-        self.delay_input.setMaximumWidth(60)  # Smaller input
-        self.update_text_input_style(self.delay_input)
-        self.delay_input.textChanged.connect(lambda text: self.validate_int_input(text, self.delay_input))
-        
-        # Delay is enabled if audio is checked AND script is checked
-        self.delay_input.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
-        
-        def update_delay_enabled():
-            self.delay_input.setEnabled(self.audio_cb.isChecked() and self.script_cb.isChecked())
-        
-        self.audio_cb.stateChanged.connect(update_delay_enabled)
-        self.script_cb.stateChanged.connect(update_delay_enabled)
-        
-        layout.addWidget(delay_label)
-        layout.addWidget(self.delay_input)
-        layout.addStretch()
-        
-        self.main_layout.addWidget(self.details_widget)
-        
-    def update_details_style(self):
-        """Update details styling when theme changes"""
-        expanded_bg = theme_manager.get("expanded_bg")
-        grey = theme_manager.get("grey")
-        
-        self.details_widget.setStyleSheet(f"""
-            QWidget {{
-                background: {expanded_bg};
-                border: 2px solid {grey};
-                border-top: none;
-                border-radius: 0px 0px 8px 8px;
-                margin: 2px;
-                margin-top: 0px;
-            }}
-        """)
-    
-    def update_checkbox_style(self, checkbox):
-        """Update checkbox styling"""
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        checkbox.setStyleSheet(f"""
-            QCheckBox {{
-                color: white;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 60px;
-                border: none;
-                background: transparent;
-            }}
-            QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {primary};
-                border: 2px solid {primary};
-                border-radius: 3px;
-            }}
-            QCheckBox::indicator:unchecked {{
-                background-color: #555;
-                border: 2px solid {grey};
-                border-radius: 3px;
-            }}
-        """)
-    
-    def update_combo_style(self, combo):
-        """Update combobox styling"""
-        card_bg = theme_manager.get("card_bg")
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 4px;
-                color: {primary};
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 25px;
-                min-width: 140px;
-            }}
-            QComboBox:disabled {{
-                background-color: #333;
-                border-color: {grey};
-                color: {grey};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid {primary};
-                margin-right: 5px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                color: {primary};
-                selection-background-color: {primary};
-                selection-color: black;
-            }}
-        """)
-    
-    def update_script_input_style(self, input_widget):
-        """Update script input styling"""
-        card_bg = theme_manager.get("card_bg")
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        input_widget.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 4px;
-                color: {primary};
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 25px;
-                max-width: 80px;
-            }}
-            QLineEdit:disabled {{
-                background-color: #333;
-                border-color: {grey};
-                color: {grey};
-            }}
-            QLineEdit::placeholder {{
-                color: {grey};
-            }}
-        """)
-    
-    def update_text_input_style(self, input_widget):
-        """Update text input styling (for duration and delay)"""
-        card_bg = theme_manager.get("card_bg")
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        input_widget.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {card_bg};
-                border: 2px solid {primary};
-                border-radius: 4px;
-                color: {primary};
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 25px;
-                min-width: 50px;
-            }}
-            QLineEdit:disabled {{
-                background-color: #333;
-                border-color: {grey};
-                color: {grey};
-            }}
-            QLineEdit::placeholder {{
-                color: {grey};
-            }}
-        """)
-    
-    def validate_float_input(self, text, input_widget):
-        """Only allow valid float input for duration"""
-        if text:
-            # Allow digits, single decimal point
-            filtered = ''.join(c for c in text if c.isdigit() or c == '.')
-            # Ensure only one decimal point
-            if filtered.count('.') > 1:
-                filtered = filtered[:filtered.rfind('.')]
-            if filtered != text:
-                input_widget.setText(filtered)
-    
-    def validate_int_input(self, text, input_widget):
-        """Only allow digits for delay"""
-        if text and not text.isdigit():
-            filtered_text = ''.join(c for c in text if c.isdigit())
-            input_widget.setText(filtered_text)
-    
-    def update_bottango_scenes(self, bottango_scenes):
-        """Update the Bottango scenes dropdown with new scenes"""
-        self.bottango_scenes = bottango_scenes
-        current_selection = self.bottango_combo.currentText()
-        # Also check the original saved value — combo may show wrong text if it
-        # was built before the scene list arrived (race condition on refresh)
-        saved_selection = self.scene_data.get("bottango_scene", "")
-        self.bottango_combo.clear()
-
-        scene_names = [scene["name"] for scene in bottango_scenes]
-        if scene_names:
-            self.bottango_combo.addItems(scene_names)
-            # Prefer the saved value, fall back to whatever was showing
-            target = saved_selection if saved_selection in scene_names else current_selection
-            if target in scene_names:
-                self.bottango_combo.setCurrentText(target)
-        else:
-            self.bottango_combo.addItem("No scenes available")
-    
-    def update_indicators(self):
-        """Update the type indicators based on checkbox states"""
-        audio_enabled = self.audio_cb.isChecked()
-        script_enabled = self.script_cb.isChecked()
-        primary = theme_manager.get("primary_color")
-        grey = theme_manager.get("grey")
-        
-        self.audio_indicator.setText("🎵 Audio" if audio_enabled else "Audio")
-        self.audio_indicator.setStyleSheet(f"""
-            QLabel {{
-                font-size: 14px;
-                border: 2px solid {'#666' if not audio_enabled else primary};
-                background: {primary if audio_enabled else 'transparent'};
-                color: {'white' if audio_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-        
-        self.script_indicator.setText("🎬 Script" if script_enabled else "Script")
-        self.script_indicator.setStyleSheet(f"""
-            QLabel {{
-                font-size: 14px;
-                border: 2px solid {'#666' if not script_enabled else primary};
-                background: {primary if script_enabled else 'transparent'};
-                color: {'white' if script_enabled else grey};
-                padding: 4px;
-                font-weight: bold;
-            }}
-        """)
-    
-    def toggle_expansion(self, event):
-        """Toggle the expansion state"""
-        if self.is_expanded:
-            self.collapse()
-        else:
-            self.expand()
-    
-    def expand(self):
-        """Expand to show details"""
-        if not self.is_expanded:
-            self.is_expanded = True
-            self.expand_indicator.setText("▼")
-            self.update_expand_indicator_style()  # Use theme-aware styling
-            self.details_widget.show()
-            self.update_main_row_style()
-    
-    def collapse(self):
-        """Collapse to hide details"""
-        if self.is_expanded:
-            self.is_expanded = False
-            self.expand_indicator.setText("▶")
-            self.update_expand_indicator_style()  # Use theme-aware styling
-            self.details_widget.hide()
-            self.update_main_row_style()
-    
-    def test_scene(self):
-        """Test this scene"""
-        scene_data = self.get_scene_data()
-        self.parent_screen.test_scene_data(scene_data)
-    
-    def delete_scene(self):
-        """Delete this scene"""
-        self.parent_screen.delete_scene_row(self.row_index)
-    
-    def set_calculated_duration(self, duration):
-        """Show the backend-calculated scene duration"""
-        try:
-            self.calculated_duration = float(duration)
-        except (TypeError, ValueError):
-            self.calculated_duration = 1.0
-        self.duration_value_label.setText(f"{self.calculated_duration:.1f}s")
-
-    def get_scene_data(self):
-        """Extract current scene data from widgets"""
-        audio_file = self.audio_file_combo.currentText() if self.audio_cb.isChecked() else ""
-        
-        # Get bottango scene if script is enabled
-        bottango_scene = ""
-        if self.script_cb.isChecked():
-            bottango_scene = self.bottango_combo.currentText()
-            if bottango_scene == "No scenes available":
-                bottango_scene = ""
-        
-        # Duration is calculated by the backend on save; the last known
-        # value is passed through unchanged
-        duration = self.calculated_duration
-
-        try:
-            delay = int(self.delay_input.text()) if self.delay_input.text() else 0
-        except ValueError:
-            delay = 0
-        
-        # Only include delay if both audio and script are enabled
-        if not (self.audio_cb.isChecked() and self.script_cb.isChecked()):
-            delay = 0
-        
-        return {
-            "label": self.name_edit.text().strip(),
-            "emoji": "🎭",
-            "categories": self.category_selector.get_selected_categories(),
-            "audio_enabled": self.audio_cb.isChecked(),
-            "audio_file": audio_file,
-            "script_enabled": self.script_cb.isChecked(),
-            "bottango_scene": bottango_scene,
-            "duration": duration,
-            "delay": delay
-        }
 
 class SceneScreen(BaseScreen):
-    """Interface for managing emotion scenes and audio mappings with enhanced accordion layout"""
-    
+    """Interface for managing emotion scenes and their audio / animation"""
+
     scenes_updated = pyqtSignal()  # Signal to notify HomeScreen of changes
 
     def _setup_screen(self):
@@ -1028,13 +408,19 @@ class SceneScreen(BaseScreen):
         self.scenes_data = []
         self.audio_files = []
         self.bottango_scenes = []  # Available Bottango scenes from backend
-        self.scene_rows = []
-        
-        # Register for theme changes
+        self.selected_scene = None
+        self.filter_category = FILTER_ALL
+        self._dirty_ids = set()
+        self._structure_changed = False
+        self._loading_editor = False
+        self._row_widgets = []
+
         theme_manager.register_callback(self.update_theme)
-        
+
         self.init_ui()
-        
+        self._load_editor()
+        self._show_summary()
+
         if self.websocket:
             # All scene-related messages route through the central dispatcher;
             # registrations stay active while hidden so unsolicited updates
@@ -1043,14 +429,15 @@ class SceneScreen(BaseScreen):
                              "scenes_saved", "bottango_scenes_updated",
                              "bottango_import_complete"):
                 self.subscribe(msg_type, self.handle_message)
+            # D-pad moves through the list only while this screen is shown
+            self.subscribe_while_visible("navigation", self._on_navigation)
             # Wait for connection before requesting audio files
             if self.websocket.is_connected():
                 self.request_audio_files()
             else:
-                # Set up a timer to retry when connection is established
                 self.connection_check_timer = QTimer()
                 self.connection_check_timer.timeout.connect(self.check_connection_and_request_audio)
-                self.connection_check_timer.start(1000)  # Check every second
+                self.connection_check_timer.start(1000)
         else:
             self.use_fallback_audio_files()
 
@@ -1060,269 +447,696 @@ class SceneScreen(BaseScreen):
             self.connection_check_timer.stop()
             self.request_audio_files()
 
-    def update_theme(self):
-        """Update all UI elements when theme changes"""
-        self.update_main_frame_style()
-        self.update_scroll_area_style()
-        self.update_button_styles()
-        self.update_status_label_style()
-        
-        # Update all scene rows
-        for row in self.scene_rows:
-            row.update_theme()
+    # ---------- Layout ----------
 
-    def update_main_frame_style(self):
-        """Update main frame styling"""
-        primary = theme_manager.get("primary_color")
-        self.main_frame.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1a1a1a, stop:1 #0f0f0f);
-                border: 2px solid {primary};
-                border-radius: 15px;
-                padding: 10px;
-            }}
-        """)
+    def init_ui(self):
+        self._cards = []
+        self._card_titles = []
+        self._captions = []
+        self._row_labels = []
 
-    def update_scroll_area_style(self):
-        """Update scroll area styling"""
-        grey = theme_manager.get("grey")
+        root = QVBoxLayout()
+        root.setContentsMargins(101, 40, 12, 6)
+        root.setSpacing(0)
+
+        content = QWidget()
+        content.setFixedSize(CONTENT_WIDTH, CONTENT_HEIGHT)
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(CARD_GAP)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(CARD_GAP)
+        cards.addWidget(self._build_list_card())
+        cards.addWidget(self._build_editor_card())
+        cards.addStretch(1)
+        content_layout.addLayout(cards)
+        content_layout.addLayout(self._build_bottom_bar())
+
+        root.addWidget(content, 0, Qt.AlignmentFlag.AlignLeft)
+        root.addStretch(1)
+        self.setLayout(root)
+
+        self._apply_styles()
+
+    def _make_card(self, width: int):
+        card = QFrame()
+        card.setObjectName(CARD_OBJECT_NAME)
+        card.setFixedSize(width, CARD_HEIGHT)
+        self._cards.append(card)
+        return card
+
+    def _card_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFont(px_font(14, bold=True, spacing=1.5))
+        self._card_titles.append(label)
+        return label
+
+    def _caption(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFont(px_font(12, spacing=1.0))
+        self._captions.append(label)
+        return label
+
+    def _build_list_card(self):
+        card = self._make_card(LIST_CARD_WIDTH)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(self._card_title("SCENES"))
+        self.count_label = QLabel("0 of 0")
+        self.count_label.setFont(px_font(13))
+        self._captions.append(self.count_label)
+        header.addWidget(self.count_label, 1)
+        header.addWidget(self._caption("SHOW"))
+
+        self.filter_combo = QComboBox()
+        self.filter_combo.setView(QListView())
+        self.filter_combo.setFixedSize(170, 40)
+        self.filter_combo.setFont(px_font(15))
+        self.filter_combo.addItem(FILTER_ALL)
+        self.filter_combo.addItems(sorted(CATEGORIES.keys()))
+        self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
+        header.addWidget(self.filter_combo)
+        layout.addLayout(header)
+
+        self.list_divider = QFrame()
+        self.list_divider.setFixedHeight(1)
+        layout.addWidget(self.list_divider)
+
+        self.scene_list = SceneList()
+        self.scene_list.setSpacing(LIST_ROW_SPACING // 2)
+        self.scene_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.scene_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scene_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scene_list.currentRowChanged.connect(self._on_list_row_changed)
+        layout.addWidget(self.scene_list, 1)
+        return card
+
+    def _build_editor_card(self):
+        card = self._make_card(EDIT_CARD_WIDTH)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.addWidget(self._card_title("EDIT SCENE"))
+        header.addStretch(1)
+        self.dirty_label = QLabel("Saved")
+        self.dirty_label.setFont(px_font(13))
+        header.addWidget(self.dirty_label)
+        layout.addLayout(header)
+
+        self.editor_body = QWidget()
+        self.editor_body.setStyleSheet("background: transparent;")
+        body = QVBoxLayout(self.editor_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+
+        # Name and delay first, so they stay above the on-screen keyboard
+        fields = QHBoxLayout()
+        fields.setSpacing(12)
+        name_col = QVBoxLayout()
+        name_col.setSpacing(4)
+        name_col.addWidget(self._caption("NAME"))
+        self.name_edit = QLineEdit()
+        self.name_edit.setFixedHeight(44)
+        self.name_edit.setFont(px_font(18))
+        self.name_edit.setPlaceholderText("Scene name")
+        self.name_edit.textEdited.connect(self._on_name_edited)
+        name_col.addWidget(self.name_edit)
+        fields.addLayout(name_col, 1)
+
+        delay_col = QVBoxLayout()
+        delay_col.setSpacing(4)
+        delay_col.addWidget(self._caption("DELAY (MS)"))
+        self.delay_input = QLineEdit()
+        self.delay_input.setFixedSize(130, 44)
+        self.delay_input.setFont(px_font(18))
+        self.delay_input.setPlaceholderText("0")
+        self.delay_input.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,6}")))
+        self.delay_input.setToolTip("Audio starts this long after the animation (audio and animation both on)")
+        self.delay_input.textEdited.connect(self._on_delay_edited)
+        delay_col.addWidget(self.delay_input)
+        fields.addLayout(delay_col)
+        body.addLayout(fields)
+
+        # Category pills
+        cat_col = QVBoxLayout()
+        cat_col.setSpacing(6)
+        cat_col.addWidget(self._caption("CATEGORIES"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        self.category_buttons = {}
+        for idx, category in enumerate(CATEGORIES.keys()):
+            button = QPushButton(category)
+            button.setCheckable(True)
+            button.setFixedHeight(32)
+            button.setFont(px_font(12, bold=True))
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.toggled.connect(lambda checked, c=category: self._on_category_toggled(c, checked))
+            grid.addWidget(button, idx // CATEGORIES_PER_ROW, idx % CATEGORIES_PER_ROW)
+            self.category_buttons[category] = button
+        for col in range(CATEGORIES_PER_ROW):
+            grid.setColumnStretch(col, 1)
+        cat_col.addLayout(grid)
+        body.addLayout(cat_col)
+
+        # Audio row
+        self.audio_switch = ToggleSwitch()
+        self.audio_switch.toggled.connect(self._on_audio_toggled)
+        self.audio_file_combo = self._make_editor_combo()
+        self.audio_file_combo.currentTextChanged.connect(self._on_audio_file_changed)
+        body.addLayout(self._switch_row("Audio", self.audio_switch, self.audio_file_combo))
+
+        # Animation row
+        self.script_switch = ToggleSwitch()
+        self.script_switch.toggled.connect(self._on_script_toggled)
+        self.bottango_combo = self._make_editor_combo()
+        self.bottango_combo.currentTextChanged.connect(self._on_bottango_changed)
+        body.addLayout(self._switch_row("Animation", self.script_switch, self.bottango_combo))
+
+        body.addStretch(1)
+
+        # Duration and actions
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        actions.addWidget(self._caption("DURATION"))
+        self.duration_value_label = QLabel("--")
+        self.duration_value_label.setFont(px_font(16, family="Consolas"))
+        self.duration_value_label.setToolTip("Calculated from the audio and Bottango scene lengths")
+        actions.addWidget(self.duration_value_label)
+        actions.addStretch(1)
+
+        self.delete_btn = QPushButton("DELETE")
+        self.delete_btn.setFixedSize(110, 44)
+        self.delete_btn.setFont(px_font(14, bold=True))
+        self.delete_btn.clicked.connect(lambda: self.delete_selected_scene())
+        actions.addWidget(self.delete_btn)
+
+        self.test_btn = QPushButton("TEST")
+        self.test_btn.setFixedSize(130, 44)
+        self.test_btn.setFont(px_font(14, bold=True))
+        self.test_btn.setIconSize(QSize(14, 14))
+        self.test_btn.clicked.connect(lambda: self.test_selected_scene())
+        actions.addWidget(self.test_btn)
+        body.addLayout(actions)
+
+        layout.addWidget(self.editor_body, 1)
+        return card
+
+    def _make_editor_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.setView(QListView())
+        combo.setFixedHeight(40)
+        combo.setFont(px_font(14))
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(10)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        return combo
+
+    def _switch_row(self, text: str, switch: ToggleSwitch, combo: QComboBox):
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        label = QLabel(text)
+        label.setFont(px_font(15))
+        label.setFixedSize(92, 44)
+        self._row_labels.append(label)
+        row.addWidget(label)
+        row.addWidget(switch)
+        row.addWidget(combo, 1)
+        return row
+
+    def _build_bottom_bar(self):
+        bar = QHBoxLayout()
+        bar.setSpacing(12)
+
+        self.add_btn = QPushButton("+ ADD NEW SCENE")
+        self.add_btn.setFixedSize(200, BAR_HEIGHT)
+        self.add_btn.setFont(px_font(15, bold=True))
+        self.add_btn.clicked.connect(lambda: self.add_scene())
+        bar.addWidget(self.add_btn)
+
+        self.status_label = QLabel("Ready")
+        self.status_label.setFont(px_font(13))
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setWordWrap(True)
+        self.status_label.setFixedHeight(BAR_HEIGHT)
+        bar.addWidget(self.status_label, 1)
+
+        self.refresh_btn = QPushButton("REFRESH FROM BACKEND")
+        self.refresh_btn.setFixedSize(210, BAR_HEIGHT)
+        self.refresh_btn.setFont(px_font(15, bold=True))
+        self.refresh_btn.clicked.connect(lambda: self.refresh_from_backend())
+        bar.addWidget(self.refresh_btn)
+
+        self.save_btn = QPushButton("SAVE CONFIGURATION")
+        self.save_btn.setFixedSize(200, BAR_HEIGHT)
+        self.save_btn.setFont(px_font(15, bold=True))
+        self.save_btn.clicked.connect(lambda: self.save_config())
+        bar.addWidget(self.save_btn)
+        return bar
+
+    # ---------- Styling ----------
+
+    def _apply_styles(self):
+        """Apply theme colours to every styled widget"""
         primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        dark_bg = theme_manager.get("dark_bg")
-        
-        self.scroll.setStyleSheet(f"""
-            QScrollArea {{
-                border: 3px solid {grey};
-                border-radius: 12px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1e1e1e, stop:1 #141414);
+        green = theme_manager.get("green")
+        red = theme_manager.get("red")
+
+        for card in self._cards:
+            card.setStyleSheet(card_style())
+        for title in self._card_titles:
+            title.setStyleSheet(f"color: {primary}; background: transparent; border: none;")
+        for caption in self._captions:
+            caption.setStyleSheet(f"color: {LABEL_GREY}; background: transparent; border: none;")
+        for label in self._row_labels:
+            label.setStyleSheet(f"color: {TEXT_SOFT}; background: transparent; border: none;")
+        self.list_divider.setStyleSheet(f"background-color: {DIVIDER}; border: none;")
+        self.duration_value_label.setStyleSheet("color: white; background: transparent; border: none;")
+
+        self.name_edit.setStyleSheet(input_style())
+        self.delay_input.setStyleSheet(input_style())
+        for combo in (self.filter_combo, self.audio_file_combo, self.bottango_combo):
+            combo.setStyleSheet(combo_style())
+
+        pill_style = f"""
+            QPushButton {{
+                background-color: #242424;
+                color: {TEXT_SOFT};
+                border: 1px solid #3e3e3e;
+                border-radius: 16px;
+                padding: 0px 4px;
             }}
-            QScrollArea::corner {{
-                background: {dark_bg};
+            QPushButton:checked {{
+                background-color: {primary};
+                color: #111111;
+                border: 1px solid {primary};
+            }}
+            QPushButton:disabled {{
+                color: #555;
+                border-color: #333;
+            }}
+        """
+        for button in self.category_buttons.values():
+            button.setStyleSheet(pill_style)
+
+        self.scene_list.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item, QListWidget::item:selected, QListWidget::item:hover {{
+                background: transparent;
+                border: none;
+                padding: 0px;
             }}
             QScrollBar:vertical {{
-                background: {dark_bg};
-                width: 22px;
-                margin: 26px 0 26px 0;
-                border-radius: 6px;
+                background: #262626;
+                width: 6px;
+                border-radius: 3px;
+                margin: 0px;
             }}
             QScrollBar::handle:vertical {{
                 background: {primary};
-                border-radius: 6px;
+                border-radius: 3px;
                 min-height: 30px;
             }}
-            QScrollBar::handle:vertical:hover {{
-                background: {primary_light};
-            }}
-            QScrollBar::add-line:vertical {{
-                background: #3a3a3a;
-                height: 26px;
-                subcontrol-position: bottom;
-                subcontrol-origin: margin;
-                border-radius: 4px;
-            }}
-            QScrollBar::sub-line:vertical {{
-                background: #3a3a3a;
-                height: 26px;
-                subcontrol-position: top;
-                subcontrol-origin: margin;
-                border-radius: 4px;
-            }}
-            QScrollBar::up-arrow:vertical {{
-                width: 10px;
-                height: 10px;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-bottom: 10px solid {primary};
-            }}
-            QScrollBar::down-arrow:vertical {{
-                width: 10px;
-                height: 10px;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-top: 10px solid {primary};
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
             }}
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
+                background: transparent;
             }}
         """)
 
-    def update_button_styles(self):
-        """Update button styling"""
-        # Update add button
+        self.add_btn.setStyleSheet(plain_button_style())
+        self.refresh_btn.setStyleSheet(plain_button_style())
+        self.save_btn.setStyleSheet(filled_button_style(green))
+        self.delete_btn.setStyleSheet(outline_button_style(red, "#ff7777"))
+        self.test_btn.setStyleSheet(filled_button_style(primary))
+        self.test_btn.setIcon(QIcon(_make_icon("play", "#111111")))
+
+        for row in self._row_widgets:
+            row.set_selected(row.scene is self.selected_scene)
+        self.audio_switch.update()
+        self.script_switch.update()
+        self._update_dirty_label()
+
+    def update_theme(self):
+        """Update all UI elements when theme changes"""
+        self._apply_styles()
+
+    # ---------- Scene list ----------
+
+    def _visible_scenes(self):
+        if self.filter_category == FILTER_ALL:
+            return list(self.scenes_data)
+        return [s for s in self.scenes_data if self.filter_category in s.get("categories", [])]
+
+    def _sort_scenes(self):
+        self.scenes_data.sort(key=lambda s: s.get("label", "").lower())
+
+    def _rebuild_list(self, keep_scene=None):
+        """Rebuild the list for the current filter and reselect a scene"""
+        target = keep_scene if keep_scene is not None else self.selected_scene
+        visible = self._visible_scenes()
+
+        self.scene_list.blockSignals(True)
+        self.scene_list.clear()
+        self._row_widgets = []
+        width = self.scene_list.viewport().width()
+        for scene in visible:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(width, LIST_ROW_HEIGHT))
+            self.scene_list.addItem(item)
+            row = SceneListRow(scene)
+            self.scene_list.setItemWidget(item, row)
+            self._row_widgets.append(row)
+        self.scene_list.blockSignals(False)
+
+        self.count_label.setText(f"{len(visible)} of {len(self.scenes_data)}")
+
+        index = next((i for i, s in enumerate(visible) if s is target), -1)
+        if index < 0 and visible:
+            index = 0
+        if index >= 0:
+            self._select_row(index)
+        else:
+            self.selected_scene = None
+            self._load_editor()
+
+    def _select_row(self, index: int):
+        self.scene_list.blockSignals(True)
+        self.scene_list.setCurrentRow(index)
+        self.scene_list.blockSignals(False)
+        self._on_list_row_changed(index)
+        item = self.scene_list.item(index)
+        if item is not None:
+            self.scene_list.scrollToItem(item)
+
+    def _on_list_row_changed(self, index: int):
+        if not (0 <= index < len(self._row_widgets)):
+            return
+        self.selected_scene = self._row_widgets[index].scene
+        for i, row in enumerate(self._row_widgets):
+            row.set_selected(i == index)
+        self._load_editor()
+
+    def _on_filter_changed(self, text: str):
+        self.filter_category = text or FILTER_ALL
+        self._rebuild_list()
+
+    def _refresh_selected_row(self):
+        for row in self._row_widgets:
+            if row.scene is self.selected_scene:
+                row.refresh()
+                break
+
+    def _on_navigation(self, msg: dict):
+        """D-pad up/down moves through the scene list"""
+        action = msg.get("action")
+        if action not in ("up", "down") or self.scene_list.count() == 0:
+            return
+        current = max(0, self.scene_list.currentRow())
+        step = -1 if action == "up" else 1
+        new_index = max(0, min(self.scene_list.count() - 1, current + step))
+        if new_index != self.scene_list.currentRow():
+            self._select_row(new_index)
+
+    # ---------- Editor ----------
+
+    def _load_editor(self):
+        """Show the selected scene in the editor"""
+        scene = self.selected_scene
+        self._loading_editor = True
+        try:
+            self.editor_body.setEnabled(scene is not None)
+            if scene is None:
+                self.name_edit.clear()
+                self.delay_input.clear()
+                for button in self.category_buttons.values():
+                    button.setChecked(False)
+                self.audio_switch.setChecked(False)
+                self.script_switch.setChecked(False)
+                self.duration_value_label.setText("--")
+                return
+
+            self.name_edit.setText(scene.get("label", ""))
+            self.delay_input.setText(str(scene.get("delay", 0) or 0))
+            categories = scene.get("categories", [])
+            for category, button in self.category_buttons.items():
+                button.setChecked(category in categories)
+
+            self.audio_switch.setChecked(bool(scene.get("audio_enabled")))
+            self.script_switch.setChecked(bool(scene.get("script_enabled")))
+            self._fill_audio_combo()
+            self._fill_bottango_combo()
+            self._update_enabled_fields()
+            self.duration_value_label.setText(_format_duration(scene.get("duration")).replace("s", " s"))
+        finally:
+            self._loading_editor = False
+        self._update_dirty_label()
+
+    def _fill_audio_combo(self):
+        """Audio file list, keeping the scene's file visible even if missing"""
+        scene = self.selected_scene
+        current = scene.get("audio_file", "") if scene else ""
+        items = list(self.audio_files)
+        if current and current not in items:
+            items.insert(0, current)
+        self.audio_file_combo.blockSignals(True)
+        self.audio_file_combo.clear()
+        self.audio_file_combo.addItems(items)
+        if current in items:
+            self.audio_file_combo.setCurrentText(current)
+        elif items:
+            self.audio_file_combo.setCurrentIndex(0)
+        self.audio_file_combo.setToolTip(self.audio_file_combo.currentText())
+        self.audio_file_combo.blockSignals(False)
+
+    def _fill_bottango_combo(self):
+        """Bottango scene list, preferring the scene's saved animation"""
+        scene = self.selected_scene
+        current = scene.get("bottango_scene", "") if scene else ""
+        names = [s.get("name", "") for s in self.bottango_scenes if isinstance(s, dict)]
+        if current and current not in names:
+            names.insert(0, current)
+        self.bottango_combo.blockSignals(True)
+        self.bottango_combo.clear()
+        if names:
+            self.bottango_combo.addItems(names)
+            if current in names:
+                self.bottango_combo.setCurrentText(current)
+        else:
+            self.bottango_combo.addItem(NO_BOTTANGO_SCENES)
+        self.bottango_combo.blockSignals(False)
+
+    def _update_enabled_fields(self):
+        audio_on = self.audio_switch.isChecked()
+        script_on = self.script_switch.isChecked()
+        self.audio_file_combo.setEnabled(audio_on)
+        self.bottango_combo.setEnabled(script_on)
+        self.delay_input.setEnabled(audio_on and script_on)
+
+    def _mark_dirty(self):
+        if self.selected_scene is not None:
+            self._dirty_ids.add(id(self.selected_scene))
+        self._update_dirty_label()
+        self._show_summary()
+
+    def _is_dirty(self) -> bool:
+        return bool(self._dirty_ids) or self._structure_changed
+
+    def _clear_dirty(self):
+        self._dirty_ids.clear()
+        self._structure_changed = False
+        self._update_dirty_label()
+
+    def _update_dirty_label(self):
+        scene = self.selected_scene
+        dirty = scene is not None and id(scene) in self._dirty_ids
+        self.dirty_label.setText("Unsaved changes" if dirty else "Saved")
+        color = DIRTY_ORANGE if dirty else LABEL_GREY
+        self.dirty_label.setStyleSheet(f"color: {color}; background: transparent; border: none;")
+
+    def _show_summary(self):
+        """Footer line: scene count and unsaved state"""
+        total = len(self.scenes_data)
+        changes = len(self._dirty_ids)
+        if changes:
+            text = f"{total} scenes · {changes} unsaved change{'s' if changes != 1 else ''}"
+            self.update_status(text, DIRTY_ORANGE)
+        elif self._structure_changed:
+            self.update_status(f"{total} scenes · unsaved changes", DIRTY_ORANGE)
+        else:
+            self.update_status(f"{total} scenes · all saved", LABEL_GREY)
+
+    def _on_name_edited(self, text: str):
+        if self._loading_editor or self.selected_scene is None:
+            return
+        self.selected_scene["label"] = text
+        self._refresh_selected_row()
+        self._mark_dirty()
+
+    def _on_delay_edited(self, text: str):
+        if self._loading_editor or self.selected_scene is None:
+            return
+        try:
+            self.selected_scene["delay"] = int(text) if text else 0
+        except ValueError:
+            self.selected_scene["delay"] = 0
+        self._mark_dirty()
+
+    def _on_category_toggled(self, category: str, checked: bool):
+        if self._loading_editor or self.selected_scene is None:
+            return
+
+        if category == "Idle" and checked:
+            # Idle is exclusive: clear every other category
+            for other, button in self.category_buttons.items():
+                if other != "Idle" and button.isChecked():
+                    button.blockSignals(True)
+                    button.setChecked(False)
+                    button.blockSignals(False)
+            self._show_idle_info()
+        elif category != "Idle" and checked:
+            idle = self.category_buttons.get("Idle")
+            if idle and idle.isChecked():
+                idle.blockSignals(True)
+                idle.setChecked(False)
+                idle.blockSignals(False)
+
+        self.selected_scene["categories"] = [
+            c for c, button in self.category_buttons.items() if button.isChecked()
+        ]
+        self._mark_dirty()
+
+    def _show_idle_info(self):
         primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        
-        self.add_btn.setStyleSheet(f"""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("Idle Category")
+        msg.setText("💤 Idle is an exclusive category")
+        msg.setInformativeText(
+            "Idle scenes use ADDITIVE blending and layer over joystick control.\n\n"
+            "For safety, Idle scenes should only contain subtle head/neck movements.\n\n"
+            "Other categories have been deselected."
+        )
+        msg.setStyleSheet(f"""
+            QMessageBox {{
+                background-color: #222;
+            }}
+            QMessageBox QLabel {{
+                color: {primary};
+                font-size: 14px;
+            }}
             QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {primary_light}, stop:1 {primary});
-                border: 3px solid {primary};
-                border-radius: 10px;
-                color: black;
+                background-color: #333;
+                border: 2px solid {primary};
+                border-radius: 6px;
+                color: {primary};
+                padding: 8px 16px;
                 font-weight: bold;
-                padding: 15px 25px;
-                min-width: 180px;
+                min-width: 80px;
             }}
             QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #f8d547, stop:1 {primary_light});
+                background-color: #444;
             }}
         """)
-        
-        # Update other buttons
-        self.refresh_btn.setStyleSheet(self.get_enhanced_button_style(False))
-        self.save_btn.setStyleSheet(self.get_enhanced_button_style(False))
+        msg.exec()
 
-    def update_status_label_style(self):
-        """Update status label styling"""
-        primary = theme_manager.get("primary_color")
-        self.status_label.setStyleSheet(f"""
-            QLabel {{
-                color: {primary};
-                font-size: 13px;
-                font-weight: bold;
-                padding: 5px;
-                background: transparent;
-                border: none;
-            }}
-        """)
+    def _on_audio_toggled(self, checked: bool):
+        self._update_enabled_fields()
+        if self._loading_editor or self.selected_scene is None:
+            return
+        self.selected_scene["audio_enabled"] = checked
+        if checked and not self.selected_scene.get("audio_file"):
+            self.selected_scene["audio_file"] = self.audio_file_combo.currentText()
+        self._refresh_selected_row()
+        self._mark_dirty()
 
-    def init_ui(self):
-        self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(100, 25, 40, 10)
-        
-        # Main container with enhanced styling
-        self.main_frame = QFrame()
-        self.update_main_frame_style()
-        
-        frame_layout = QVBoxLayout(self.main_frame)
-        frame_layout.setSpacing(5)
-        
-        self.create_enhanced_scroll_area(frame_layout)
-        self.create_enhanced_control_buttons(frame_layout)
-        
-        self.layout.addWidget(self.main_frame)
-        self.setLayout(self.layout)
+    def _on_script_toggled(self, checked: bool):
+        self._update_enabled_fields()
+        if self._loading_editor or self.selected_scene is None:
+            return
+        self.selected_scene["script_enabled"] = checked
+        if checked and not self.selected_scene.get("bottango_scene"):
+            name = self.bottango_combo.currentText()
+            self.selected_scene["bottango_scene"] = "" if name == NO_BOTTANGO_SCENES else name
+        self._refresh_selected_row()
+        self._mark_dirty()
 
-    def create_enhanced_scroll_area(self, parent_layout):
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setMaximumHeight(520)
-        self.update_scroll_area_style()
-        
-        main_container = QWidget()
-        main_layout = QVBoxLayout(main_container)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        self.scenes_container = QWidget()
-        self.scenes_container.setMinimumWidth(900)
-        self.scenes_layout = QVBoxLayout(self.scenes_container)
-        self.scenes_layout.setContentsMargins(10, 10, 10, 10)
-        self.scenes_layout.setSpacing(4)
-        self.scenes_layout.addStretch()
-        
-        main_layout.addWidget(self.scenes_container)
-        self.scroll.setWidget(main_container)
-        parent_layout.addWidget(self.scroll)
+    def _on_audio_file_changed(self, text: str):
+        self.audio_file_combo.setToolTip(text)
+        if self._loading_editor or self.selected_scene is None:
+            return
+        self.selected_scene["audio_file"] = text
+        self._mark_dirty()
 
-    def create_enhanced_control_buttons(self, parent_layout):
-        btn_container = QWidget()
-        btn_container.setFixedHeight(80)
-        btn_layout = QHBoxLayout(btn_container)
-        btn_layout.setContentsMargins(0, 5, 0, 5)
-        btn_layout.setSpacing(20)
-        
-        # Add Scene button
-        self.add_btn = QPushButton("✨ Add New Scene")
-        self.add_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.add_btn.clicked.connect(lambda: self.add_scene())
-        
-        # Status indicator with word wrap enabled
-        self.status_label = QLabel("Ready")
-        self.status_label.setWordWrap(True)  # Enable text wrapping
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Center align
-        primary = theme_manager.get("primary_color")
-        self.status_label.setStyleSheet(f"""
-            QLabel {{
-                color: {primary};
-                font-size: 13px;
-                font-weight: bold;
-                padding: 5px;
-                background: transparent;
-                border: none;
-            }}
-        """)
-        
-        # Action buttons (removed emojis)
-        self.refresh_btn = QPushButton("Refresh from Backend")
-        self.refresh_btn.clicked.connect(lambda: self.refresh_from_backend())
-        
-        self.save_btn = QPushButton("Save Configuration")
-        self.save_btn.clicked.connect(lambda: self.save_config())
-        
-        # Apply initial styling
-        self.update_button_styles()
-        
-        btn_layout.addWidget(self.add_btn)
-        btn_layout.addWidget(self.status_label, 1)  # Give status label stretch factor
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.refresh_btn)
-        btn_layout.addWidget(self.save_btn)
-        
-        parent_layout.addWidget(btn_container)
+    def _on_bottango_changed(self, text: str):
+        if self._loading_editor or self.selected_scene is None:
+            return
+        self.selected_scene["bottango_scene"] = "" if text == NO_BOTTANGO_SCENES else text
+        self._mark_dirty()
 
-    def get_enhanced_button_style(self, primary=False):
-        if primary:
-            primary_color = theme_manager.get("primary_color")
-            primary_light = theme_manager.get("primary_light")
-            return f"""
-                QPushButton {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {primary_light}, stop:1 {primary_color});
-                    border: 3px solid {primary_color};
-                    border-radius: 10px;
-                    color: black;
-                    font-weight: bold;
-                    padding: 15px 25px;
-                    font-size: 16px;
-                    min-width: 150px;
-                }}
-            """
-        else:
-            primary = theme_manager.get("primary_color")
-            return f"""
-                QPushButton {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #4a4a4a, stop:1 #2a2a2a);
-                    border: 2px solid #666;
-                    border-radius: 8px;
-                    color: #ccc;
-                    font-weight: bold;
-                    padding: 12px 20px;
-                    font-size: 14px;
-                    min-width: 140px;
-                }}
-                QPushButton:hover {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #5a5a5a, stop:1 #3a3a3a);
-                    border: 2px solid {primary};
-                    color: {primary};
-                }}
-            """
+    def _export_scene(self, scene: dict) -> dict:
+        """Scene dict in the saved format"""
+        audio_enabled = bool(scene.get("audio_enabled"))
+        script_enabled = bool(scene.get("script_enabled"))
+
+        audio_file = ""
+        if audio_enabled:
+            audio_file = scene.get("audio_file", "") or (self.audio_files[0] if self.audio_files else "")
+
+        bottango_scene = ""
+        if script_enabled:
+            bottango_scene = scene.get("bottango_scene", "")
+            if not bottango_scene and self.bottango_scenes:
+                bottango_scene = self.bottango_scenes[0].get("name", "")
+
+        try:
+            duration = float(scene.get("duration", 1.0))
+        except (TypeError, ValueError):
+            duration = 1.0
+
+        try:
+            delay = int(scene.get("delay", 0) or 0)
+        except (TypeError, ValueError):
+            delay = 0
+        if not (audio_enabled and script_enabled):
+            delay = 0
+
+        return {
+            "label": str(scene.get("label", "")).strip(),
+            "emoji": "🎭",
+            "categories": [c for c in CATEGORIES if c in scene.get("categories", [])],
+            "audio_enabled": audio_enabled,
+            "audio_file": audio_file,
+            "script_enabled": script_enabled,
+            "bottango_scene": bottango_scene,
+            "duration": duration,
+            "delay": delay
+        }
+
+    # ---------- Backend communication ----------
 
     @error_boundary
     def request_audio_files(self):
         primary = theme_manager.get("primary_color")
-        
-        # Check if WebSocket is connected
+
         if not self.websocket or not self.websocket.is_connected():
             self.logger.warning("WebSocket not connected - using fallback audio list")
             self.use_fallback_audio_files()
             return
-        
+
         self.update_status("Requesting audio files...", primary)
         success = self.send_websocket_message("get_audio_files")
         if not success:
@@ -1335,8 +1149,6 @@ class SceneScreen(BaseScreen):
         self.audio_files = [
             "Audio Files Not Found.MP3"
         ]
-        
-        # Update existing scene rows with fallback audio files
         self.update_audio_files()
 
     @error_boundary
@@ -1344,8 +1156,7 @@ class SceneScreen(BaseScreen):
         """Refresh scenes, audio files, and Bottango scenes from backend"""
         primary = theme_manager.get("primary_color")
         self.update_status("Refreshing from backend...", primary)
-        
-        # Initialize refresh tracking
+
         self.refresh_status = {
             "scenes_complete": False,
             "audio_complete": False,
@@ -1357,48 +1168,38 @@ class SceneScreen(BaseScreen):
             "audio_success": False,
             "bottango_success": False
         }
-        
-        # Send refresh request (backend will return audio + Bottango scenes)
+
+        # Backend returns audio + Bottango scenes; scenes are requested separately
         refresh_success = self.send_websocket_message("refresh_backend")
-        
-        # Also request scenes list separately
         scenes_success = self.send_websocket_message("get_scenes")
-        
+
         if not (refresh_success or scenes_success):
             self.update_status("Backend unavailable - keeping local data", "orange")
             self.logger.warning("Failed to refresh from backend")
 
     def update_status(self, message, color=None):
-        """Update the status indicator"""
+        """Update the status line in the bottom bar"""
         if color is None:
             color = theme_manager.get("primary_color")
         self.status_label.setText(message)
-        self.status_label.setStyleSheet(f"""
-            QLabel {{
-                color: {color};
-                font-size: 14px;
-                font-weight: bold;
-                padding: 10px;
-                background: transparent;
-                border: none;
-            }}
-        """)
+        self.status_label.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;"
+        )
 
     @error_boundary
     def handle_message(self, msg: dict):
         try:
             msg_type = msg.get("type")
-            
+
             green = theme_manager.get("green")
             red = theme_manager.get("red")
-            
+
             if msg_type == "scene_list":
                 scenes = msg.get("scenes", [])
                 if scenes:
                     self.scenes_data = scenes
                     self.update_scene_rows()
                     self._sync_calculated_durations(scenes)
-                    # Update refresh tracking
                     if hasattr(self, 'refresh_status'):
                         self.refresh_status["scenes_complete"] = True
                         self.refresh_status["scenes_count"] = len(scenes)
@@ -1414,22 +1215,13 @@ class SceneScreen(BaseScreen):
                         self.check_refresh_completion()
                     else:
                         self.update_status("No scenes from backend", "orange")
-                    
+
             elif msg_type == "audio_files":
                 files = msg.get("files", [])
                 if files:
                     self.audio_files = files
                     self.logger.info(f"Loaded {len(files)} audio files from backend")
-                    for row in self.scene_rows:
-                        row.audio_files = files
-                        current_selection = row.audio_file_combo.currentText()
-                        row.audio_file_combo.clear()
-                        row.audio_file_combo.addItems(files)
-                        if current_selection in files:
-                            row.audio_file_combo.setCurrentText(current_selection)
-                        elif files:
-                            row.audio_file_combo.setCurrentIndex(0)
-                    # Update refresh tracking
+                    self.update_audio_files()
                     if hasattr(self, 'refresh_status'):
                         self.refresh_status["audio_complete"] = True
                         self.refresh_status["audio_count"] = len(files)
@@ -1445,35 +1237,21 @@ class SceneScreen(BaseScreen):
                         self.check_refresh_completion()
                     else:
                         self.update_status("No audio files from backend", "orange")
-            
+
             elif msg_type == "backend_refresh_response":
-                # Handle combined refresh response (audio + Bottango scenes)
                 files = msg.get("audio_files", [])
                 bottango_scenes = msg.get("bottango_scenes", [])
-                
-                # Update audio files
+
                 if files:
                     self.audio_files = files
                     self.logger.info(f"Loaded {len(files)} audio files from backend")
-                    for row in self.scene_rows:
-                        row.audio_files = files
-                        current_selection = row.audio_file_combo.currentText()
-                        row.audio_file_combo.clear()
-                        row.audio_file_combo.addItems(files)
-                        if current_selection in files:
-                            row.audio_file_combo.setCurrentText(current_selection)
-                        elif files:
-                            row.audio_file_combo.setCurrentIndex(0)
-                    
-                # Update Bottango scenes
+                    self.update_audio_files()
+
                 if bottango_scenes:
                     self.bottango_scenes = bottango_scenes
                     self.logger.info(f"Loaded {len(bottango_scenes)} Bottango scenes from backend")
-                    # Update all scene rows with new Bottango scenes
-                    for row in self.scene_rows:
-                        row.update_bottango_scenes(bottango_scenes)
-                
-                # Update refresh tracking
+                    self.update_bottango_scenes()
+
                 if hasattr(self, 'refresh_status'):
                     self.refresh_status["audio_complete"] = True
                     self.refresh_status["audio_count"] = len(files)
@@ -1486,13 +1264,12 @@ class SceneScreen(BaseScreen):
                     status_msg = f"Loaded {len(files)} audio files, {len(bottango_scenes)} Bottango scenes"
                     self.update_status(status_msg, green)
 
-                    
             elif msg_type == "scenes_saved":
                 success = msg.get("success", False)
                 if success:
                     self._sync_calculated_durations(msg.get("scenes", []), emit=False)
                     QMessageBox.information(self, "Saved", "Scenes saved successfully to backend.")
-                    self.update_status("Saved successfully", green)
+                    self.update_status(f"{len(self.scenes_data)} scenes · all saved", green)
                     self.scenes_updated.emit()
                 else:
                     error = msg.get("error", "Unknown error")
@@ -1504,8 +1281,7 @@ class SceneScreen(BaseScreen):
                 bottango_scenes = msg.get("bottango_scenes", [])
                 if bottango_scenes:
                     self.bottango_scenes = bottango_scenes
-                    for row in self.scene_rows:
-                        row.update_bottango_scenes(bottango_scenes)
+                    self.update_bottango_scenes()
                     self.update_status(f"Bottango scenes updated ({len(bottango_scenes)} available)", green)
                     self.logger.info(f"Auto-refreshed Bottango scenes: {len(bottango_scenes)} available")
 
@@ -1515,19 +1291,16 @@ class SceneScreen(BaseScreen):
                 error = msg.get("error")
                 if error:
                     self.update_status(f"Import failed: {error}", red)
-                elif converted > 0:
-                    if bottango_scenes:
-                        self.bottango_scenes = bottango_scenes
-                        for row in self.scene_rows:
-                            row.update_bottango_scenes(bottango_scenes)
-                    self.update_status(f"Imported {converted} scene(s)", green)
                 else:
                     if bottango_scenes:
                         self.bottango_scenes = bottango_scenes
-                        for row in self.scene_rows:
-                            row.update_bottango_scenes(bottango_scenes)
-                    self.update_status(f"No new files to import ({len(bottango_scenes)} scene(s) available)", green)
-                    
+                        self.update_bottango_scenes()
+                    if converted > 0:
+                        self.update_status(f"Imported {converted} scene(s)", green)
+                    else:
+                        self.update_status(
+                            f"No new files to import ({len(bottango_scenes)} scene(s) available)", green)
+
         except Exception as e:
             red = theme_manager.get("red")
             self.logger.error(f"Failed to handle message: {e}")
@@ -1535,7 +1308,7 @@ class SceneScreen(BaseScreen):
 
     def _sync_calculated_durations(self, backend_scenes, emit: bool = True):
         """Copy the backend's calculated scene durations into the local scene
-        config (which the home screen reads) and into the editor rows."""
+        config (which the home screen reads) and into the editor."""
         durations = {
             s.get("label"): s.get("duration")
             for s in backend_scenes
@@ -1544,12 +1317,17 @@ class SceneScreen(BaseScreen):
         if not durations:
             return
 
-        for row in self.scene_rows:
-            label = row.name_edit.text()
+        for scene in self.scenes_data:
+            label = str(scene.get("label", "")).strip()
             if label in durations:
-                row.set_calculated_duration(durations[label])
+                scene["duration"] = durations[label]
+        for row in self._row_widgets:
+            row.refresh()
+        if self.selected_scene is not None:
+            self.duration_value_label.setText(
+                _format_duration(self.selected_scene.get("duration")).replace("s", " s"))
 
-        local = config_manager.get_config("resources/configs/scenes_config.json")
+        local = config_manager.get_config(SCENES_CONFIG_PATH)
         if not isinstance(local, list):
             return
         changed = False
@@ -1562,7 +1340,7 @@ class SceneScreen(BaseScreen):
                 changed = True
 
         if changed:
-            if config_manager.save_config("resources/configs/scenes_config.json", local):
+            if config_manager.save_config(SCENES_CONFIG_PATH, local):
                 self.logger.info("Updated local scene durations from backend")
                 if emit:
                     self.scenes_updated.emit()
@@ -1573,15 +1351,14 @@ class SceneScreen(BaseScreen):
         """Check if refresh is complete and update status accordingly"""
         if not hasattr(self, 'refresh_status'):
             return
-        
+
         green = theme_manager.get("green")
         red = theme_manager.get("red")
-        
-        # Check if all are complete
+
         scenes_done = self.refresh_status.get("scenes_complete", False)
         audio_done = self.refresh_status.get("audio_complete", False)
         bottango_done = self.refresh_status.get("bottango_complete", False)
-        
+
         if scenes_done and audio_done and bottango_done:
             scenes_count = self.refresh_status["scenes_count"]
             audio_count = self.refresh_status["audio_count"]
@@ -1589,7 +1366,7 @@ class SceneScreen(BaseScreen):
             scenes_ok = self.refresh_status["scenes_success"]
             audio_ok = self.refresh_status["audio_success"]
             bottango_ok = self.refresh_status["bottango_success"]
-            
+
             if scenes_ok and audio_ok and bottango_ok:
                 self.update_status(f"Loaded {scenes_count} scenes, {audio_count} audio files, {bottango_count} Bottango scenes", green)
             elif scenes_ok and audio_ok:
@@ -1598,27 +1375,23 @@ class SceneScreen(BaseScreen):
                 self.update_status(f"Loaded {scenes_count} scenes only", "orange")
             else:
                 self.update_status("Refresh completed with errors", red)
-            
-            # Clear refresh tracking
+
             del self.refresh_status
 
     @error_boundary
     def load_local_config(self):
         """Load from standardized path that matches backend"""
-        # Try primary config path first (matches backend)
-        config = config_manager.get_config("resources/configs/scenes_config.json")
+        primary = theme_manager.get("primary_color")
+        config = config_manager.get_config(SCENES_CONFIG_PATH)
         if isinstance(config, list) and config:
             self.scenes_data = config
             self.update_scene_rows()
-            primary = theme_manager.get("primary_color")
             self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", primary)
-            self.logger.debug(f"Loaded {len(self.scenes_data)} scenes from resources/configs/scenes_config.json")
+            self.logger.debug(f"Loaded {len(self.scenes_data)} scenes from {SCENES_CONFIG_PATH}")
             return
-        
-        # No config found - start with empty
+
         self.scenes_data = []
         self.update_scene_rows()
-        primary = theme_manager.get("primary_color")
         self.update_status("No local config found - starting empty", primary)
         self.logger.info("No local config found - starting with empty scene list")
 
@@ -1633,7 +1406,7 @@ class SceneScreen(BaseScreen):
                 "audio_enabled": scene.get("audio_enabled", False),
                 "audio_file": scene.get("audio_file", ""),
                 "script_enabled": scene.get("script_enabled", False),
-                "bottango_scene": scene.get("bottango_scene", ""),  # New Bottango reference
+                "bottango_scene": scene.get("bottango_scene", ""),
                 "duration": scene.get("duration", 1.0),
                 "delay": scene.get("delay", 0)
             }
@@ -1642,74 +1415,77 @@ class SceneScreen(BaseScreen):
 
     @error_boundary
     def update_scene_rows(self):
-        """Update the enhanced accordion scene rows"""
-        # Clear existing rows
-        for row in self.scene_rows:
-            row.setParent(None)
-        self.scene_rows.clear()
-
-        sorted_scenes = sorted(self.scenes_data, key=lambda s: s.get("label", "").lower())
-
-        # Create new enhanced rows with proper parent reference
-        for i, scene_data in enumerate(sorted_scenes):
-            scene_row = EnhancedSceneRow(scene_data, self.audio_files, self.bottango_scenes, i, self)
-            self.scene_rows.append(scene_row)
-            # Insert before the stretch
-            self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
+        """Rebuild the list from scenes_data, keeping the selected scene by name"""
+        previous = self.selected_scene.get("label") if self.selected_scene else None
+        self.scenes_data = [dict(s) for s in self.scenes_data if isinstance(s, dict)]
+        self._sort_scenes()
+        self._clear_dirty()
+        keep = next((s for s in self.scenes_data if s.get("label") == previous), None)
+        self.selected_scene = None
+        self._rebuild_list(keep_scene=keep)
 
     @error_boundary
     def add_scene(self):
+        labels = {s.get("label") for s in self.scenes_data}
+        number = len(self.scenes_data) + 1
+        while f"New Scene {number}" in labels:
+            number += 1
         new_scene = {
-            "label": f"New Scene {len(self.scenes_data) + 1}",
+            "label": f"New Scene {number}",
             "emoji": "🎭",
             "categories": [],
             "audio_enabled": False,
             "audio_file": "",
             "script_enabled": False,
-            "bottango_scene": "",  # Reference to Bottango scene
+            "bottango_scene": "",
             "duration": 2.0,
             "delay": 0
         }
-        
         self.scenes_data.append(new_scene)
-        
-        # Create and add new enhanced row with proper parent reference
-        scene_row = EnhancedSceneRow(new_scene, self.audio_files, self.bottango_scenes, len(self.scene_rows), self)
-        self.scene_rows.append(scene_row)
-        self.scenes_layout.insertWidget(self.scenes_layout.count() - 1, scene_row)
-        
-        scene_row.collapse()
-        primary = theme_manager.get("primary_color")
-        self.update_status(f"Added new scene", primary)
+        self._structure_changed = True
+
+        # A new scene has no categories, so it only shows under All
+        if self.filter_category != FILTER_ALL:
+            self.filter_combo.blockSignals(True)
+            self.filter_combo.setCurrentText(FILTER_ALL)
+            self.filter_combo.blockSignals(False)
+            self.filter_category = FILTER_ALL
+        self._rebuild_list(keep_scene=new_scene)
+        self._mark_dirty()
 
     @error_boundary
-    def delete_scene_row(self, row_index):
-        """Delete a scene row by index"""
-        if 0 <= row_index < len(self.scene_rows):
-            scene_row = self.scene_rows[row_index]
-            scene_name = scene_row.name_edit.text() or f"Scene {row_index + 1}"
-            
-            reply = QMessageBox.question(
-                self, "Delete Scene", 
-                f"Are you sure you want to delete '{scene_name}'?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                # Remove from data and UI
-                if row_index < len(self.scenes_data):
-                    del self.scenes_data[row_index]
-                
-                scene_row.setParent(None)
-                del self.scene_rows[row_index]
-                
-                # Update row indices for remaining rows
-                for i, row in enumerate(self.scene_rows):
-                    row.row_index = i
-                
-                primary = theme_manager.get("primary_color")
-                self.update_status(f"Deleted scene: {scene_name}", primary)
-                self.logger.info(f"Deleted scene: {scene_name} (index: {row_index})")
+    def delete_selected_scene(self):
+        """Delete the scene shown in the editor after confirmation"""
+        scene = self.selected_scene
+        if scene is None:
+            return
+        scene_name = scene.get("label") or "this scene"
+
+        reply = QMessageBox.question(
+            self, "Delete Scene",
+            f"Are you sure you want to delete '{scene_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        visible = self._visible_scenes()
+        position = next((i for i, s in enumerate(visible) if s is scene), 0)
+        self.scenes_data = [s for s in self.scenes_data if s is not scene]
+        self._dirty_ids.discard(id(scene))
+        self._structure_changed = True
+
+        remaining = self._visible_scenes()
+        keep = remaining[min(position, len(remaining) - 1)] if remaining else None
+        self.selected_scene = None
+        self._rebuild_list(keep_scene=keep)
+        self._show_summary()
+        self.logger.info(f"Deleted scene: {scene_name}")
+
+    @error_boundary
+    def test_selected_scene(self):
+        if self.selected_scene is not None:
+            self.test_scene_data(self._export_scene(self.selected_scene))
 
     @error_boundary
     def test_scene_data(self, scene_data):
@@ -1718,92 +1494,79 @@ class SceneScreen(BaseScreen):
         self.logger.info(f"Testing scene: {scene_name}")
         primary = theme_manager.get("primary_color")
         self.update_status(f"Testing: {scene_name}", primary)
-        
-        # Send test command to backend
-        test_data = {
-            "type": "test_scene",
-            "scene": scene_data
-        }
-        success = self.send_websocket_message(test_data)
+
+        success = self.send_websocket_message("test_scene", scene=scene_data)
         if not success:
             red = theme_manager.get("red")
             self.update_status(f"Failed to test {scene_name}", red)
 
     @error_boundary
     def save_config(self):
-        """Save configuration from accordion rows"""
+        """Validate and save all scenes locally and to the backend"""
         primary = theme_manager.get("primary_color")
         red = theme_manager.get("red")
-        
+
         self.update_status("Validating configuration...", primary)
-        
-        # Validate unique names and collect data
-        names = []
-        scene_data = []
-        
-        for row in self.scene_rows:
-            scene = row.get_scene_data()
-            names.append(scene["label"])
-            scene_data.append(scene)
-        
-        # Check for unique names
+
+        scene_data = [self._export_scene(s) for s in self.scenes_data]
+        names = [s["label"] for s in scene_data]
+
         if len(names) != len(set(names)):
             QMessageBox.critical(self, "Error", "Scene names must be unique.")
             self.update_status("Validation failed: Duplicate names", red)
             return
-        
-        # Check for empty names
-        if any(not name.strip() for name in names):
+
+        if any(not name for name in names):
             QMessageBox.critical(self, "Error", "All scenes must have names.")
             self.update_status("Validation failed: Empty names", red)
             return
-        
+
         self.update_status("Saving configuration...", primary)
-        
-        # Save locally first using standardized path
-        success = config_manager.save_config("resources/configs/scenes_config.json", scene_data)
+
+        success = config_manager.save_config(SCENES_CONFIG_PATH, scene_data)
         if not success:
             QMessageBox.critical(self, "Error", "Failed to save local configuration.")
             self.update_status("Local save failed", red)
             return
-        
-        # Update internal data
+
         self.scenes_data = scene_data
-        
-        # Send to backend
-        save_data = {
-            "type": "save_scenes", 
-            "scenes": scene_data
-        }
+        self.update_scene_rows()
+
         backend_success = self.send_websocket_message("save_scenes", scenes=scene_data)
-        
+
         if backend_success:
             self.logger.info("Scene configuration saved locally and sent to backend")
             self.update_status("Saved locally, waiting for backend...", primary)
         else:
-            QMessageBox.warning(self, "Warning", 
+            QMessageBox.warning(self, "Warning",
                 "Scenes saved locally but could not sync to backend. "
                 "Backend will use local file on restart.")
             self.update_status("Saved locally only", "orange")
-            # Still emit signal since local save succeeded
             self.scenes_updated.emit()
 
     def reload_scenes(self):
         """Public method to reload scenes (called by HomeScreen)"""
-        self.request_scenes()
+        self.send_websocket_message("get_scenes")
 
     @error_boundary
     def update_audio_files(self):
-        """Update audio files in all existing rows"""
-        for row in self.scene_rows:
-            row.audio_files = self.audio_files
-            current_selection = row.audio_file_combo.currentText()
-            row.audio_file_combo.clear()
-            row.audio_file_combo.addItems(self.audio_files)
-            if current_selection in self.audio_files:
-                row.audio_file_combo.setCurrentText(current_selection)
-            elif self.audio_files:
-                row.audio_file_combo.setCurrentIndex(0)
+        """Refresh the editor's audio file list"""
+        self._loading_editor = True
+        try:
+            self._fill_audio_combo()
+        finally:
+            self._loading_editor = False
+
+    @error_boundary
+    def update_bottango_scenes(self, bottango_scenes=None):
+        """Refresh the editor's Bottango scene list"""
+        if bottango_scenes is not None:
+            self.bottango_scenes = bottango_scenes
+        self._loading_editor = True
+        try:
+            self._fill_bottango_combo()
+        finally:
+            self._loading_editor = False
 
     def get_scene_summary(self):
         """Get summary of current scene configuration"""
