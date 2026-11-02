@@ -11,6 +11,11 @@ from typing import Any, Callable, Optional
 from .logger import get_logger
 
 
+# 4S LiPo pack thresholds: 3.5V/cell is low, 3.3V/cell is critical
+BATTERY_LOW_VOLTAGE = 14.0
+BATTERY_CRITICAL_VOLTAGE = 13.2
+
+
 def error_boundary(func: Callable) -> Callable:
     """Decorator to catch and log errors without crashing"""
     @wraps(func)

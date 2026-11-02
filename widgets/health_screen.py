@@ -2,34 +2,52 @@
 # -*- coding: utf-8 -*-
 """
 WALL-E Control System - Health Monitoring Screen (Themed)
-Displays system telemetry, battery status, network quality, and performance graphs
+Displays pack voltage and current, motion, Raspberry Pi and network status
 """
 
-import json
 import time
 from collections import deque
-from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QFrame, QWidget,
-                            QGridLayout, QMessageBox, QPushButton, QGroupBox)
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
+                             QWidget, QPushButton, QProgressBar, QSizePolicy)
+from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 import pyqtgraph as pg
 
 from core.config_manager import config_manager as _config_manager
 
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
-from core.utils import error_boundary
-from widgets.voltage_alert_splash import VoltageAlertSplash
+from core.utils import error_boundary, BATTERY_LOW_VOLTAGE, BATTERY_CRITICAL_VOLTAGE
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
 
 
-
 class HealthScreen(BaseScreen):
-    """System health monitoring with telemetry graphs and status displays"""
+    """System health dashboard: graph, power, motion, Pi and link cards"""
 
     # Qt signals for thread-safe updates
-    voltage_update_signal = pyqtSignal(float)
     status_update_signal = pyqtSignal(dict)
+
+    # Fixed colours shared by every theme
+    AMBER = "#ff9800"
+    WHITE = "#ffffff"
+    LABEL_GREY = "#9e9e9e"
+    TEXT_SOFT = "#bdbdbd"
+    TILE_BG = "#202020"
+    TILE_ERROR_BG = "#3a1c1c"
+    UNKNOWN_BADGE_BG = "#3a3a3a"
+    TOTAL_CURRENT_COLOR = "#FF8C00"
+
+    # Card heights - the two columns each total 490px including gaps
+    GRAPH_CARD_HEIGHT = 266
+    POWER_CARD_HEIGHT = 212
+    MOTION_CARD_HEIGHT = 172
+    PI_CARD_HEIGHT = 112
+    LINK_CARD_HEIGHT = 182
+
+    MAESTRO_ROWS = (
+        ("maestro1", "M1", "Head, eyes, hands"),
+        ("maestro2", "M2", "Arms, neck, eyelids, tracks"),
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -46,14 +64,12 @@ class HealthScreen(BaseScreen):
     def _setup_screen(self):
         """Initialize health monitoring interface"""
         self.setFixedWidth(1180)
-        self.startup_complete = False
 
         # Fixed time window (seconds) shown on the telemetry graph, regardless
         # of how fast telemetry updates actually arrive
         self.graph_window_seconds = 100.0
 
         # Initialise early so signal handlers never find these missing
-        self.status_labels = {}
         self.battery_voltage_data = deque()
         self.current_a1_data = deque()
         self.current_a2_data = deque()
@@ -61,374 +77,532 @@ class HealthScreen(BaseScreen):
 
         # Carry-forward cache so zero/missing readings don't wipe displayed values
         self._last_system_stats = {
-            "cpu": "--", "memory": "--", "temperature": "--",
+            "cpu": None, "memory": None, "temperature": None,
             "current_total": None, "current_tracks": None, "sabertooth_temp": None,
         }
-        # Latest pack voltage, used to force the runtime label critical
+        # Latest pack voltage, used for the pack badge and state of charge colour
         self._last_battery_voltage = None
         # Last known throughput bytes for delta calculation
         self._last_net_bytes = None
         self._last_net_time = None
 
-        # Rate limiting for telemetry updates
-        self.last_telemetry_update = 0
+        # Rate limiting for telemetry updates, tracked per message type
+        self._last_update_by_type = {"telemetry": 0.0, "system_status": 0.0}
         self.telemetry_update_interval = 0.25
 
-        # Voltage alarm state tracking
-        self.last_voltage_alarm = None
+        # Last valid readings, carried forward into the graph when a reading is missing
+        self._last_graph_values = {"voltage": None, "tracks": None, "total": None}
 
         # Track start time for relative time calculation
         self.start_time = time.time()
 
-
-
-        # Connect WebSocket for telemetry updates
-        if self.websocket:
-            self.websocket.textMessageReceived.connect(self.handle_telemetry)
+        # Styled widgets, re-styled on theme change
+        self._cards = []
+        self._card_titles = []
+        self._captions = []
+        self._soft_labels = []
+        self._tiles = []
+        self._buttons = []
+        self._maestro_widgets = {}
 
         # Connect signals for thread-safe updates
-        self.voltage_update_signal.connect(self._update_voltage_display)
         self.status_update_signal.connect(self._update_status_displays)
 
         self.init_ui()
 
+        # Telemetry stays subscribed while hidden so the graph history and
+        # runtime estimate keep up to date in the background
+        self.subscribe("telemetry", self._on_telemetry)
+        self.subscribe("system_status", self._on_system_status)
 
-        from PyQt6.QtCore import QTimer
-        self.startup_timer = QTimer()
-        self.startup_timer.timeout.connect(self._check_and_enable_alerts)
-        self.startup_timer.start(500)  # Check every 500ms
-
-        # Periodic timer to poll system_status (for serial FPS stats)
+        # Periodic timer to poll system_status (mixer stats, run-time estimate, hardware)
         self.status_poll_timer = QTimer()
         self.status_poll_timer.timeout.connect(self._request_system_status)
         self.status_poll_timer.start(2000)  # Poll every 2 seconds
 
-    def _check_and_enable_alerts(self):
-        """Check if application is ready and enable voltage alerts"""
-        try:
-            # Check multiple conditions for application readiness
-            app_ready = False
+    # ------------------------------------------------------------------
+    # Widget helpers
+    # ------------------------------------------------------------------
 
-            if (hasattr(self, 'parent') and self.parent() and
-                hasattr(self.parent(), 'isVisible') and
-                self.parent().isVisible()):
+    @staticmethod
+    def _font(pixel_size: int, bold: bool = False, spacing: float = 0.0,
+              family: str = "Arial") -> QFont:
+        """Font sized in pixels so the layout matches the mockup"""
+        font = QFont(family)
+        if family != "Arial":
+            font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPixelSize(pixel_size)
+        font.setBold(bold)
+        if spacing:
+            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+        return font
 
-                # Additional check - make sure we're not in startup/loading screen
-                # You can add more specific checks here based on your app structure
-                app_ready = True
+    def _make_card(self, title: str, height: int):
+        """Create a titled card; returns (card, body_layout, header_row)"""
+        card = QFrame()
+        card.setObjectName("health_card")
+        card.setFixedHeight(height)
 
-            if app_ready:
-                self.voltage_alerts_enabled = True
-                self.startup_complete = True  # Set both flags
-                self.startup_timer.stop()
-                self.logger.info("Voltage alerts enabled - application fully loaded")
-            else:
-                # Keep checking but add a maximum timeout
-                if not hasattr(self, '_startup_check_count'):
-                    self._startup_check_count = 0
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
 
-                self._startup_check_count += 1
-                if self._startup_check_count > 20:  # 10 seconds maximum wait
-                    self.voltage_alerts_enabled = True
-                    self.startup_complete = True
-                    self.startup_timer.stop()
-                    self.logger.info("Voltage alerts enabled - timeout reached")
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(5)
 
-        except Exception as e:
-            self.logger.warning(f"Error checking application state: {e}")
+        title_label = QLabel(title)
+        title_label.setFont(self._font(14, bold=True, spacing=1.5))
+        header_row.addWidget(title_label)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
 
+        self._cards.append(card)
+        self._card_titles.append(title_label)
+        return card, layout, header_row
 
-    def _enable_voltage_alerts(self):
-        """Enable voltage alerts after startup is complete"""
-        self.startup_complete = True
-        self.logger.info("Voltage alerts enabled after startup delay")
+    def _make_caption(self, text: str, pixel_size: int = 11) -> QLabel:
+        """Small grey caption above a value"""
+        label = QLabel(text)
+        label.setFont(self._font(pixel_size, spacing=1.0))
+        self._captions.append(label)
+        return label
 
-    def check_voltage_alarms(self, voltage: float):
-        """Check and display voltage alarms when thresholds are crossed"""
-        # Simple flag check at the start
-        if not getattr(self, 'voltage_alerts_enabled', False):
-            return  # Skip all voltage alerts until enabled
+    def _make_value(self, text: str, pixel_size: int, color: str = None) -> QLabel:
+        """Value label with an initial colour"""
+        label = QLabel(text)
+        label.setFont(self._font(pixel_size))
+        self._set_value(label, text, color or self.WHITE)
+        return label
+
+    def _make_stat(self, caption: str, caption_px: int, value_px: int):
+        """Caption-over-value block; returns (widget, value_label)"""
+        widget = QWidget()
+        widget.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._make_caption(caption, caption_px))
+        value = self._make_value("--", value_px)
+        layout.addWidget(value)
+        return widget, value
+
+    def _make_tile(self) -> QFrame:
+        """Dark rounded tile used inside cards"""
+        tile = QFrame()
+        tile.setObjectName("health_tile")
+        self._tiles.append(tile)
+        return tile
+
+    def _make_badge(self) -> QLabel:
+        """Small coloured status badge"""
+        badge = QLabel("--")
+        badge.setFont(self._font(12, bold=True))
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._set_badge(badge, "--", None)
+        return badge
+
+    def _make_button(self, text: str) -> QPushButton:
+        """Button styled like the existing bandwidth test button"""
+        button = QPushButton(text)
+        button.setFont(self._font(14, bold=True))
+        self._buttons.append(button)
+        return button
+
+    def _set_value(self, label: QLabel, text: str, color: str):
+        """Set a value label's text and colour"""
+        label.setText(text)
+        label.setStyleSheet(f"color: {color}; background: transparent; border: none;")
+
+    def _set_badge(self, badge: QLabel, text: str, background):
+        """Set a badge's text and background; None background means unknown"""
+        if background is None:
+            text_color, background = self.TEXT_SOFT, self.UNKNOWN_BADGE_BG
+        else:
+            text_color = "#111111"
+        badge.setText(text)
+        badge.setStyleSheet(
+            f"color: {text_color}; background: {background}; border: none; "
+            f"border-radius: 4px; padding: 3px 8px;"
+        )
+        badge.adjustSize()
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
 
     def init_ui(self):
-        """Initialize health monitoring UI with graphs and status displays"""
-        # Main graph for battery voltage and current
+        """Build the two-column card layout"""
         self.setup_telemetry_graph()
 
-        # Status display labels
-        self.setup_status_displays()
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(98, 19, 15, 6)
+        main_layout.setSpacing(12)
 
-        # Layout assembly with styled control panel
-        self.setup_layout()
+        left_column = QVBoxLayout()
+        left_column.setContentsMargins(0, 0, 0, 0)
+        left_column.setSpacing(12)
+        left_column.addWidget(self._create_graph_card())
+        left_column.addWidget(self._create_power_card())
+        left_column.addStretch(1)
+
+        right_column = QVBoxLayout()
+        right_column.setContentsMargins(0, 0, 0, 0)
+        right_column.setSpacing(12)
+        right_column.addWidget(self._create_motion_card())
+        right_column.addWidget(self._create_pi_card())
+        right_column.addWidget(self._create_link_card())
+        right_column.addStretch(1)
+
+        left_widget = QWidget()
+        left_widget.setFixedWidth(576)
+        left_widget.setStyleSheet("background: transparent;")
+        left_widget.setLayout(left_column)
+
+        right_widget = QWidget()
+        right_widget.setFixedWidth(479)
+        right_widget.setStyleSheet("background: transparent;")
+        right_widget.setLayout(right_column)
+
+        main_layout.addWidget(left_widget)
+        main_layout.addWidget(right_widget)
+        main_layout.addStretch(1)
+        self.setLayout(main_layout)
+
+        self._apply_styles()
 
     def setup_telemetry_graph(self):
-        """Setup battery voltage and current monitoring graph"""
+        """Setup pack voltage and current graph over the last 100 seconds"""
         self.graph_widget = pg.PlotWidget()
         self._update_graph_theme()
-        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.graph_widget.setTitle("Battery Voltage & Current Draw", color='white', size='14pt')
-        self.graph_widget.setLabel('left', 'Battery Voltage (V)', color='white')
-        self.graph_widget.setLabel('bottom', 'Time (s)', color='white')
-
-        # Set voltage range for 4S LiPo batteries
-        self.graph_widget.setYRange(0, 20)
-        self.graph_widget.setLimits(yMin=0, yMax=20)
+        plot = self.graph_widget.getPlotItem()
+        plot.setContentsMargins(0, 0, 0, 0)
+        plot.hideButtons()
         self.graph_widget.setMouseEnabled(x=False, y=False)
+        self.graph_widget.showGrid(x=False, y=True, alpha=0.15)
 
-        # Add legend
-        self.graph_widget.addLegend(offset=(10, 20))
-        self.graph_widget.getPlotItem().setContentsMargins(15, 15, 15, 15)
+        # 4S pack range - zoomed so sag and the alarm thresholds are visible
+        self.graph_widget.setYRange(12, 17, padding=0)
+        self.graph_widget.setXRange(-self.graph_window_seconds, 0, padding=0)
 
-        # Data buffers are unbounded deques; handle_telemetry prunes them by
-        # elapsed time (self.graph_window_seconds) rather than point count, so
-        # the graph always shows a fixed time window regardless of the actual
-        # telemetry update rate
-        self.battery_voltage_data = deque()
-        self.current_a1_data = deque()
-        self.current_a2_data = deque()
-        self.time_data = deque()
+        tick_font = self._font(11)
+        for axis_name in ("left", "bottom", "right"):
+            axis = plot.getAxis(axis_name)
+            axis.setTextPen(self.LABEL_GREY)
+            axis.setPen("#3a3a3a")
+            axis.setStyle(tickFont=tick_font)
 
-        # Voltage curve (primary Y-axis) - use theme green
-        green = theme_manager.get("green")
-        self.voltage_curve = self.graph_widget.plot(
-            pen=pg.mkPen(color=green, width=4),
-            name="Battery Voltage",
-            antialias=True
-        )
+        plot.getAxis("left").setTicks([[(v, f"{v}V" if v == 17 else str(v)) for v in range(12, 18)]])
+        half = int(self.graph_window_seconds / 2)
+        full = int(self.graph_window_seconds)
+        plot.getAxis("bottom").setTicks([[(-full, f"-{full} s"), (-half, f"-{half} s"), (0, "now")]])
 
-        # Current curves (secondary Y-axis)
+        # Battery alarm thresholds
+        self.low_threshold_line = pg.InfiniteLine(pos=BATTERY_LOW_VOLTAGE, angle=0)
+        self.critical_threshold_line = pg.InfiniteLine(pos=BATTERY_CRITICAL_VOLTAGE, angle=0)
+        plot.addItem(self.low_threshold_line)
+        plot.addItem(self.critical_threshold_line)
+
+        # Current curves on a second view box with the right-hand axis
         self.current_view = pg.ViewBox()
         self.graph_widget.scene().addItem(self.current_view)
-        self.graph_widget.getPlotItem().showAxis('right')
-        self.graph_widget.getPlotItem().getAxis('right').setLabel('Current (A)', color='white')
-        self.graph_widget.getPlotItem().getAxis('right').linkToView(self.current_view)
+        plot.showAxis("right")
+        right_axis = plot.getAxis("right")
+        right_axis.linkToView(self.current_view)
+        right_axis.setTicks([[(a, f"{a}A" if a == 60 else str(a)) for a in (0, 20, 40, 60)]])
+        self.current_view.setXLink(plot.getViewBox())
+        self.current_view.setYRange(0, 60, padding=0)
+        self.current_view.setMouseEnabled(x=False, y=False)
+        plot.getViewBox().sigResized.connect(self.update_views)
 
-        self.current_view.setYRange(0, 70)
-        self.current_view.setLimits(yMin=-5, yMax=100)
-
-        # Link the views
-        self.graph_widget.getPlotItem().getViewBox().sigResized.connect(self.update_views)
-
-        # Current plots with theme colors
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-
-        self.current_a1_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color=primary, width=3),
-            name="Tracks Current",
-            antialias=True
-        )
+        self.current_a2_plot = pg.PlotCurveItem(antialias=True)
+        self.current_a1_plot = pg.PlotCurveItem(antialias=True)
+        self.current_view.addItem(self.current_a2_plot)
         self.current_view.addItem(self.current_a1_plot)
 
-        orange = "#FF8C00"
-        self.current_a2_plot = pg.PlotCurveItem(
-            pen=pg.mkPen(color=orange, width=3),
-            name="Total Current",
-            antialias=True
-        )
-        self.current_view.addItem(self.current_a2_plot)
+        # Voltage curve (primary Y-axis)
+        self.voltage_curve = plot.plot(antialias=True)
 
-        # Add current items to legend
-        legend = self.graph_widget.addLegend(offset=(30, 30))
-        legend.addItem(self.current_a1_plot, "Tracks (A1)")
-        legend.addItem(self.current_a2_plot, "Total (A2)")
+        self._update_graph_pens()
 
-    def _update_graph_theme(self):
-        """Update graph background and styling with theme colors"""
-        panel_bg = theme_manager.get("panel_bg")
-        self.graph_widget.setBackground(panel_bg)
+    def _create_graph_card(self) -> QFrame:
+        """Graph card with a compact legend in the header"""
+        card, layout, header_row = self._make_card(
+            f"PACK VOLTAGE & CURRENT · LAST {int(self.graph_window_seconds)} s",
+            self.GRAPH_CARD_HEIGHT)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
 
-    def setup_status_displays(self):
-        """Setup system status display labels"""
-        self.status_labels = {}
-
-    def _create_control_panel(self):
-        """Create the themed health monitoring control panel"""
-        # Main panel with theme styling
-        control_panel = QWidget()
-        control_panel.setObjectName("control_panel")
-        control_panel.setFixedWidth(340)
-        self._update_control_panel_style(control_panel)
-
-        panel_layout = QVBoxLayout()
-        panel_layout.setContentsMargins(15, 5, 15, 10)
-        panel_layout.setSpacing(10)
-
-        # Header with theme styling
-        self.header = QLabel("SYSTEM HEALTH")
-        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_header_style()
-        panel_layout.addWidget(self.header)
-
-        # Status display section
-        status_section = self._create_status_display_section()
-        panel_layout.addWidget(status_section)
-
-        panel_layout.addSpacing(10)
-
-        # System controls section
-        system_section = self._create_system_controls_section()
-        panel_layout.addWidget(system_section)
-
-        panel_layout.addStretch()
-        control_panel.setLayout(panel_layout)
-        self.control_panel = control_panel
-        return control_panel
-
-    def _update_control_panel_style(self, panel):
-        """Apply themed styling to control panel"""
-        primary = theme_manager.get("primary_color")
-        panel_bg = theme_manager.get("panel_bg")
-        panel.setStyleSheet(f"""
-            QWidget#control_panel {{
-                background-color: {panel_bg};
-                border: 2px solid {primary};
-                border-radius: 12px;
-                color: white;
-            }}
-            QLabel {{
-                border: none;
-                background: transparent;
-            }}
-        """)
-
-    def _update_header_style(self):
-        """Apply themed styling to header"""
-        primary = theme_manager.get("primary_color")
-        self.header.setStyleSheet(f"""
-            QLabel {{
-                border: none;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: {primary};
-                padding: 8px;
-                border-radius: 6px;
-                margin-bottom: 5px;
-            }}
-        """)
-
-    def _create_status_display_section(self):
-        """Create themed status display section within the control panel"""
-        self.status_frame = QWidget()
-        self.status_frame.setObjectName("status_frame")
-        self._update_status_frame_style()
-
-        status_layout = QVBoxLayout()
-        status_layout.setContentsMargins(12, 10, 12, 10)
-        status_layout.setSpacing(6)
-
-        # Create status labels within the panel
-        from PyQt6.QtWidgets import QSizePolicy
-
-        system_configs = [
-            ("cpu", "CPU: 0%"),
-            ("mem", "Memory: 0%"),
-            ("temp", "Temp: 0°C"),
-            ("battery", "Runtime: --"),
-            ("current_tracks", "Tracks: 0.0A"),
-            ("current_total", "Total Current: 0.0A"),
-            ("sabertooth_temp", "Sabertooth: 0.0°C"),
-            ("serial_fps", "Mixer: --Hz"),
-            ("blend_ms", "Blend: --ms"),
-            ("serial_cmds", "Cmds/s: --"),
-            ("active_ch", "Active Ch: --"),
-        ]
-
-        wifi_configs = [
-            ("wifi_signal", "WiFi: --%"),
-            ("wifi_ping", "Ping: --ms"),
-            ("net_down", "Down: --"),
-            ("net_up", "Up: --"),
-        ]
-
-        def _add_label(key, text):
+        self._legend_swatches = {}
+        for key, text in (("voltage", "Pack V"), ("tracks", "Tracks A"), ("total", "Total A")):
+            swatch = QFrame()
+            swatch.setFixedSize(14, 3)
             label = QLabel(text)
-            label.setFont(QFont("Arial", 15))
-            self._update_status_label_style(label)
-            label.setWordWrap(False)
-            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            self.status_labels[key] = label
-            status_layout.addWidget(label)
+            label.setFont(self._font(12))
+            self._soft_labels.append(label)
+            header_row.addSpacing(9)
+            header_row.addWidget(swatch, 0, Qt.AlignmentFlag.AlignVCenter)
+            header_row.addWidget(label)
+            self._legend_swatches[key] = swatch
 
-        for key, text in system_configs:
-            _add_label(key, text)
+        layout.addWidget(self.graph_widget, 1)
+        return card
 
-        # Separator between system and wifi sections
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        primary = theme_manager.get("primary_color")
-        separator.setStyleSheet(f"background-color: {primary}; border: none; max-height: 1px;")
-        status_layout.addWidget(separator)
+    def _create_power_card(self) -> QFrame:
+        """Pack voltage, state of charge, runtime and current tiles"""
+        card, layout, _ = self._make_card("POWER", self.POWER_CARD_HEIGHT)
 
-        for key, text in wifi_configs:
-            _add_label(key, text)
+        content = QHBoxLayout()
+        content.setSpacing(16)
 
-        status_layout.addStretch(1)
+        # Pack block
+        pack_block = QVBoxLayout()
+        pack_block.setContentsMargins(0, 0, 0, 0)
+        pack_block.setSpacing(8)
+        pack_block.addStretch(1)
 
-        self.status_frame.setLayout(status_layout)
-        return self.status_frame
+        pack_row = QHBoxLayout()
+        pack_row.setSpacing(10)
+        self.pack_value_label = self._make_value("--.-- V", 44)
+        self.pack_value_label.setFont(self._font(44, bold=True))
+        self.pack_badge = self._make_badge()
+        pack_row.addWidget(self.pack_value_label)
+        pack_row.addWidget(self.pack_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        pack_row.addStretch(1)
+        pack_block.addLayout(pack_row)
 
-    def _update_status_frame_style(self):
-        """Apply themed styling to status frame"""
-        primary = theme_manager.get("primary_color")
-        self.status_frame.setStyleSheet(f"""
-            QWidget#status_frame {{
-                border: 1px solid {primary};
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }}
-        """)
+        self.soc_bar = QProgressBar()
+        self.soc_bar.setRange(0, 100)
+        self.soc_bar.setValue(0)
+        self.soc_bar.setTextVisible(False)
+        self.soc_bar.setFixedHeight(12)
+        pack_block.addWidget(self.soc_bar)
 
-    def _update_section_header_style(self, header):
-        """Apply themed styling to section header"""
-        primary = theme_manager.get("primary_color")
-        header.setStyleSheet(f"color: {primary}; border: none; margin-bottom: 3px; background: transparent;")
+        self.runtime_label = QLabel()
+        self.runtime_label.setFont(self._font(16))
+        self.runtime_label.setTextFormat(Qt.TextFormat.RichText)
+        self.runtime_label.setText('<span style="color: #d8d8d8;">Runtime --</span>')
+        pack_block.addWidget(self.runtime_label)
+        pack_block.addStretch(1)
 
-    def _update_status_label_style(self, label):
-        """Apply themed styling to status label"""
-        green = theme_manager.get("green")
-        label.setStyleSheet(f"color: {green}; padding: 1px; background: transparent;")
+        pack_widget = QWidget()
+        pack_widget.setFixedWidth(236)
+        pack_widget.setStyleSheet("background: transparent;")
+        pack_widget.setLayout(pack_block)
+        content.addWidget(pack_widget)
 
-    def _create_system_controls_section(self):
-        """Create themed system control operations section"""
-        self.system_frame = QWidget()
-        self._update_system_frame_style()
+        # Current and temperature tiles
+        tiles = QGridLayout()
+        tiles.setSpacing(8)
+        self.power_values = {}
+        for index, (key, caption) in enumerate((("current_tracks", "TRACKS"),
+                                                ("current_total", "TOTAL"),
+                                                ("current_electronics", "ELECTRONICS"),
+                                                ("sabertooth_temp", "SABERTOOTH"))):
+            tile = self._make_tile()
+            tile_layout = QVBoxLayout(tile)
+            tile_layout.setContentsMargins(10, 8, 10, 8)
+            tile_layout.setSpacing(0)
+            tile_layout.addStretch(1)
+            tile_layout.addWidget(self._make_caption(caption, 12))
+            value = self._make_value("--", 24)
+            tile_layout.addWidget(value)
+            tile_layout.addStretch(1)
+            self.power_values[key] = value
+            tiles.addWidget(tile, index // 2, index % 2)
+        tiles.setColumnStretch(0, 1)
+        tiles.setColumnStretch(1, 1)
+        content.addLayout(tiles, 1)
 
-        system_layout = QVBoxLayout()
-        system_layout.setContentsMargins(12, 8, 12, 12)
-        system_layout.setSpacing(6)
+        layout.addLayout(content, 1)
+        return card
 
-        # System header
-        self.system_header = QLabel("NETWORK")
-        self.system_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.system_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.system_header)
-        system_layout.addWidget(self.system_header)
+    def _create_motion_card(self) -> QFrame:
+        """Maestro status rows with error clear, plus motion mixer stats"""
+        card, layout, _ = self._make_card("MOTION", self.MOTION_CARD_HEIGHT)
 
-        # Bandwidth test button with themed styling
-        self.bandwidth_btn = QPushButton("🌐 BANDWIDTH TEST")
-        self.bandwidth_btn.setFont(QFont("Arial", 14))
+        top = QHBoxLayout()
+        top.setSpacing(10)
+
+        rows = QVBoxLayout()
+        rows.setSpacing(6)
+        for key, name, detail in self.MAESTRO_ROWS:
+            row = self._make_tile()
+            row.setFixedHeight(36)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(10, 0, 10, 0)
+            row_layout.setSpacing(10)
+
+            name_label = self._make_value(name, 16)
+            name_label.setFont(self._font(16, bold=True))
+            name_label.setFixedWidth(48)
+            detail_label = QLabel(detail)
+            detail_label.setFont(self._font(13))
+            detail_label.setMinimumWidth(0)
+            detail_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            self._soft_labels.append(detail_label)
+            badge = self._make_badge()
+            code_label = self._make_value("--", 13, self.LABEL_GREY)
+            code_label.setFont(self._font(13, family="Consolas"))
+            code_label.setFixedWidth(58)
+            code_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            row_layout.addWidget(name_label)
+            row_layout.addWidget(detail_label, 1)
+            row_layout.addWidget(badge)
+            row_layout.addWidget(code_label)
+            rows.addWidget(row)
+
+            self._maestro_widgets[key] = {
+                "row": row, "detail": detail_label, "default_detail": detail,
+                "badge": badge, "code": code_label, "error": False,
+            }
+        top.addLayout(rows, 1)
+
+        self.clear_errors_btn = self._make_button("CLEAR\nERRORS")
+        self.clear_errors_btn.setFont(self._font(13, bold=True))
+        self.clear_errors_btn.setFixedWidth(92)
+        self.clear_errors_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.clear_errors_btn.setEnabled(False)
+        self.clear_errors_btn.clicked.connect(self._clear_maestro_errors)
+        top.addWidget(self.clear_errors_btn)
+        layout.addLayout(top)
+
+        mixer = QGridLayout()
+        mixer.setHorizontalSpacing(6)
+        self.mixer_values = {}
+        for index, (key, caption) in enumerate((("serial_fps", "MIXER"), ("blend_ms", "BLEND"),
+                                                ("serial_cmds", "CMDS/S"), ("active_ch", "ACTIVE CH"))):
+            widget, value = self._make_stat(caption, 11, 18)
+            self.mixer_values[key] = value
+            mixer.addWidget(widget, 0, index)
+            mixer.setColumnStretch(index, 1)
+        layout.addLayout(mixer)
+        return card
+
+    def _create_pi_card(self) -> QFrame:
+        """Raspberry Pi load, temperature and 5V supply flags"""
+        card, layout, _ = self._make_card("RASPBERRY PI", self.PI_CARD_HEIGHT)
+
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        self.pi_values = {}
+        for key, caption in (("cpu", "CPU"), ("memory", "MEMORY"), ("temperature", "TEMP")):
+            widget, value = self._make_stat(caption, 11, 18)
+            self.pi_values[key] = value
+            row.addWidget(widget)
+        row.addStretch(1)
+
+        supply = QVBoxLayout()
+        supply.setSpacing(4)
+        supply.addWidget(self._make_caption("5V SUPPLY"), 0, Qt.AlignmentFlag.AlignRight)
+        badges = QHBoxLayout()
+        badges.setSpacing(6)
+        badges.addStretch(1)
+        self.supply_now_badge = self._make_badge()
+        self.supply_history_badge = self._make_badge()
+        self.supply_history_badge.hide()
+        badges.addWidget(self.supply_now_badge)
+        badges.addWidget(self.supply_history_badge)
+        supply.addLayout(badges)
+        row.addLayout(supply)
+
+        layout.addLayout(row)
+        layout.addStretch(1)
+        return card
+
+    def _create_link_card(self) -> QFrame:
+        """What the Steam Deck and the Pi hotspot each see of the link"""
+        card, layout, _ = self._make_card("LINK", self.LINK_CARD_HEIGHT)
+
+        columns = QGridLayout()
+        columns.setHorizontalSpacing(14)
+        self.link_values = {}
+        for column, (caption, rows) in enumerate((
+                ("STEAM DECK SEES", (("wifi", "WiFi"), ("ping", "Pi ping"), ("throughput", "Down / Up"))),
+                ("PI HOTSPOT SEES", (("signal", "Deck signal"), ("retries", "TX retries"), ("failed", "TX failed"))))):
+            col_layout = QVBoxLayout()
+            col_layout.setSpacing(3)
+            col_layout.addWidget(self._make_caption(caption))
+            for key, text in rows:
+                line = QHBoxLayout()
+                line.setSpacing(6)
+                name = QLabel(text)
+                name.setFont(self._font(15))
+                self._soft_labels.append(name)
+                value = self._make_value("--", 15)
+                value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                line.addWidget(name)
+                line.addStretch(1)
+                line.addWidget(value)
+                col_layout.addLayout(line)
+                self.link_values[key] = value
+            columns.addLayout(col_layout, 0, column)
+            columns.setColumnStretch(column, 1)
+        layout.addLayout(columns)
+        layout.addStretch(1)
+
+        self.bandwidth_btn = self._make_button("BANDWIDTH TEST")
+        self.bandwidth_btn.setFixedHeight(44)
         self.bandwidth_btn.clicked.connect(self.start_bandwidth_test)
-        self._update_bandwidth_button_style()
-        system_layout.addWidget(self.bandwidth_btn)
+        layout.addWidget(self.bandwidth_btn)
+        return card
 
-        self.system_frame.setLayout(system_layout)
-        return self.system_frame
+    # ------------------------------------------------------------------
+    # Theming
+    # ------------------------------------------------------------------
 
-    def _update_system_frame_style(self):
-        """Apply themed styling to system frame"""
+    def _border_color(self) -> str:
+        """Card border: the theme's primary colour at reduced strength"""
+        color = QColor(theme_manager.get("primary_color"))
+        return f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.45)"
+
+    def _apply_styles(self):
+        """Apply theme colours to every styled widget"""
         primary = theme_manager.get("primary_color")
-        self.system_frame.setStyleSheet(f"""
-            QWidget {{
-                border: 1px solid {primary};
+        panel_bg = theme_manager.get("panel_bg")
+        border = self._border_color()
+
+        for card in self._cards:
+            card.setStyleSheet(f"""
+                QFrame#health_card {{
+                    background-color: {panel_bg};
+                    border: 1px solid {border};
+                    border-radius: 10px;
+                }}
+                QLabel {{
+                    border: none;
+                    background: transparent;
+                }}
+            """)
+        for title in self._card_titles:
+            title.setStyleSheet(f"color: {primary}; background: transparent; border: none;")
+        for caption in self._captions:
+            caption.setStyleSheet(f"color: {self.LABEL_GREY}; background: transparent; border: none;")
+        for label in self._soft_labels:
+            label.setStyleSheet(f"color: {self.TEXT_SOFT}; background: transparent; border: none;")
+        for tile in self._tiles:
+            self._style_tile(tile, self.TILE_BG)
+        for widgets in self._maestro_widgets.values():
+            self._style_tile(widgets["row"], self.TILE_ERROR_BG if widgets["error"] else self.TILE_BG)
+        for button in self._buttons:
+            self._style_button(button, primary)
+
+        self._update_soc_bar_color()
+        self._update_graph_pens()
+
+    def _style_tile(self, tile: QFrame, background: str):
+        tile.setStyleSheet(f"""
+            QFrame#health_tile {{
+                background-color: {background};
+                border: none;
                 border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
             }}
         """)
 
-    def _update_bandwidth_button_style(self):
-        """Apply themed styling to bandwidth button"""
-        primary = theme_manager.get("primary_color")
-        self.bandwidth_btn.setStyleSheet(f"""
+    def _style_button(self, button: QPushButton, primary: str):
+        button.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #4a4a4a, stop:1 #2a2a2a);
@@ -456,88 +630,49 @@ class HealthScreen(BaseScreen):
             }}
         """)
 
+    def _update_graph_theme(self):
+        """Update graph background with theme colours"""
+        self.graph_widget.setBackground(theme_manager.get("panel_bg"))
+
+    def _update_graph_pens(self):
+        """Theme colours for the graph curves, threshold lines and legend"""
+        if not hasattr(self, "voltage_curve"):
+            return
+        green = theme_manager.get("green")
+        primary = theme_manager.get("primary_color")
+        red = theme_manager.get("red")
+
+        self.voltage_curve.setPen(pg.mkPen(color=green, width=3))
+        self.current_a1_plot.setPen(pg.mkPen(color=primary, width=2))
+        self.current_a2_plot.setPen(pg.mkPen(color=self.TOTAL_CURRENT_COLOR, width=2))
+        self.low_threshold_line.setPen(pg.mkPen(color=primary, width=1, style=Qt.PenStyle.DashLine))
+        self.critical_threshold_line.setPen(pg.mkPen(color=red, width=1, style=Qt.PenStyle.DashLine))
+
+        for key, color in (("voltage", green), ("tracks", primary), ("total", self.TOTAL_CURRENT_COLOR)):
+            swatch = getattr(self, "_legend_swatches", {}).get(key)
+            if swatch is not None:
+                swatch.setStyleSheet(f"background-color: {color}; border: none;")
+
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
         try:
-            # Update control panel
-            if hasattr(self, 'control_panel'):
-                self._update_control_panel_style(self.control_panel)
-            if hasattr(self, 'header'):
-                self._update_header_style()
-
-            # Update graph theme
             self._update_graph_theme()
-
-            # Update graph plot colors
-            if hasattr(self, 'voltage_curve'):
-                green = theme_manager.get("green")
-                self.voltage_curve.setPen(pg.mkPen(color=green, width=4))
-
-            if hasattr(self, 'current_a1_plot'):
-                primary = theme_manager.get("primary_color")
-                orange = "#FF8C00"
-                self.current_a1_plot.setPen(pg.mkPen(color=primary, width=3))
-                if hasattr(self, 'current_a2_plot'):
-                    self.current_a2_plot.setPen(pg.mkPen(color=orange, width=3))
-
-            # Update status section
-            if hasattr(self, 'status_frame'):
-                self._update_status_frame_style()
-
-            # Update system section
-            if hasattr(self, 'system_frame'):
-                self._update_system_frame_style()
-            if hasattr(self, 'system_header'):
-                self._update_section_header_style(self.system_header)
-            if hasattr(self, 'bandwidth_btn'):
-                self._update_bandwidth_button_style()
-
-            # Update all status labels
-            for label in self.status_labels.values():
-                self._update_status_label_style(label)
-
-            # Update graph frame
-            if hasattr(self, 'graph_frame'):
-                panel_bg = theme_manager.get("panel_bg")
-                self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
-
+            self._apply_styles()
+            if self._last_battery_voltage is not None:
+                self._update_pack_display(self._last_battery_voltage)
             self.logger.info(f"Health screen updated for theme: {theme_manager.get_theme_name()}")
         except Exception as e:
             self.logger.warning(f"Failed to apply theme changes: {e}")
 
-    def setup_layout(self):
-        """Setup main layout with full-height graph and wider control panel"""
-        main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(98, 19, 15, 6)
-
-        # Graph container - full height with theme styling
-        self.graph_frame = QFrame()
-        primary = theme_manager.get("primary_color")
-        panel_bg = theme_manager.get("panel_bg")
-        self.graph_frame.setStyleSheet(f"border: 2px solid #444; border-radius: 10px; background-color: {panel_bg};")
-        graph_layout = QVBoxLayout(self.graph_frame)
-        graph_layout.setContentsMargins(10, 10, 10, 10)
-
-        # Graph sizing - larger and full height
-        self.graph_widget.setFixedWidth(690)
-        self.graph_widget.setFixedHeight(455)  # Increased height
-
-        graph_layout.addWidget(self.graph_widget)
-
-        # Create styled control panel
-        control_panel = self._create_control_panel()
-
-        # Add to main layout
-        main_layout.addWidget(self.graph_frame)
-        main_layout.addWidget(control_panel)
-
-        self.setLayout(main_layout)
-
     def update_views(self):
-        """Update the current view geometry to match the main plot"""
+        """Keep the current view box aligned with the main plot area"""
         self.current_view.setGeometry(
             self.graph_widget.getPlotItem().getViewBox().sceneBoundingRect()
         )
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
     @error_boundary
     def start_bandwidth_test(self, checked=False):
@@ -552,142 +687,89 @@ class HealthScreen(BaseScreen):
             camera_proxy_url = camera_proxy_url[:-7]
 
         # Show the bandwidth test splash screen
-        results = show_bandwidth_test_splash(self, camera_proxy_url)
+        show_bandwidth_test_splash(self, camera_proxy_url)
 
         # Re-enable button
         self.bandwidth_btn.setEnabled(True)
-        self.bandwidth_btn.setText("🌐 BANDWIDTH TEST")
+        self.bandwidth_btn.setText("BANDWIDTH TEST")
 
-
-    def get_voltage_status_text(self, voltage: float) -> tuple:
-        """Get voltage status with theme color coding"""
-        red = theme_manager.get("red")
-        primary = theme_manager.get("primary_color")
-        green = theme_manager.get("green")
-
-        if voltage < 13.2:
-            return f"Battery: {voltage:.2f}V CRITICAL", f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
-        elif voltage < 14.0:
-            return f"Battery: {voltage:.2f}V LOW", f"color: {primary}; font-weight: bold; padding: 1px; background: transparent;"
-        elif voltage > 14.0:
-            return f"Battery: {voltage:.2f}V GOOD", f"color: {green}; padding: 1px; background: transparent;"
-        else:
-            return f"Battery: {voltage:.2f}V OK", f"color: {green}; padding: 1px; background: transparent;"
-
-    def get_maestro_status_text(self, maestro_data: dict, maestro_name: str) -> tuple:
-        """Format detailed Maestro status information with theme colors"""
-        red = theme_manager.get("red")
-        primary = theme_manager.get("primary_color")
-        green = theme_manager.get("green")
-
-        if not maestro_data or not maestro_data.get('connected', False):
-            return f"{maestro_name}: Disconnected", f"color: {red}; background: transparent;"
-
-        # Extract detailed status
-        channels = maestro_data.get('channel_count', 0)
-        error_flags = maestro_data.get('error_flags', {})
-        script_status = maestro_data.get('script_status', {}).get('status', 'unknown')
-        moving = maestro_data.get('moving', False)
-
-        # Check for errors
-        has_errors = error_flags.get('has_errors', False)
-        if has_errors:
-            error_details = error_flags.get('details', {})
-            error_list = [k.replace('_error', '') for k, v in error_details.items() if v]
-            error_text = ', '.join(error_list[:2])
-            status = f"{maestro_name}: {channels}ch, Errors: {error_text}"
-            color = f"color: {primary}; font-weight: bold; background: transparent;"
-        else:
-            move_text = "Moving" if moving else "Idle"
-            status = f"{maestro_name}: {channels}ch, {script_status.title()}, {move_text}"
-            color = f"color: {green}; background: transparent;"
-
-        return status, color
+    @error_boundary
+    def _clear_maestro_errors(self, checked=False):
+        """Ask the backend to read and clear both Maestro error registers"""
+        if self.send_websocket_message("clear_maestro_errors"):
+            self.logger.info("Requested Maestro error clear")
 
     @error_boundary
     def _request_system_status(self):
-        """Poll backend for system_status to update serial FPS stats"""
+        """Poll backend for system_status (mixer stats, run-time estimate, hardware)"""
         try:
             self.send_websocket_message("system_status")
         except Exception:
             pass
 
-    def handle_telemetry(self, message: str):
-        """Process incoming telemetry data and update displays"""
-        current_time = time.time()
+    # ------------------------------------------------------------------
+    # Message handling
+    # ------------------------------------------------------------------
 
-        # Rate limiting
-        if current_time - self.last_telemetry_update < self.telemetry_update_interval:
+    def _rate_limited(self, msg_type: str) -> bool:
+        """Return True if a message of this type arrived too soon after the last one"""
+        now = time.time()
+        if now - self._last_update_by_type.get(msg_type, 0.0) < self.telemetry_update_interval:
+            return True
+        self._last_update_by_type[msg_type] = now
+        return False
+
+    def _on_system_status(self, data: dict):
+        """Apply system_status replies - mixer stats, run-time estimate and hardware status"""
+        if self._rate_limited("system_status"):
             return
-
         try:
-            data = json.loads(message)
-            msg_type = data.get("type")
+            self.status_update_signal.emit({
+                "battery_estimate": data.get("battery_estimate"),
+                "serial_fps": data.get("serial_fps"),
+                "blend_ms": data.get("blend_ms"),
+                "serial_cmds_sec": data.get("serial_cmds_sec"),
+                "active_channels": data.get("active_channels"),
+                "hardware": data.get("hardware"),
+                "maestro_errors": data.get("maestro_errors"),
+                "pi_power": data.get("pi_power"),
+                "hotspot_station": data.get("hotspot_station"),
+            })
+        except Exception as e:
+            self.logger.error(f"System status processing failed: {e}")
 
-            # Accept both telemetry and system_status message types
-            if msg_type not in ("telemetry", "system_status"):
-                return
+    def _carry_forward(self, key: str, value, allow_zero: bool = False):
+        """Return value if it is a valid reading, otherwise the last valid one.
+        Track current is genuinely zero at rest, so currents pass allow_zero."""
+        if value is not None and (value > 0 or (allow_zero and value == 0)):
+            self._last_graph_values[key] = float(value)
+        return self._last_graph_values[key]
 
-            # Normalise system_status into the same flat shape as telemetry
-            if msg_type == "system_status":
-                hw = data.get("hardware", {})
-                m1 = hw.get("maestro1", {})
-                m2 = hw.get("maestro2", {})
-                data = {
-                    "type": "telemetry",
-                    "cpu": data.get("cpu", "--"),
-                    "memory": data.get("memory", "--"),
-                    "temperature": data.get("temperature", "--"),
-                    "battery_voltage": data.get("battery_voltage", 0.0),
-                    "sabertooth_temp": data.get("sabertooth_temp", 0.0),
-                    "current_tracks": data.get("current_tracks", 0.0),
-                    "current_total": data.get("current_total", 0.0),
-                    "adc_available": data.get("adc_available", False),
-                    "audio_system": data.get("audio_system", {}),
-                    "maestro1": {
-                        "connected": m1.get("connected", False),
-                        "channel_count": m1.get("channel_count", 0),
-                        "error_flags": m1.get("error_flags", {"has_errors": False}),
-                    },
-                    "maestro2": {
-                        "connected": m2.get("connected", False),
-                        "channel_count": m2.get("channel_count", 0),
-                        "error_flags": m2.get("error_flags", {"has_errors": False}),
-                    },
-                    "battery_estimate": data.get("battery_estimate"),
-                    # Mixer stats pass through unchanged
-                    "serial_fps": data.get("serial_fps"),
-                    "blend_ms": data.get("blend_ms"),
-                    "serial_cmds_sec": data.get("serial_cmds_sec"),
-                    "active_channels": data.get("active_channels"),
-                }
+    def _on_telemetry(self, data: dict):
+        """Process incoming telemetry and update displays and graph"""
+        if self._rate_limited("telemetry"):
+            return
+        try:
+            voltage = data.get("battery_voltage")
+            if voltage is not None and voltage > 0:
+                self._last_battery_voltage = float(voltage)
+                self._update_pack_display(self._last_battery_voltage)
 
-            self.logger.debug("Processing telemetry data")
-
-            # system_status only carries mixer stats — skip graph/voltage updates
-            # to avoid injecting zeros into the graph data
-            if msg_type == "system_status":
-                self.status_update_signal.emit(data)
-                self.last_telemetry_update = current_time
-                return
-
-            # Emit signals for thread-safe updates
-            battery_voltage = data.get("battery_voltage") or data.get("voltage") or data.get("battery") or 12.6
-
-            if battery_voltage > 0:
-                self.voltage_update_signal.emit(battery_voltage)
-
-            # Emit status updates
             self.status_update_signal.emit(data)
 
-            current_a1 = data.get("current_tracks", 0.0)
-            current_a2 = data.get("current_total", 0.0)
+            graph_voltage = self._carry_forward("voltage", voltage)
+            graph_tracks = self._carry_forward("tracks", data.get("current_tracks"), allow_zero=True)
+            graph_total = self._carry_forward("total", data.get("current_total"), allow_zero=True)
 
-            relative_time = current_time - self.start_time
+            # Nothing valid received yet - plot nothing rather than invent values
+            if graph_voltage is None:
+                return
 
-            self.battery_voltage_data.append(float(battery_voltage))
-            self.current_a1_data.append(float(current_a1))
-            self.current_a2_data.append(float(current_a2))
+            relative_time = time.time() - self.start_time
+
+            self.battery_voltage_data.append(graph_voltage)
+            self.current_a1_data.append(graph_tracks if graph_tracks is not None else 0.0)
+            self.current_a2_data.append(graph_total if graph_total is not None else 0.0)
             self.time_data.append(relative_time)
 
             # Drop points older than the fixed display window so the graph
@@ -700,78 +782,89 @@ class HealthScreen(BaseScreen):
                 self.current_a1_data.popleft()
                 self.current_a2_data.popleft()
 
-            # Update graphs
             self._update_graphs()
 
-            self.last_telemetry_update = current_time
-
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON decode failed: {e}")
         except Exception as e:
             self.logger.error(f"Telemetry processing failed: {e}")
 
-    def _update_voltage_display(self, voltage: float):
-        """Thread-safe voltage update - stores the pack voltage and checks alarms"""
-        self._last_battery_voltage = voltage
+    # ------------------------------------------------------------------
+    # Display updates
+    # ------------------------------------------------------------------
 
-        # Only check voltage alarms if startup is complete AND alerts are enabled
-        if (getattr(self, 'voltage_alerts_enabled', False) and
-            getattr(self, 'startup_complete', False)):
-            self.check_voltage_alarms(voltage)
+    def _pack_state(self, voltage: float):
+        """Return (state text, colour) for a pack voltage"""
+        if voltage < BATTERY_CRITICAL_VOLTAGE:
+            return "CRITICAL", theme_manager.get("red")
+        if voltage < BATTERY_LOW_VOLTAGE:
+            return "LOW", self.AMBER
+        return "GOOD", theme_manager.get("green")
+
+    def _update_pack_display(self, voltage: float):
+        """Pack voltage value, state badge and state of charge bar colour"""
+        state, color = self._pack_state(voltage)
+        self._set_value(self.pack_value_label, f"{voltage:.2f} V", color)
+        self._set_badge(self.pack_badge, state, color)
+        self._update_soc_bar_color()
+
+    def _update_soc_bar_color(self):
+        """State of charge bar follows the pack state colour"""
+        if self._last_battery_voltage is not None:
+            _, color = self._pack_state(self._last_battery_voltage)
         else:
-            # Log why we're skipping (for debugging)
-            alerts_enabled = getattr(self, 'voltage_alerts_enabled', False)
-            startup_complete = getattr(self, 'startup_complete', False)
-            self.logger.debug(f"Skipping voltage alert - alerts_enabled: {alerts_enabled}, startup_complete: {startup_complete}")
+            color = theme_manager.get("green")
+        self.soc_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #2c2c2c;
+                border: none;
+                border-radius: 6px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {color};
+                border-radius: 6px;
+            }}
+        """)
 
     def _update_status_displays(self, data: dict):
-        """Thread-safe status display updates with theme colors"""
+        """Thread-safe status display updates with theme colours"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")
 
-        updates = {}
-
         # Carry-forward: only update system stats when the values are actually present
-        cpu = data.get("cpu")
-        mem = data.get("memory")
-        temp = data.get("temperature")
+        for key in ("cpu", "memory", "temperature"):
+            value = data.get(key)
+            if value not in (None, "--"):
+                self._last_system_stats[key] = value
 
-        if cpu not in (None, "--"):
-            self._last_system_stats["cpu"] = cpu
-        if mem not in (None, "--"):
-            self._last_system_stats["memory"] = mem
-        if temp not in (None, "--"):
-            self._last_system_stats["temperature"] = temp
+        cpu = self._last_system_stats["cpu"]
+        if cpu is not None:
+            self._set_value(self.pi_values["cpu"], f"{cpu}%", self.AMBER if float(cpu) > 90 else green)
+        memory = self._last_system_stats["memory"]
+        if memory is not None:
+            self._set_value(self.pi_values["memory"], f"{memory}%", self.AMBER if float(memory) > 85 else green)
+        temperature = self._last_system_stats["temperature"]
+        if temperature is not None:
+            temp = float(temperature)
+            temp_color = red if temp >= 80 else (self.AMBER if temp >= 70 else green)
+            self._set_value(self.pi_values["temperature"], f"{temp:.0f} °C", temp_color)
 
-        updates["cpu"] = f"CPU: {self._last_system_stats['cpu']}%"
-        updates["mem"] = f"Memory: {self._last_system_stats['memory']}%"
-        updates["temp"] = f"Temp: {self._last_system_stats['temperature']}°C"
+        # Currents and Sabertooth temperature - zero means missing for display
+        for key in ("current_total", "current_tracks", "sabertooth_temp"):
+            value = data.get(key)
+            if value is not None and value != 0.0:
+                self._last_system_stats[key] = value
 
-        # Total current from A2 sensor
-        current_total = data.get("current_total")
-        if current_total is not None and current_total != 0.0:
-            self._last_system_stats["current_total"] = current_total
-        if self._last_system_stats["current_total"] is not None:
-            updates["current_total"] = f"Total Current: {self._last_system_stats['current_total']:.1f}A"
-
-        # Track current from A1 coulometer
-        current_tracks = data.get("current_tracks")
-        if current_tracks is not None and current_tracks != 0.0:
-            self._last_system_stats["current_tracks"] = current_tracks
-        if self._last_system_stats["current_tracks"] is not None:
-            updates["current_tracks"] = f"Tracks: {self._last_system_stats['current_tracks']:.1f}A"
-
-        # Sabertooth temperature from A0 TMP36GZ
-        sabertooth_temp = data.get("sabertooth_temp")
-        if sabertooth_temp is not None and sabertooth_temp != 0.0:
-            self._last_system_stats["sabertooth_temp"] = sabertooth_temp
-        if self._last_system_stats["sabertooth_temp"] is not None:
-            updates["sabertooth_temp"] = f"Sabertooth: {self._last_system_stats['sabertooth_temp']:.1f}C"
-
-        # Update all text labels
-        for key, text in updates.items():
-            if key in self.status_labels:
-                self.status_labels[key].setText(text)
+        tracks = self._last_system_stats["current_tracks"]
+        total = self._last_system_stats["current_total"]
+        sabertooth = self._last_system_stats["sabertooth_temp"]
+        if tracks is not None:
+            self._set_value(self.power_values["current_tracks"], f"{tracks:.1f} A", green)
+        if total is not None:
+            self._set_value(self.power_values["current_total"], f"{total:.1f} A", green)
+        if tracks is not None and total is not None:
+            electronics = max(total - tracks, 0.0)
+            self._set_value(self.power_values["current_electronics"], f"{electronics:.1f} A", green)
+        if sabertooth is not None:
+            self._set_value(self.power_values["sabertooth_temp"], f"{sabertooth:.1f} °C", green)
 
         # Battery run-time estimate (only present on system_status replies)
         battery_estimate = data.get("battery_estimate")
@@ -779,81 +872,145 @@ class HealthScreen(BaseScreen):
             self._update_runtime_display(battery_estimate)
 
         # Sample /proc/net/dev for throughput on wlan0
-        self._update_throughput_display(green)
+        self._update_throughput_display()
 
         # Motion mixer serial performance
-        serial_fps = data.get('serial_fps')
-        blend_ms = data.get('blend_ms')
-        serial_cmds = data.get('serial_cmds_sec')
-        active_ch = data.get('active_channels')
-
+        serial_fps = data.get("serial_fps")
         if serial_fps is not None:
             target_hz = 50.0
             if serial_fps >= target_hz * 0.9:
-                fps_style = f"color: {green}; padding: 1px; background: transparent;"
+                color = green
             elif serial_fps >= target_hz * 0.7:
-                fps_style = "color: orange; padding: 1px; background: transparent;"
+                color = self.AMBER
             else:
-                fps_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["serial_fps"].setText(f"Mixer: {serial_fps}Hz")
-            self.status_labels["serial_fps"].setStyleSheet(fps_style)
+                color = red
+            self._set_value(self.mixer_values["serial_fps"], f"{serial_fps} Hz", color)
 
+        blend_ms = data.get("blend_ms")
         if blend_ms is not None:
-            if blend_ms < 5.0:
-                bms_style = f"color: {green}; padding: 1px; background: transparent;"
-            elif blend_ms < 15.0:
-                bms_style = "color: orange; padding: 1px; background: transparent;"
-            else:
-                bms_style = f"color: {red}; padding: 1px; background: transparent;"
-            self.status_labels["blend_ms"].setText(f"Blend: {blend_ms}ms")
-            self.status_labels["blend_ms"].setStyleSheet(bms_style)
+            color = green if blend_ms < 5.0 else (self.AMBER if blend_ms < 15.0 else red)
+            self._set_value(self.mixer_values["blend_ms"], f"{blend_ms} ms", color)
 
+        serial_cmds = data.get("serial_cmds_sec")
         if serial_cmds is not None:
-            self.status_labels["serial_cmds"].setText(f"Cmds/s: {serial_cmds}")
+            self._set_value(self.mixer_values["serial_cmds"], f"{serial_cmds}", self.WHITE)
 
+        active_ch = data.get("active_channels")
         if active_ch is not None:
-            self.status_labels["active_ch"].setText(f"Active Ch: {active_ch}")
+            self._set_value(self.mixer_values["active_ch"], f"{active_ch}", self.WHITE)
+
+        hardware = data.get("hardware")
+        if isinstance(hardware, dict):
+            self._update_maestro_display(hardware, data.get("maestro_errors"))
+
+        if "pi_power" in data:
+            self._update_supply_display(data.get("pi_power"))
+
+        if "hotspot_station" in data:
+            self._update_hotspot_display(data.get("hotspot_station"))
 
     def _update_runtime_display(self, estimate: dict):
-        """Show estimated battery run-time with LOW/CRITICAL colour coding"""
-        if "battery" not in self.status_labels:
-            return
-
+        """Show estimated battery run-time and state of charge"""
         red = theme_manager.get("red")
-        primary = theme_manager.get("primary_color")
-        green = theme_manager.get("green")
 
         minutes = estimate.get("estimated_minutes_remaining") or 0.0
         soc = estimate.get("soc_percent")
         confidence = estimate.get("confidence")
 
         if confidence == "warming_up":
-            text = "Runtime: estimating"
+            runtime_text, runtime_color = "estimating", self.WHITE
         elif minutes > 0:
             total = int(round(minutes))
             hours, mins = divmod(total, 60)
-            duration = f"{hours}h {mins}m" if hours else f"{mins}m"
-            text = f"Runtime: {duration}"
-            if soc is not None:
-                text += f" ({soc:.0f}%)"
+            runtime_text = f"{hours}h {mins}m" if hours else f"{mins}m"
+            runtime_color = red if minutes < 15 else (self.AMBER if minutes < 30 else self.WHITE)
         else:
-            text = "Runtime: --"
+            runtime_text, runtime_color = "--", self.WHITE
 
-        voltage = self._last_battery_voltage
-        voltage_critical = voltage is not None and 0 < voltage < 13.2
-        has_minutes = confidence != "warming_up" and minutes > 0
+        text = (f'<span style="color: #d8d8d8;">Runtime </span>'
+                f'<b style="color: {runtime_color};">{runtime_text}</b>')
+        if soc is not None:
+            text += f'<span style="color: #d8d8d8;"> · {soc:.0f}%</span>'
+            self.soc_bar.setValue(max(0, min(100, int(round(soc)))))
+        self.runtime_label.setText(text)
 
-        if voltage_critical or (has_minutes and minutes < 15):
-            text += " CRITICAL"
-            style = f"color: {red}; font-weight: bold; padding: 1px; background: transparent;"
-        elif has_minutes and minutes < 30:
-            text += " LOW"
-            style = f"color: {primary}; font-weight: bold; padding: 1px; background: transparent;"
+    def _update_maestro_display(self, hardware: dict, maestro_errors):
+        """Maestro rows: connection, error code and error names when available"""
+        green = theme_manager.get("green")
+        red = theme_manager.get("red")
+        errors_supported = isinstance(maestro_errors, dict)
+        self.clear_errors_btn.setEnabled(errors_supported)
+
+        for key, widgets in self._maestro_widgets.items():
+            status = hardware.get(key) or {}
+            errors = maestro_errors.get(key) if errors_supported else None
+            in_error = False
+
+            if not status.get("connected", False):
+                self._set_badge(widgets["badge"], "OFFLINE", red)
+                self._set_value(widgets["code"], "--", self.LABEL_GREY)
+                widgets["detail"].setText(widgets["default_detail"])
+                in_error = True
+            elif isinstance(errors, dict) and errors.get("code") is not None:
+                code = int(errors.get("code", 0))
+                self._set_value(widgets["code"], f"0x{code:04X}", "#ff8a8a" if code else self.LABEL_GREY)
+                if code:
+                    in_error = True
+                    self._set_badge(widgets["badge"], "ERROR", red)
+                    names = ", ".join(errors.get("errors") or []) or "Error"
+                    when = errors.get("last_error_time")
+                    if when:
+                        names += " · " + time.strftime("%H:%M:%S", time.localtime(when))
+                    widgets["detail"].setText(names)
+                else:
+                    self._set_badge(widgets["badge"], "OK", green)
+                    widgets["detail"].setText(widgets["default_detail"])
+            else:
+                self._set_badge(widgets["badge"], "OK", green)
+                self._set_value(widgets["code"], "--", self.LABEL_GREY)
+                widgets["detail"].setText(widgets["default_detail"])
+
+            if in_error != widgets["error"]:
+                widgets["error"] = in_error
+                self._style_tile(widgets["row"], self.TILE_ERROR_BG if in_error else self.TILE_BG)
+
+    def _update_supply_display(self, pi_power):
+        """Pi 5V supply flags from the backend throttle status"""
+        if not isinstance(pi_power, dict):
+            self._set_badge(self.supply_now_badge, "--", None)
+            self.supply_history_badge.hide()
+            return
+
+        if pi_power.get("under_voltage_now"):
+            self._set_badge(self.supply_now_badge, "UNDER-VOLTAGE NOW", theme_manager.get("red"))
+        elif pi_power.get("throttled_now"):
+            self._set_badge(self.supply_now_badge, "THROTTLED NOW", theme_manager.get("red"))
         else:
-            style = f"color: {green}; padding: 1px; background: transparent;"
+            self._set_badge(self.supply_now_badge, "OK", theme_manager.get("green"))
 
-        self.status_labels["battery"].setText(text)
-        self.status_labels["battery"].setStyleSheet(style)
+        if pi_power.get("under_voltage_occurred") or pi_power.get("throttled_occurred"):
+            self._set_badge(self.supply_history_badge, "THROTTLED SINCE BOOT", self.AMBER)
+            self.supply_history_badge.show()
+        else:
+            self.supply_history_badge.hide()
+
+    def _update_hotspot_display(self, station):
+        """Steam Deck link quality as reported by the Pi hotspot"""
+        green = theme_manager.get("green")
+        if not isinstance(station, dict):
+            for key in ("signal", "retries", "failed"):
+                self._set_value(self.link_values[key], "--", self.WHITE)
+            return
+
+        signal = station.get("signal_dbm")
+        if signal is not None:
+            self._set_value(self.link_values["signal"], f"{signal} dBm", green if signal >= -65 else self.AMBER)
+        retries = station.get("tx_retries_pct")
+        if retries is not None:
+            self._set_value(self.link_values["retries"], f"{retries:.1f}%", green if retries < 10 else self.AMBER)
+        failed = station.get("tx_failed")
+        if failed is not None:
+            self._set_value(self.link_values["failed"], f"{failed}", self.WHITE)
 
     def _format_throughput(self, bytes_per_sec: float) -> str:
         """Convert bytes/sec to bits/sec, auto-scaled to kbps or Mbps"""
@@ -862,13 +1019,10 @@ class HealthScreen(BaseScreen):
             return f"{bits_per_sec / 1_000_000:.1f} Mbps"
         return f"{bits_per_sec / 1000:.0f} kbps"
 
-    def _update_throughput_display(self, green: str):
+    def _update_throughput_display(self):
         """Sample /proc/net/dev to calculate wlan0 TX/RX throughput"""
-        if "net_down" not in self.status_labels or "net_up" not in self.status_labels:
-            return
         try:
-            import time as _time
-            now = _time.monotonic()
+            now = time.monotonic()
             rx_bytes = tx_bytes = None
 
             with open("/proc/net/dev", "r") as f:
@@ -887,8 +1041,9 @@ class HealthScreen(BaseScreen):
                 if elapsed > 0:
                     rx_rate = (rx_bytes - self._last_net_bytes[0]) / elapsed
                     tx_rate = (tx_bytes - self._last_net_bytes[1]) / elapsed
-                    self.status_labels["net_down"].setText(f"Down: {self._format_throughput(rx_rate)}")
-                    self.status_labels["net_up"].setText(f"Up: {self._format_throughput(tx_rate)}")
+                    self._set_value(self.link_values["throughput"],
+                                    f"{self._format_throughput(rx_rate)} / {self._format_throughput(tx_rate)}",
+                                    self.WHITE)
 
             self._last_net_bytes = (rx_bytes, tx_bytes)
             self._last_net_time = now
@@ -906,127 +1061,37 @@ class HealthScreen(BaseScreen):
         network_monitor.connectivity_updated.connect(self._update_ping_display)
 
     def _update_wifi_display(self, signal_percent: int, status_text: str, _unused: float):
-        """Update WiFi signal label on the health screen"""
+        """Update the Steam Deck WiFi signal value"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")
-
-        if "wifi_signal" in self.status_labels:
-            self.status_labels["wifi_signal"].setText(f"WiFi: {signal_percent}%")
-            color = green if signal_percent >= 50 else ("orange" if signal_percent >= 25 else red)
-            self.status_labels["wifi_signal"].setStyleSheet(
-                f"color: {color}; padding: 1px; background: transparent;"
-            )
+        color = green if signal_percent >= 50 else (self.AMBER if signal_percent >= 25 else red)
+        self._set_value(self.link_values["wifi"], f"{signal_percent}%", color)
 
     def _update_ping_display(self, ping_ms: float, is_connected: bool):
-        """Update Pi connectivity label on the health screen"""
+        """Update the Pi ping value"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")
-
-        if "wifi_ping" in self.status_labels:
-            if is_connected and ping_ms > 0:
-                self.status_labels["wifi_ping"].setText(f"Pi: {ping_ms:.1f}ms")
-                color = green if ping_ms < 30 else ("orange" if ping_ms < 80 else red)
-                self.status_labels["wifi_ping"].setStyleSheet(
-                    f"color: {color}; padding: 1px; background: transparent;"
-                )
-            else:
-                self.status_labels["wifi_ping"].setText("Pi: unreachable")
-                self.status_labels["wifi_ping"].setStyleSheet(
-                    f"color: {red}; padding: 1px; background: transparent;"
-                )
-
-
+        if is_connected and ping_ms > 0:
+            color = green if ping_ms < 30 else (self.AMBER if ping_ms < 80 else red)
+            self._set_value(self.link_values["ping"], f"{ping_ms:.1f} ms", color)
+        else:
+            self._set_value(self.link_values["ping"], "unreachable", red)
 
     def _update_graphs(self):
-        """Update telemetry graphs with current data"""
+        """Redraw the graph with times relative to the newest reading"""
         try:
-            time_list = list(self.time_data)
-            voltage_list = list(self.battery_voltage_data)
-            current_a1_list = list(self.current_a1_data)
-            current_a2_list = list(self.current_a2_data)
-
-            if len(time_list) > 1 and len(voltage_list) > 1:
-                self.voltage_curve.setData(time_list, voltage_list)
-                self.current_a1_plot.setData(time_list, current_a1_list)
-                self.current_a2_plot.setData(time_list, current_a2_list)
-
-                self.graph_widget.update()
-
+            if len(self.time_data) < 2:
+                return
+            latest = self.time_data[-1]
+            x_values = [t - latest for t in self.time_data]
+            self.voltage_curve.setData(x_values, list(self.battery_voltage_data))
+            self.current_a1_plot.setData(x_values, list(self.current_a1_data))
+            self.current_a2_plot.setData(x_values, list(self.current_a2_data))
         except Exception as e:
             self.logger.error(f"Failed to update graph: {e}")
 
-    def check_voltage_alarms(self, voltage: float):
-        """Check and display voltage alarms when thresholds are crossed"""
-        current_alarm = None
-
-        if voltage < 11.0:
-            current_alarm = "CRITICAL"
-        elif voltage < 12.0:
-            current_alarm = "LOW"
-
-        # Only show splash if alarm state changed and we don't already have one open
-        if (current_alarm != self.last_voltage_alarm and
-            current_alarm is not None and
-            not hasattr(self, '_active_voltage_splash')):
-
-            # Create and show splash screen
-            self._active_voltage_splash = VoltageAlertSplash(
-                alert_type=current_alarm,
-                voltage=voltage,
-                parent=self
-            )
-
-            # Connect to cleanup when splash closes
-            self._active_voltage_splash.splash_closed.connect(self._on_voltage_splash_closed)
-
-            self.logger.info(f"Showing {current_alarm.lower()} voltage alert: {voltage:.2f}V")
-
-        self.last_voltage_alarm = current_alarm
-
-    def _on_voltage_splash_closed(self):
-        """Handle voltage splash close event"""
-        if hasattr(self, '_active_voltage_splash'):
-            delattr(self, '_active_voltage_splash')
-        self.logger.debug("Voltage alert splash closed")
-
-    def get_battery_health_summary(self) -> str:
-        """Get battery health summary for display"""
-        if not self.battery_voltage_data:
-            return "No battery data"
-
-        current_voltage = self.battery_voltage_data[-1]
-        if len(self.battery_voltage_data) > 10:
-            avg_voltage = sum(list(self.battery_voltage_data)[-10:]) / 10
-            if current_voltage > avg_voltage:
-                voltage_trend = "Rising"
-            elif current_voltage < avg_voltage:
-                voltage_trend = "Falling"
-            else:
-                voltage_trend = "Stable"
-        else:
-            voltage_trend = "Stable"
-
-        # Estimate remaining capacity (rough approximation for 4S LiPo)
-        if current_voltage > 15.0:
-            capacity = "90-100%"
-        elif current_voltage > 14.4:
-            capacity = "75-90%"
-        elif current_voltage > 13.8:
-            capacity = "50-75%"
-        elif current_voltage > 13.2:
-            capacity = "25-50%"
-        elif current_voltage > 12.6:
-            capacity = "10-25%"
-        else:
-            capacity = "<10%"
-
-        return f"{voltage_trend} | Est. Capacity: {capacity}"
-
     def cleanup(self):
         """Cleanup health screen resources"""
-        # Close any active voltage splash
-        if hasattr(self, '_active_voltage_splash'):
-            self._active_voltage_splash.close_splash()
-            delattr(self, '_active_voltage_splash')
-
+        if hasattr(self, "status_poll_timer"):
+            self.status_poll_timer.stop()
         super().cleanup()

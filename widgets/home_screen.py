@@ -5,15 +5,13 @@ WALL-E Control System - Home Screen
 Scene selection dashboard with WebSocket-based controller navigation.
 """
 import os
-import json
 import time
 import pygame
 from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout,
-    QMessageBox, QApplication
+    QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout
 )
-from PyQt6.QtGui import QPixmap, QFont, QColor
+from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
@@ -55,13 +53,6 @@ class HomeScreen(BaseScreen):
         self.last_navigation_time = 0
         self.navigation_cooldown = 0.1
         self._last_scene_trigger_time = 0.0
-
-        # Simple navigation tracking
-        self.current_scene_index = 0
-
-        self.auto_advance_enabled = True
-        self.is_playing_scene = False
-        self.last_triggered_scene = None
 
         # Scene and navigation messages stay active regardless of visibility:
         # scene state (playing/locked) must track reality even while the
@@ -134,56 +125,6 @@ class HomeScreen(BaseScreen):
             self.logger.error(f"Error handling navigation: {e}")
             self._unlock_scene_state()
 
-    def _handle_navigation_command(self, action):
-        """Handle navigation commands from controller via backend"""
-        self.logger.debug(f"Received navigation command: {action}")
-        
-        if action == 'up':
-            self._navigate_scenes(-1)
-        elif action == 'down':
-            self._navigate_scenes(1)
-        elif action == 'left':
-            self._navigate_categories(-1)
-        elif action == 'right':
-            self._navigate_categories(1)
-        elif action == 'select':
-            self._trigger_selected_scene()
-        elif action == 'exit':
-            self._handle_exit_command()
-
-    def _handle_exit_command(self):
-        """Handle exit command from controller"""
-        # If playing a scene, stop it
-        if self.is_playing_scene:
-            self._stop_current_scene()
-            return
-        
-        # If on home screen, show exit confirmation
-        reply = QMessageBox.question(
-            self, 'Exit Application', 
-            'Do you want to exit the application?',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            if hasattr(self, 'parent') and hasattr(self.parent(), 'close'):
-                self.parent().close()
-            else:
-                QApplication.quit()
-
-    def _stop_current_scene(self):
-        """Stop currently playing scene"""
-        if self.websocket:
-            stop_message = {
-                "type": "scene_stop",
-                "timestamp": time.time()
-            }
-            self.websocket.sendTextMessage(json.dumps(stop_message))
-        
-        self.is_playing_scene = False
-        self.last_triggered_scene = None
-
     def _navigate_scenes(self, direction):
         """Navigate scene list up/down"""
         if self.queue_list.count() == 0:
@@ -205,10 +146,6 @@ class HomeScreen(BaseScreen):
         self.queue_list.setCurrentRow(new_index)
         self.current_scene_index = new_index
         
-    def _unlock_navigation(self):
-        """Unlock navigation after debounce period"""
-        self.navigation_locked = False
-
     def _navigate_categories(self, direction):
         """Navigate categories left/right with simple time-based debouncing"""
         if not hasattr(self, 'category_buttons') or not self.category_buttons:
@@ -234,36 +171,6 @@ class HomeScreen(BaseScreen):
 
         # Update selection
         self._on_category_selected(new_index)
-
-    def _highlight_selected_scene(self):
-        """Provide visual feedback for selected scene"""
-        current_item = self.queue_list.currentItem()
-        if current_item:
-            # Add temporary highlighting
-            primary_color = theme_manager.get("primary_color", "#ffa500")
-            current_item.setBackground(QColor(primary_color))
-            
-            # Reset highlight after a short delay
-            QTimer.singleShot(300, lambda: current_item.setBackground(QColor("transparent")))
-
-    def _highlight_selected_category(self):
-        """Provide visual feedback for selected category"""
-        if hasattr(self, 'category_buttons') and self.selected_category_idx < len(self.category_buttons):
-            button = self.category_buttons[self.selected_category_idx]
-            
-            # Add temporary glow effect
-            original_style = button.styleSheet()
-            primary_color = theme_manager.get("primary_color", "#ffa500")
-            highlight_style = original_style + f"""
-                border: 3px solid {primary_color};
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 165, 0, 40), stop:1 rgba(255, 165, 0, 20));
-            """
-            
-            button.setStyleSheet(highlight_style)
-            
-            # Reset after short delay
-            QTimer.singleShot(400, lambda: button.setStyleSheet(original_style))
 
     def _trigger_selected_scene(self):
         """Trigger the currently selected scene with improved state management"""
@@ -360,21 +267,6 @@ class HomeScreen(BaseScreen):
             # Call parent implementation for unhandled keys
             super().keyPressEvent(event)
 
-
-    def _provide_trigger_feedback(self):
-        """Provide immediate visual feedback for scene trigger"""
-        current_item = self.queue_list.currentItem()
-        if current_item:
-            # Flash green to show activation
-            original_bg = current_item.background()
-            current_item.setBackground(QColor("#00ff00"))  # Green flash
-            QTimer.singleShot(200, lambda: current_item.setBackground(original_bg))
-
-    def _reset_scene_state(self):
-        """Reset scene playing state as fallback"""
-        if self.is_playing_scene:
-            self.is_playing_scene = False
-            self.logger.debug("Scene state reset by fallback timer")
 
     def _advance_to_next_scene(self):
         """Advance to next scene based on current mode (Sequential/Random)"""
@@ -811,54 +703,14 @@ class HomeScreen(BaseScreen):
         self.selected_mode_idx = idx
 
     def _on_idle_toggled(self):
-        self.idle_button.setStyleSheet(self._get_idle_button_style(selected=self.idle_button.isChecked()))
-        if self.idle_button.isChecked():
-            # Send idle mode activation to backend
-            success = self.send_websocket_message("mode", name="idle", state=True)
-            if success:
-                self.logger.info("Idle mode activated - sent to backend")
-            else:
-                self.logger.error("Failed to send idle activation to backend")
-                
-            self.idle_timer = QTimer(self)
-            self.auto_advance_enabled = False
-            self.idle_timer.timeout.connect(self._play_idle_scene)
-            self.idle_timer.start(20000)
+        """Switch the backend idle loop on or off - idle scenes are scheduled on the Pi"""
+        enabled = self.idle_button.isChecked()
+        self.idle_button.setStyleSheet(self._get_idle_button_style(selected=enabled))
+        success = self.send_websocket_message("mode", name="idle", state=enabled)
+        if success:
+            self.logger.info(f"Idle mode {'activated' if enabled else 'deactivated'} - sent to backend")
         else:
-            # Send idle mode deactivation to backend  
-            self.auto_advance_enabled = True
-            success = self.send_websocket_message("mode", name="idle", state=False)
-            if success:
-                self.logger.info("Idle mode deactivated - sent to backend")
-            else:
-                self.logger.error("Failed to send idle deactivation to backend")
-                
-            if hasattr(self, 'idle_timer'):
-                self.idle_timer.stop()
-
-    def _play_idle_scene(self):
-        """Play an idle scene with backend integration"""
-        try:
-            # Look for scenes in "Idle" category
-            idle_scenes = self.category_to_scenes.get("Idle", [])
-            
-            if idle_scenes:
-                # Pick random idle scene
-                import random
-                idle_scene = random.choice(idle_scenes)
-                scene_name = idle_scene.get("label", "Unknown Idle Scene")
-                
-                # Send to backend
-                success = self.send_websocket_message("scene", emotion=scene_name)
-                if success:
-                    self.logger.info(f"Triggered idle scene: {scene_name}")
-                else:
-                    self.logger.error(f"Failed to trigger idle scene: {scene_name}")
-            else:
-                self.logger.warning("No idle scenes available for idle mode")
-                
-        except Exception as e:
-            self.logger.error(f"Error playing idle scene: {e}")
+            self.logger.error(f"Failed to send idle {'activation' if enabled else 'deactivation'} to backend")
 
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
@@ -1001,19 +853,6 @@ class HomeScreen(BaseScreen):
         """Connect signals from SceneScreen to update categories when changed."""
         scene_screen.scenes_updated.connect(self.reload_emotions)
 
-    # Backward compatibility methods (now handled via WebSocket)
-    def select_queue_item(self, idx: int):
-        """Select a specific queue item by index (for compatibility)"""
-        count = self.queue_list.count()
-        if 0 <= idx < count:
-            self.queue_list.setCurrentRow(idx)
-            self.current_scene_index = idx
-
-    def trigger_selected_scene(self):
-        """Trigger the currently selected scene (backwards compatibility)"""
-        self._play_sound_effect("select.mp3")
-        self._trigger_selected_scene()
-
     def __del__(self):
         """Clean up theme manager callback on destruction"""
         try:
@@ -1022,60 +861,6 @@ class HomeScreen(BaseScreen):
             pass  # Ignore errors during cleanup
 
     def _create_category_bar(self, parent_layout: QVBoxLayout):
-        # Create a widget to contain the grid layout - store reference for cleanup
-        self.category_widget = QWidget()
-        self.category_grid = QGridLayout(self.category_widget)
-        self.category_grid.setSpacing(8)
-        self.category_grid.setContentsMargins(0, 0, 0, 0)
-        
-        self.category_buttons = []
-
-        # Load scenes config
-        cfg = config_manager.get_config("resources/configs/scenes_config.json")
-        self.scenes = cfg if isinstance(cfg, list) else []
-
-        # Build category list -> scenes map
-        self.category_to_scenes = {}
-        for scene in self.scenes:
-            cats = scene.get("categories", []) or ["All"]
-            for c in cats:
-                self.category_to_scenes.setdefault(c, []).append(scene)
-
-        # If no categories at all, create an "All" bucket
-        if not self.category_to_scenes:
-            self.category_to_scenes = {"All": self.scenes[:]}
-        self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
-
-        font = QFont("Arial", 18, QFont.Weight.Bold)
-        buttons_per_row = 5
-        
-        for idx, cat in enumerate(self.categories):
-            btn = QPushButton(cat)
-            btn.setCheckable(True)
-            btn.setFont(font)
-            btn.setMinimumSize(130, 40)
-            btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
-            btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
-            
-            # Calculate row and column for grid placement
-            row = idx // buttons_per_row
-            col = idx % buttons_per_row
-            
-            self.category_grid.addWidget(btn, row, col)
-            self.category_buttons.append(btn)
-
-        # Make sure all columns have equal stretch
-        for col in range(buttons_per_row):
-            self.category_grid.setColumnStretch(col, 1)
-
-        # default selection
-        self.selected_category_idx = 0
-        
-        # Add the category widget to the parent layout
+        """Create the category button grid and add it under the header"""
+        self._create_category_widget_only()
         parent_layout.addWidget(self.category_widget)
-        if self.category_buttons:
-            self.selected_category_idx = 0
-            self.category_buttons[0].setChecked(True)
-            # Force clear all other buttons
-            for i, btn in enumerate(self.category_buttons[1:], 1):
-                btn.setChecked(False)

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Droid Deck Control System - Main Application Class with Front Splash & Shutdown
 """
@@ -22,6 +24,7 @@ from widgets.controller_screen import ControllerConfigScreen
 from widgets.settings_screen import SettingsScreen
 from widgets.scene_screen import SceneScreen
 from widgets.splash_screen import DroidDeckSplashScreen, show_shutdown_splash
+from widgets.voltage_alert_splash import VoltageAlarmMonitor
 from threads.steamdeck import SteamDeckControllerThread
 
 
@@ -99,6 +102,8 @@ class DroidDeckApplication(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+        if hasattr(self, 'voltage_alarm'):
+            self.voltage_alarm.enable()
         if hasattr(self, 'logger'):
             self.logger.info(f"DroidDeck Control System initialized - Pi IP: {self.pi_ip}, Theme: {theme_manager.get_display_name()}")
     
@@ -232,7 +237,13 @@ class DroidDeckApplication(QMainWindow):
         self._setup_controller_thread()
         self._apply_theme()
         self._center_main_window()
-        self.websocket.textMessageReceived.connect(self._update_header_from_telemetry)
+        self.voltage_alarm = VoltageAlarmMonitor(self)
+        self.websocket.register_handler("telemetry", self._on_telemetry)
+        self.websocket.register_handler("failsafe_state", self._on_failsafe_state)
+        # The connection may have come up during startup before the handler
+        # existed, so ask again now that the reply can be applied
+        if self.websocket.is_connected():
+            self._request_failsafe_state()
     
     def _setup_controller_thread(self):
         """Initialize and start the Steam Deck controller thread with thread-safe WebSocket"""
@@ -522,6 +533,14 @@ class DroidDeckApplication(QMainWindow):
     @error_boundary
     def _toggle_failsafe(self, checked):
         """Toggle failsafe state and send to backend with themed icons"""
+        # Leaving failsafe re-enables motion, so it is only allowed while the
+        # backend is reachable - it is never queued for a later reconnect
+        if not checked and not self.websocket.is_connected():
+            self._apply_failsafe_ui(True)
+            if hasattr(self, 'logger'):
+                self.logger.warning("Failsafe release ignored - backend not connected")
+            return
+
         self._apply_failsafe_ui(checked)
         # Send command to backend
         self.websocket.send_command("failsafe", state=checked)
@@ -544,29 +563,19 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.setChecked(active)
         self.failsafe_button.blockSignals(False)
     
-    def _update_header_from_telemetry(self, message: str):
-        """Update header voltage from telemetry, and handle failsafe state sync"""
-        try:
-            import json
-            data = json.loads(message)
-            msg_type = data.get("type")
+    def _on_telemetry(self, data: dict):
+        """Update header voltage and the battery alarm from telemetry"""
+        voltage = data.get("battery_voltage") or 0.0
+        if voltage > 0:
+            self.header.update_voltage(voltage)
+            self.voltage_alarm.add_reading(voltage)
 
-            if msg_type == "telemetry":
-                voltage = data.get("battery_voltage", 0.0)
-                if voltage > 0:
-                    self.header.update_voltage(voltage)
-
-            elif msg_type == "failsafe_state":
-                # Backend is telling us the authoritative failsafe state -
-                # update the button without sending anything back
-                active = data.get("failsafe_active", True)
-                self._apply_failsafe_ui(active)
-                if hasattr(self, 'logger'):
-                    self.logger.info(f"Failsafe state synced from backend: {active}")
-
-        except Exception as e:
-            if hasattr(self, 'logger'):
-                self.logger.error(f"Header update error: {e}")
+    def _on_failsafe_state(self, data: dict):
+        """Apply the backend's authoritative failsafe state without sending anything back"""
+        active = data.get("failsafe_active", True)
+        self._apply_failsafe_ui(active)
+        if hasattr(self, 'logger'):
+            self.logger.info(f"Failsafe state synced from backend: {active}")
     
     def closeEvent(self, event):
         """Handle application shutdown with shutdown splash"""
@@ -668,6 +677,10 @@ class DroidDeckApplication(QMainWindow):
         # Cleanup settings screen
         if hasattr(self, 'settings_screen') and hasattr(self.settings_screen, 'cleanup'):
             self.settings_screen.cleanup()
+
+        # Close any open battery alert
+        if hasattr(self, 'voltage_alarm'):
+            self.voltage_alarm.cleanup()
     
     def _cleanup_resources(self):
         """Final resource cleanup"""

@@ -11,7 +11,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QTimer
 
 from core.logger import get_logger
-from core.utils import error_boundary
+from core.utils import error_boundary, BATTERY_LOW_VOLTAGE, BATTERY_CRITICAL_VOLTAGE
 from threads.network_monitor import NetworkMonitorThread
 
 
@@ -523,18 +523,13 @@ class DynamicHeader(QFrame):
 
     def update_voltage(self, voltage: float):
         """Update voltage display with color coding based on level"""
-        if voltage < 13.2:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+        self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+        if voltage < BATTERY_CRITICAL_VOLTAGE:
             self.voltage_label.setStyleSheet("color: #FF4444; font-weight: bold;")
-        elif voltage < 14.0:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
+        elif voltage < BATTERY_LOW_VOLTAGE:
             self.voltage_label.setStyleSheet("color: #FFAA00; font-weight: bold;")
-        elif voltage > 14.0:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
-            self.voltage_label.setStyleSheet("color: #44FF44;")
         else:
-            self.voltage_label.setText(f"🔋 {voltage:.2f}V")
-            self.voltage_label.setStyleSheet("color: white;")
+            self.voltage_label.setStyleSheet("color: #44FF44;")
 
     def update_wifi_display(self, signal_percent: int, status_text: str, ping_ms: float):
         """Update WiFi signal strength display (ping_ms no longer used for status)."""

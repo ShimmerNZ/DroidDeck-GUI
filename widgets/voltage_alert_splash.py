@@ -3,12 +3,105 @@
 # widgets/voltage_alert_splash.py
 
 import os
+import time
+from collections import deque
 import pygame
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QColor
 from core.theme_manager import theme_manager
 from core.logger import get_logger
+from core.utils import BATTERY_LOW_VOLTAGE, BATTERY_CRITICAL_VOLTAGE
+
+
+class VoltageAlarmMonitor(QObject):
+    """Application-wide pack voltage alarm.
+
+    Readings are averaged over a short window so track current sag does not
+    raise false alarms. A splash is shown when the level gets worse
+    (none -> LOW -> CRITICAL); a level only clears once the average rises a
+    margin above its threshold, so readings hovering at a threshold don't
+    repeat the alert.
+    """
+
+    AVERAGE_WINDOW_SECONDS = 10.0
+    MIN_SAMPLES = 3
+    CLEAR_MARGIN = 0.3
+    MIN_PLAUSIBLE_VOLTAGE = 8.0
+
+    _LEVEL_RANK = {None: 0, "LOW": 1, "CRITICAL": 2}
+
+    def __init__(self, window):
+        super().__init__(window)
+        self._window = window
+        self._samples = deque()
+        self._level = None
+        self._enabled = False
+        self._splash = None
+        self.logger = get_logger("voltage_alert")
+
+    def enable(self):
+        """Start raising alerts - called once the main window is showing"""
+        self._enabled = True
+        self.logger.info("Voltage alerts enabled")
+
+    def add_reading(self, voltage):
+        """Feed a pack voltage reading from telemetry"""
+        if voltage is None or voltage < self.MIN_PLAUSIBLE_VOLTAGE:
+            return
+
+        now = time.monotonic()
+        self._samples.append((now, float(voltage)))
+        cutoff = now - self.AVERAGE_WINDOW_SECONDS
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        if not self._enabled or len(self._samples) < self.MIN_SAMPLES:
+            return
+
+        average = sum(v for _, v in self._samples) / len(self._samples)
+        level = self._evaluate(average)
+
+        if level != self._level:
+            worse = self._LEVEL_RANK[level] > self._LEVEL_RANK[self._level]
+            self._level = level
+            if worse:
+                self._show_splash(level, average)
+            else:
+                self.logger.info(f"Battery alarm level now {level or 'OK'}: {average:.2f}V")
+
+    def _evaluate(self, average: float):
+        """Return the alarm level for an averaged voltage, with clear margin"""
+        if average < BATTERY_CRITICAL_VOLTAGE:
+            return "CRITICAL"
+        if self._level == "CRITICAL" and average < BATTERY_CRITICAL_VOLTAGE + self.CLEAR_MARGIN:
+            return "CRITICAL"
+        if average < BATTERY_LOW_VOLTAGE:
+            return "LOW"
+        if self._level in ("LOW", "CRITICAL") and average < BATTERY_LOW_VOLTAGE + self.CLEAR_MARGIN:
+            return "LOW"
+        return None
+
+    def _show_splash(self, level: str, voltage: float):
+        """Show the alert splash, replacing any splash already open"""
+        if self._splash is not None:
+            previous = self._splash
+            self._splash = None
+            previous.close_splash()
+
+        self._splash = VoltageAlertSplash(alert_type=level, voltage=voltage, parent=self._window)
+        self._splash.splash_closed.connect(self._on_splash_closed)
+        self.logger.info(f"Showing {level.lower()} voltage alert: {voltage:.2f}V")
+
+    def _on_splash_closed(self):
+        self._splash = None
+
+    def cleanup(self):
+        """Close any open splash"""
+        if self._splash is not None:
+            splash = self._splash
+            self._splash = None
+            splash.close_splash()
 
 class VoltageAlertSplash(QWidget):
     """Clean, modern voltage alert splash screen"""

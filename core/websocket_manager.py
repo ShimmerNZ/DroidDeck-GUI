@@ -284,6 +284,12 @@ class WebSocketManager(QWebSocket):
         if command_type in self._NEVER_QUEUE_TYPES:
             return False
 
+        # Releasing failsafe re-enables motion; replaying it after a
+        # reconnect could start the robot moving unexpectedly
+        if command_type == "failsafe" and not kwargs.get("state", False):
+            self.logger.warning("Not connected - failsafe release dropped, not queued")
+            return False
+
         if len(self._pending_commands) >= self._PENDING_MAX:
             self.logger.warning(f"Pending command queue full - dropping '{command_type}'")
             return False
