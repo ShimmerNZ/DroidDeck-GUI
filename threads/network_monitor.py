@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-WALL-E Control System - Network Monitoring Thread (Fixed with Upload Testing)
+WALL-E Control System - Network Monitoring Thread
 """
 
 import platform
@@ -184,7 +186,7 @@ class NetworkMonitorThread(QThread):
     def _get_wifi_signal_macos(self) -> int:
         """Get WiFi signal strength on macOS"""
         try:
-            result = subprocess.run(['/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport', '-I'], 
+            result = subprocess.run(['/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport', '-I'],
                                   capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
                 # Look for agrCtlRSSI
@@ -227,17 +229,17 @@ class NetworkMonitorThread(QThread):
         return f"{bars} {wifi_percent}%"
 
     def get_signal_bars(self, percentage: int) -> str:
-        """Generate signal bar representation using ASCII characters"""
+        """Generate signal bar representation using block characters"""
         if percentage >= 75:
-            return "â–ˆâ–ˆâ–ˆâ–ˆ"  # 4 bars
+            return "████"  # 4 bars
         elif percentage >= 50:
-            return "â–ˆâ–ˆâ–ˆâ–’"  # 3 bars
+            return "███▒"  # 3 bars
         elif percentage >= 25:
-            return "â–ˆâ–ˆâ–’â–’"  # 2 bars
+            return "██▒▒"  # 2 bars
         elif percentage > 0:
-            return "â–ˆâ–’â–’â–’"  # 1 bar
+            return "█▒▒▒"  # 1 bar
         else:
-            return "â–’â–’â–’â–’"  # 0 bars
+            return "▒▒▒▒"  # 0 bars
 
     def request_bandwidth_test(self):
         """Request bandwidth test on next monitoring cycle"""
@@ -248,64 +250,64 @@ class NetworkMonitorThread(QThread):
         """Run bandwidth test to Raspberry Pi with both download and upload"""
         try:
             self.logger.info("Starting bandwidth test...")
-            
+
             # Download test
             test_size_mb = 5
             start_time = time.time()
-            
+
             response = requests.get(
-                f"http://{self.pi_ip}:8081/bandwidth_test", 
+                f"http://{self.pi_ip}:8081/bandwidth_test",
                 params={"size": test_size_mb * 1024 * 1024},
-                timeout=30, 
+                timeout=30,
                 stream=True
             )
-            
+
             if response.status_code == 200:
                 total_bytes = 0
                 for chunk in response.iter_content(chunk_size=8192):
                     total_bytes += len(chunk)
-                
+
                 download_time = time.time() - start_time
                 download_mbps = (total_bytes * 8) / (download_time * 1000000)
-                
+
                 # Upload test
                 upload_mbps = 0
                 try:
                     upload_data = b'0' * (test_size_mb * 1024 * 1024)  # 5MB of data
                     upload_start = time.time()
-                    
+
                     upload_response = requests.post(
                         f"http://{self.pi_ip}:8081/bandwidth_upload",
                         data=upload_data,
                         headers={'Content-Type': 'application/octet-stream'},
                         timeout=30
                     )
-                    
+
                     if upload_response.status_code == 200:
                         upload_result = upload_response.json()
                         upload_mbps = upload_result.get("upload_mbps", 0)
                         self.logger.info(f"Upload test successful: {upload_mbps:.1f} Mbps")
                     else:
                         self.logger.warning(f"Upload test failed: HTTP {upload_response.status_code}")
-                        
+
                 except Exception as e:
                     self.logger.warning(f"Upload test error: {e}")
                     upload_mbps = 0
-                
+
                 # Report results
                 status_text = f"Download: {download_mbps:.1f} Mbps"
                 if upload_mbps > 0:
                     status_text += f", Upload: {upload_mbps:.1f} Mbps"
                 else:
                     status_text += ", Upload: Not available"
-                
+
                 self.bandwidth_tested.emit(download_mbps, upload_mbps, status_text)
                 self.logger.info(f"Bandwidth test complete: {status_text}")
-                
+
             else:
                 self.bandwidth_tested.emit(0, 0, f"Test failed: HTTP {response.status_code}")
                 self.logger.error(f"Bandwidth test failed: HTTP {response.status_code}")
-                
+
         except requests.exceptions.Timeout:
             self.bandwidth_tested.emit(0, 0, "Test failed: timeout")
             self.logger.error("Bandwidth test timeout")
