@@ -13,9 +13,9 @@ from typing import Dict, Any, Callable, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
-    QCheckBox, QWidget, QSizePolicy
+    QCheckBox, QWidget, QSizePolicy, QFrame
 )
-from PyQt6.QtGui import QFont, QImage, QPixmap
+from PyQt6.QtGui import QFont, QImage, QPixmap, QColor
 from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, pyqtSignal
 
 from widgets.base_screen import BaseScreen
@@ -29,6 +29,94 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Minimum seconds between people updates sent to the backend (10 Hz)
 PEOPLE_SEND_INTERVAL = 0.1
+
+# Card layout - matches the Health screen card style
+CARD_OBJECT_NAME = "camera_card"
+CARD_GAP = 12
+VIDEO_WIDTH = 640
+VIDEO_HEIGHT = 480
+VIDEO_CARD_PADDING = 6
+VIDEO_HEADER_HEIGHT = 18
+CONTROLS_COLUMN_WIDTH = 397
+STREAM_CARD_HEIGHT = 90
+ESP32_CARD_HEIGHT = 414
+SLIDER_ROW_HEIGHT = 36
+
+# Fixed colours shared by every theme
+LABEL_GREY = "#9e9e9e"
+TEXT_SOFT = "#bdbdbd"
+TILE_BG = "#202020"
+MONO_FAMILY = "Consolas"
+
+
+def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0,
+            family: str = "Arial") -> QFont:
+    """Font sized in pixels so the layout matches the mockup"""
+    font = QFont(family)
+    if family == MONO_FAMILY:
+        font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return font
+
+
+def card_style() -> str:
+    """Card frame: panel background with the theme colour as a soft border"""
+    primary = QColor(theme_manager.get("primary_color"))
+    panel_bg = theme_manager.get("panel_bg")
+    border = f"rgba({primary.red()}, {primary.green()}, {primary.blue()}, 0.45)"
+    return f"""
+        QFrame#{CARD_OBJECT_NAME} {{
+            background-color: {panel_bg};
+            border: 1px solid {border};
+            border-radius: 10px;
+        }}
+        QLabel {{
+            border: none;
+            background: transparent;
+        }}
+    """
+
+
+def button_style(checked_fill: Optional[str] = None) -> str:
+    """Button matching the Health screen buttons; checkable ones fill when on"""
+    primary = theme_manager.get("primary_color")
+    style = f"""
+        QPushButton {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #4a4a4a, stop:1 #2a2a2a);
+            color: white;
+            border: 1px solid #666;
+            border-radius: 8px;
+            padding: 4px;
+        }}
+        QPushButton:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #5a5a5a, stop:1 #3a3a3a);
+            border-color: {primary};
+        }}
+        QPushButton:pressed {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #3a3a3a, stop:1 #1a1a1a);
+            border-color: {primary};
+        }}
+        QPushButton:disabled {{
+            background: #333;
+            color: #666;
+            border-color: #444;
+        }}
+    """
+    if checked_fill:
+        style += f"""
+        QPushButton:checked {{
+            background: {checked_fill};
+            border: 1px solid {checked_fill};
+            color: #111111;
+        }}
+        """
+    return style
 
 class CameraSettingsDebouncer:
     """
@@ -158,6 +246,9 @@ class CameraControlsWidget(QWidget):
         self.stream_button = stream_button
         self.track_button = track_button
 
+        # Setting name labels, kept for theme updates
+        self._control_labels = []
+
         # Initialize debouncer
         self.settings_debouncer = CameraSettingsDebouncer(
             proxy_base_url=self.proxy_base_url,
@@ -179,133 +270,60 @@ class CameraControlsWidget(QWidget):
         if hasattr(self, 'status_label'):
             self.status_label.setText(message)
             self.status_label.setStyleSheet(
-                f"color: {color}; border: none; padding: 3px; text-align: center;"
+                f"color: {color}; border: none; background: transparent;"
             )
 
     def init_ui(self):
-        """Initialize the camera controls UI"""
-        self.setObjectName("cameraPanel")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(380)
-        self._update_panel_style()
+        """Initialize the camera controls UI: stream card and ESP32 settings card"""
+        self.setFixedWidth(CONTROLS_COLUMN_WIDTH)
+        self.setStyleSheet("background: transparent;")
 
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(15, 10, 15, 15)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(CARD_GAP)
 
-        # Header
-        self.header = QLabel("CAMERA SETTINGS")
-        self.header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_header_style()
-        main_layout.addWidget(self.header)
-
-        # ESP32 settings section
-        esp32_section = self._create_esp32_section()
-        main_layout.addWidget(esp32_section)
-        main_layout.addSpacing(10)
-
-        # Actions section
-        actions_section = self._create_actions_section()
-        main_layout.addWidget(actions_section)
-
-        # Status label
-        self.status_label = QLabel("Ready")
-        self.status_label.setFont(QFont("Arial", 12))
-        self._update_status_label_style()
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.status_label)
-
+        main_layout.addWidget(self._create_actions_section())
+        main_layout.addWidget(self._create_esp32_section())
         main_layout.addStretch()
         self.setLayout(main_layout)
 
+        self._update_panel_style()
+
     def _update_panel_style(self):
-        """Update panel style based on current theme"""
-        primary_color = theme_manager.get("primary_color")
-        panel_dark = theme_manager.get("panel_dark")
-        self.setStyleSheet(f"""
-            #cameraPanel {{
-                background-color: {panel_dark};
-                border: 2px solid {primary_color};
-                border-radius: 12px;
-                color: white;
-            }}
-        """)
+        """Update card style based on current theme"""
+        for card in (getattr(self, 'stream_card', None), getattr(self, 'esp32_card', None)):
+            if card is not None:
+                card.setStyleSheet(card_style())
 
-    def _update_header_style(self):
-        """Update header style based on current theme"""
-        primary_color = theme_manager.get("primary_color")
-        self.header.setStyleSheet(f"""
-            QLabel {{
-                border: none;
-                background-color: rgba(0, 0, 0, 0.9);
-                color: {primary_color};
-                padding: 8px;
-                border-radius: 6px;
-                margin-bottom: 5px;
-            }}
-        """)
+    def _make_card(self, title: str, height: int):
+        """Titled card; returns (card, layout, header_row, title_label)"""
+        card = QFrame()
+        card.setObjectName(CARD_OBJECT_NAME)
+        card.setFixedHeight(height)
 
-    def _update_status_label_style(self):
-        """Update status label style based on current theme"""
-        grey_light = theme_manager.get("grey_light")
-        self.status_label.setStyleSheet(f"color: {grey_light}; border: none; padding: 3px; text-align: center;")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(10)
+        title_label = QLabel(title)
+        title_label.setFont(px_font(14, bold=True, spacing=1.5))
+        self._update_section_header_style(title_label)
+        header_row.addWidget(title_label)
+        layout.addLayout(header_row)
+        return card, layout, header_row, title_label
 
     def _create_esp32_section(self):
-        """Create ESP32 camera settings section"""
-        esp32_frame = QWidget()
-        esp32_frame.setObjectName("esp32Frame")
-        self._update_section_frame_style(esp32_frame)
-        esp32_layout = QVBoxLayout()
-        esp32_layout.setContentsMargins(12, 8, 12, 22)
-        esp32_layout.setSpacing(8)
-
-        # Section header
-        self.esp32_header = QLabel("ESP32 SETTINGS")
-        self.esp32_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self.esp32_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.esp32_header)
-        esp32_layout.addWidget(self.esp32_header)
-
-        # Add this after your other controls in _create_esp32_section
-        xclk_layout = QHBoxLayout()
-        xclk_label = QLabel("X CLK:")
-        xclk_label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(xclk_label)
-        xclk_label.setFixedWidth(80)
-
-        self.xclk_slider = QSlider(Qt.Orientation.Horizontal)
-        self.xclk_slider.setRange(10, 20)
-        self.xclk_slider.setValue(16)
-        self.xclk_slider.setFixedWidth(160)
-        self._update_slider_style(self.xclk_slider)
-
-        self.xclk_value_label = QLabel(str(16))
-        self.xclk_value_label.setFont(QFont("Arial", 12))
-        self._update_value_label_style(self.xclk_value_label)
-        self.xclk_value_label.setFixedWidth(30)
-        self.xclk_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Connect slider to update value label and send debounced setting
-        self.xclk_slider.valueChanged.connect(lambda val: self.xclk_value_label.setText(str(val)))
-        self.xclk_slider.valueChanged.connect(lambda val: self._handle_setting_change("xclk_freq", val))
-
-        xclk_layout = QHBoxLayout()
-        xclk_layout.setSpacing(8)
-        xclk_layout.addWidget(xclk_label)
-        xclk_layout.addWidget(self.xclk_slider)
-        xclk_layout.addWidget(self.xclk_value_label)
-        xclk_layout.addStretch()
-        esp32_layout.addLayout(xclk_layout)
-
-
+        """Create ESP32 camera settings card"""
+        card, esp32_layout, _, self.esp32_header = self._make_card("ESP32 CAMERA", ESP32_CARD_HEIGHT)
+        self.esp32_card = card
 
         # Resolution control
         res_layout = QHBoxLayout()
-        res_label = QLabel("Resolution:")
-        res_label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(res_label)
-        res_label.setFixedWidth(80)
+        res_layout.setSpacing(10)
+        res_label = self._make_control_label("Resolution")
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItems([
@@ -314,61 +332,95 @@ class CameraControlsWidget(QWidget):
             "SXGA(1280x1024)", "UXGA(1600x1200)"
         ])
         self.resolution_combo.setCurrentIndex(5)  # VGA
-        self.resolution_combo.setFont(QFont("Arial", 11))
+        self.resolution_combo.setFont(px_font(14))
+        self.resolution_combo.setFixedHeight(36)
         self._update_combobox_style(self.resolution_combo)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
 
         res_layout.addWidget(res_label)
-        res_layout.addWidget(self.resolution_combo)
-        esp32_layout.addLayout(res_layout)
+        res_layout.addWidget(self.resolution_combo, 1)
+        res_row = QWidget()
+        res_row.setFixedHeight(40)
+        res_row.setLayout(res_layout)
+        res_layout.setContentsMargins(0, 0, 0, 0)
+        esp32_layout.addWidget(res_row)
+
+        # X CLK slider keeps its own attribute names for existing callers
+        self.xclk_slider, xclk_layout = self.create_slider_control("X CLK", 10, 20, 16, "xclk_freq")
+        self.xclk_value_label = getattr(self, 'xclk_freq_value_label')
+        esp32_layout.addWidget(self._wrap_row(xclk_layout, SLIDER_ROW_HEIGHT))
 
         # Slider controls
         slider_controls = [
-            ("Quality:", 4, 63, 12, "quality"),
-            ("Brightness:", -2, 2, 0, "brightness"),
-            ("Contrast:", -2, 2, 0, "contrast"),
-            ("Saturation:", -2, 2, 0, "saturation")
+            ("Quality", 4, 63, 12, "quality"),
+            ("Brightness", -2, 2, 0, "brightness"),
+            ("Contrast", -2, 2, 0, "contrast"),
+            ("Saturation", -2, 2, 0, "saturation")
         ]
 
         self.sliders = {}
         for label_text, min_val, max_val, default_val, setting_name in slider_controls:
             slider, layout = self.create_slider_control(label_text, min_val, max_val, default_val, setting_name)
             self.sliders[setting_name] = slider
-            esp32_layout.addLayout(layout)
+            esp32_layout.addWidget(self._wrap_row(layout, SLIDER_ROW_HEIGHT))
 
         # Mirror controls
         mirror_layout = QHBoxLayout()
-        mirror_label = QLabel("Mirror:")
-        mirror_label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(mirror_label)
-        mirror_label.setFixedWidth(80)
+        mirror_layout.setSpacing(10)
+        mirror_label = self._make_control_label("Mirror")
 
         self.h_mirror_btn = QPushButton("Horizontal")
         self.h_mirror_btn.setCheckable(True)
-        self.h_mirror_btn.setFixedSize(100, 30)
-        self.h_mirror_btn.setFont(QFont("Arial", 11))
+        self.h_mirror_btn.setFixedHeight(36)
+        self.h_mirror_btn.setFont(px_font(14, bold=True))
         self.h_mirror_btn.clicked.connect(
             lambda checked: self.settings_debouncer.update_setting("h_mirror", checked)
         )
-        self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
+        self.h_mirror_btn.setStyleSheet(button_style(theme_manager.get("primary_color")))
 
         self.v_flip_btn = QPushButton("Vertical")
         self.v_flip_btn.setCheckable(True)
-        self.v_flip_btn.setFixedSize(100, 30)
-        self.v_flip_btn.setFont(QFont("Arial", 11))
+        self.v_flip_btn.setFixedHeight(36)
+        self.v_flip_btn.setFont(px_font(14, bold=True))
         self.v_flip_btn.clicked.connect(
             lambda checked: self.settings_debouncer.update_setting("v_flip", checked)
         )
-        self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
+        self.v_flip_btn.setStyleSheet(button_style(theme_manager.get("primary_color")))
 
         mirror_layout.addWidget(mirror_label)
-        mirror_layout.addWidget(self.h_mirror_btn)
-        mirror_layout.addWidget(self.v_flip_btn)
-        mirror_layout.addStretch()
-        esp32_layout.addLayout(mirror_layout)
+        mirror_layout.addWidget(self.h_mirror_btn, 1)
+        mirror_layout.addWidget(self.v_flip_btn, 1)
+        esp32_layout.addWidget(self._wrap_row(mirror_layout, 40))
 
-        esp32_frame.setLayout(esp32_layout)
-        return esp32_frame
+        esp32_layout.addStretch(1)
+
+        # Reset button
+        self.reset_btn = QPushButton("RESET TO DEFAULTS")
+        self.reset_btn.setFont(px_font(14, bold=True))
+        self.reset_btn.setFixedHeight(44)
+        self.reset_btn.clicked.connect(self.reset_to_defaults)
+        self.reset_btn.setStyleSheet(button_style())
+        esp32_layout.addWidget(self.reset_btn)
+
+        return card
+
+    def _wrap_row(self, layout, height: int) -> QWidget:
+        """Put a row layout in a fixed-height transparent widget"""
+        layout.setContentsMargins(0, 0, 0, 0)
+        row = QWidget()
+        row.setFixedHeight(height)
+        row.setStyleSheet("background: transparent;")
+        row.setLayout(layout)
+        return row
+
+    def _make_control_label(self, text: str) -> QLabel:
+        """Fixed-width setting name label"""
+        label = QLabel(text)
+        label.setFont(px_font(14))
+        label.setFixedWidth(96)
+        self._update_control_label_style(label)
+        self._control_labels.append(label)
+        return label
 
     def _handle_setting_change(self, setting_name, value):
         """Handle setting changes, but only if not initializing"""
@@ -382,26 +434,17 @@ class CameraControlsWidget(QWidget):
             self.settings_debouncer.force_send_now()
 
     def _create_actions_section(self):
-        """Create camera actions section"""
-        actions_frame = QWidget()
-        actions_frame.setObjectName("actionsFrame")
-        self._update_section_frame_style(actions_frame)
-        actions_layout = QVBoxLayout()
-        actions_layout.setContentsMargins(12, 8, 12, 12)
-        actions_layout.setSpacing(8)
+        """Create the stream card: status message plus stream and tracking toggles"""
+        card, actions_layout, header_row, self.actions_header = self._make_card("STREAM", STREAM_CARD_HEIGHT)
+        self.stream_card = card
 
-        self.actions_header = QLabel("ACTIONS")
-        self.actions_header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self.actions_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_section_header_style(self.actions_header)
-        actions_layout.addWidget(self.actions_header)
-
-        # Reset button
-        self.reset_btn = QPushButton("RESET TO DEFAULTS")
-        self.reset_btn.setFont(QFont("Arial", 12))
-        self.reset_btn.clicked.connect(self.reset_to_defaults)
-        self.reset_btn.setStyleSheet(self._get_base_button_style())
-        actions_layout.addWidget(self.reset_btn)
+        # Status message sits in the card header
+        self.status_label = QLabel("Ready")
+        self.status_label.setFont(px_font(13))
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._update_status_label_style()
+        header_row.addWidget(self.status_label, 1)
 
         # Toggle buttons row
         toggles_row = QHBoxLayout()
@@ -411,9 +454,10 @@ class CameraControlsWidget(QWidget):
         self.stream_button.setText("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
-        self.stream_button.setMinimumHeight(40)
+        self.stream_button.setFixedHeight(44)
+        self.stream_button.setFont(px_font(16, bold=True))
         self.stream_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.stream_button.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
+        self.stream_button.setStyleSheet(button_style(theme_manager.get("primary_color")))
         toggles_row.addWidget(self.stream_button, stretch=1)
 
         # Track button
@@ -421,35 +465,32 @@ class CameraControlsWidget(QWidget):
         self.track_button.setCheckable(True)
         self.track_button.setChecked(False)
         self.track_button.setEnabled(False)
-        self.track_button.setMinimumHeight(40)
+        self.track_button.setFixedHeight(44)
+        self.track_button.setFont(px_font(16, bold=True))
         self.track_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.track_button.setStyleSheet(self._get_base_button_style() + self._get_green_checked_style())
+        self.track_button.setStyleSheet(button_style(theme_manager.get("green")))
         toggles_row.addWidget(self.track_button, stretch=1)
 
         actions_layout.addLayout(toggles_row)
-        actions_frame.setLayout(actions_layout)
-        return actions_frame
+        return card
 
     def create_slider_control(self, label_text, min_val, max_val, default_val, setting_name):
         """Create a slider control with debounced updates"""
         layout = QHBoxLayout()
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
-        label = QLabel(label_text)
-        label.setFont(QFont("Arial", 12))
-        self._update_control_label_style(label)
-        label.setFixedWidth(80)
+        label = self._make_control_label(label_text)
 
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(min_val, max_val)
         slider.setValue(default_val)
-        slider.setFixedWidth(160)
+        slider.setFixedHeight(24)
         self._update_slider_style(slider)
 
         value_label = QLabel(str(default_val))
-        value_label.setFont(QFont("Arial", 12))
+        value_label.setFont(px_font(14, family=MONO_FAMILY))
         self._update_value_label_style(value_label)
-        value_label.setFixedWidth(30)
+        value_label.setFixedSize(40, 28)
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         setattr(self, f'{setting_name}_value_label', value_label)
 
@@ -458,130 +499,113 @@ class CameraControlsWidget(QWidget):
         slider.valueChanged.connect(lambda val: self._handle_setting_change(setting_name, val)) 
         
         layout.addWidget(label)
-        layout.addWidget(slider)
+        layout.addWidget(slider, 1)
         layout.addWidget(value_label)
-        layout.addStretch()
         return slider, layout
-
-    # Style update methods (keeping these for theme support)
-    def _get_base_button_style(self) -> str:
-        return theme_manager.get_button_style("default")
-
-    def _get_yellow_checked_style(self) -> str:
-        primary_color = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        return f"""
-        QPushButton:checked {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {primary_light}, stop:1 {primary_color});
-            border: 2px solid {primary_light};
-            color: black;
-            font-weight: bold;
-        }}
-        """
-
-    def _get_green_checked_style(self) -> str:
-        green = theme_manager.get("green")
-        green_gradient = theme_manager.get("green_gradient")
-        return f"""
-        QPushButton:checked {{
-            background: {green_gradient};
-            border: 2px solid {green};
-            color: black;
-            font-weight: bold;
-        }}
-        """
-
-    def _update_section_frame_style(self, frame):
-        frame.setStyleSheet("""
-            QWidget {
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }
-        """)
 
     def _update_section_header_style(self, label):
         primary_color = theme_manager.get("primary_color")
-        label.setStyleSheet(f"color: {primary_color}; border: none; margin-bottom: 5px;")
+        label.setStyleSheet(f"color: {primary_color}; border: none; background: transparent;")
+
+    def _update_status_label_style(self):
+        """Update status label style based on current theme"""
+        self.status_label.setStyleSheet(f"color: {LABEL_GREY}; border: none; background: transparent;")
 
     def _update_control_label_style(self, label):
-        label.setStyleSheet("border: none; color: white;")
+        label.setStyleSheet(f"border: none; background: transparent; color: {TEXT_SOFT};")
 
     def _update_combobox_style(self, combobox):
-        combobox.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
+        primary_color = theme_manager.get("primary_color")
+        combobox.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {TILE_BG};
                 border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
+                border-radius: 6px;
+                padding: 0px 8px;
                 color: white;
-            }
+            }}
+            QComboBox:focus {{
+                border-color: {primary_color};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {TILE_BG};
+                color: white;
+                selection-background-color: {primary_color};
+                selection-color: black;
+                border: 1px solid #555;
+            }}
         """)
 
     def _update_slider_style(self, slider):
         primary_color = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
+        panel_bg = theme_manager.get("panel_bg")
         slider.setStyleSheet(f"""
+            QSlider {{
+                background: transparent;
+            }}
             QSlider::groove:horizontal {{
-                border: 1px solid #555;
+                border: none;
                 height: 6px;
-                background: #333;
+                background: #2c2c2c;
+                border-radius: 3px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {primary_color};
                 border-radius: 3px;
             }}
             QSlider::handle:horizontal {{
-                background: {primary_color};
-                border: 1px solid {primary_color};
-                width: 16px; height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
+                background: {primary_light};
+                border: 2px solid {panel_bg};
+                width: 14px; height: 14px;
+                margin: -6px 0;
+                border-radius: 9px;
             }}
         """)
 
     def _update_value_label_style(self, label):
-        primary_color = theme_manager.get("primary_color")
-        label.setStyleSheet(f"border: none; color: {primary_color};")
+        label.setStyleSheet(
+            f"border: none; border-radius: 6px; background-color: {TILE_BG}; color: white;"
+        )
 
     def _on_theme_changed(self):
         """Handle theme changes"""
         try:
-            # Update main panel styling
             self._update_panel_style()
-            self._update_header_style()
             self._update_status_label_style()
-            
-            # Update section headers
+
+            # Update card titles
             if hasattr(self, 'esp32_header'):
                 self._update_section_header_style(self.esp32_header)
             if hasattr(self, 'actions_header'):
                 self._update_section_header_style(self.actions_header)
-                
-            # Update all value labels (this is what's missing!)
+
+            # Update value labels
             if hasattr(self, 'xclk_value_label'):
                 self._update_value_label_style(self.xclk_value_label)
-            
-            # Update all slider value labels
-            for setting_name, slider in getattr(self, 'sliders', {}).items():
-                # Find the associated value label - they should be stored during creation
+            for setting_name in getattr(self, 'sliders', {}):
                 if hasattr(self, f'{setting_name}_value_label'):
-                    value_label = getattr(self, f'{setting_name}_value_label')
-                    self._update_value_label_style(value_label)
-            
-            # Update mirror buttons to use current theme colors instead of hardcoded yellow
+                    self._update_value_label_style(getattr(self, f'{setting_name}_value_label'))
+
+            # Update buttons
+            primary_color = theme_manager.get("primary_color")
             if hasattr(self, 'h_mirror_btn'):
-                self.h_mirror_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
+                self.h_mirror_btn.setStyleSheet(button_style(primary_color))
             if hasattr(self, 'v_flip_btn'):
-                self.v_flip_btn.setStyleSheet(self._get_base_button_style() + self._get_yellow_checked_style())
-                
+                self.v_flip_btn.setStyleSheet(button_style(primary_color))
+            if hasattr(self, 'reset_btn'):
+                self.reset_btn.setStyleSheet(button_style())
+
             # Update combobox styling
             if hasattr(self, 'resolution_combo'):
                 self._update_combobox_style(self.resolution_combo)
-                
+
             # Update all sliders
             if hasattr(self, 'xclk_slider'):
                 self._update_slider_style(self.xclk_slider)
             for slider in getattr(self, 'sliders', {}).values():
                 self._update_slider_style(slider)
-                
+
         except Exception as e:
             self.logger.error(f"Error updating camera controls theme: {e}")
 
@@ -776,17 +800,19 @@ class CameraFeedScreen(BaseScreen):
     def init_ui(self):
         # Video display
         self.video_label = ClickableVideoLabel()
-        self.video_label.setFixedSize(640, 480)
+        self.video_label.setFixedSize(VIDEO_WIDTH, VIDEO_HEIGHT)
+        self.video_label.setFont(px_font(16))
         self._update_video_label_style()
         self.video_label.setText("Connecting to camera...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.clicked.connect(self._on_video_clicked)
 
-        # Stats display
-        self.stats_label = QLabel("Stream Stats: Initializing...")
+        # Stats display, shown in the live view card header
+        self.stats_label = QLabel("Initializing...")
+        self.stats_label.setFont(px_font(13))
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._stats_active = False
         self._update_stats_label_style()
-        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.stats_label.setFixedWidth(640)
 
         # Create control buttons
         self.setup_control_buttons()
@@ -796,76 +822,49 @@ class CameraFeedScreen(BaseScreen):
             stream_button=self.stream_button,
             track_button=self.tracking_button
         )
-        self.controls_widget.setMaximumHeight(700)
 
         # Layout
         self.setup_layout()
 
     def _update_video_label_style(self):
-        grey = theme_manager.get("grey")
-        self.video_label.setStyleSheet(f"""
-            border: 2px solid {grey};
-            padding: 2px;
+        self.video_label.setStyleSheet("""
+            border: none;
+            border-radius: 4px;
             background-color: black;
-            color: white;
+            color: #6f6f6f;
         """)
 
     def _update_stats_label_style(self):
-        grey = theme_manager.get("grey")
-        grey_light = theme_manager.get("grey_light")
-        self.stats_label.setStyleSheet(f"""
-            border: 1px solid {grey};
-            border-radius: 4px;
-            padding: 1px;
-            background-color: black;
-            color: {grey_light};
-        """)
+        color = theme_manager.get("green") if self._stats_active else LABEL_GREY
+        self.stats_label.setStyleSheet(f"color: {color}; border: none; background: transparent;")
+
+    def _set_stats_text(self, text: str, active: bool = False):
+        """Set the stream stats text; active stats show in green"""
+        self.stats_label.setText(text)
+        if active != self._stats_active:
+            self._stats_active = active
+            self._update_stats_label_style()
 
     def setup_control_buttons(self):
         """Create stream and tracking buttons"""
         self.stream_button = QPushButton("Start Stream")
         self.stream_button.setCheckable(True)
         self.stream_button.setChecked(False)
-        self.stream_button.setMinimumSize(150, 40)
         self._update_stream_button_style()
         self.stream_button.toggled.connect(self.toggle_stream)
 
         self.tracking_button = QPushButton("Track Person")
         self.tracking_button.setCheckable(True)
         self.tracking_button.setChecked(False)
-        self.tracking_button.setMinimumSize(150, 40)
         self.tracking_button.setEnabled(False)
         self._update_tracking_button_style()
         self.tracking_button.toggled.connect(self.toggle_tracking)
 
     def _update_stream_button_style(self):
-        base_style = theme_manager.get_button_style("default")
-        primary_color = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        checked_style = f"""
-        QPushButton:checked {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {primary_light}, stop:1 {primary_color});
-            border: 2px solid {primary_light};
-            color: black;
-            font-weight: bold;
-        }}
-        """
-        self.stream_button.setStyleSheet(base_style + checked_style)
+        self.stream_button.setStyleSheet(button_style(theme_manager.get("primary_color")))
 
     def _update_tracking_button_style(self):
-        base_style = theme_manager.get_button_style("default")
-        green = theme_manager.get("green")
-        green_gradient = theme_manager.get("green_gradient")
-        checked_style = f"""
-        QPushButton:checked {{
-            background: {green_gradient};
-            border: 2px solid {green};
-            color: black;
-            font-weight: bold;
-        }}
-        """
-        self.tracking_button.setStyleSheet(base_style + checked_style)
+        self.tracking_button.setStyleSheet(button_style(theme_manager.get("green")))
 
     def get_gesture_detection_status(self):
         """Get current status of gesture detection buffers (for debugging)"""
@@ -909,25 +908,45 @@ class CameraFeedScreen(BaseScreen):
         return status
 
     def setup_layout(self):
-        """Layout with video display left and controls right"""
-        video_layout = QVBoxLayout()
-        video_layout.setContentsMargins(0, 15, 0, 0)
-        video_layout.addWidget(self.video_label)
-        video_layout.addWidget(self.stats_label)
+        """Live view card on the left, stream and settings cards on the right"""
+        self.video_card = QFrame()
+        self.video_card.setObjectName(CARD_OBJECT_NAME)
+        self.video_card.setFixedSize(VIDEO_WIDTH + 2 * VIDEO_CARD_PADDING,
+                                     VIDEO_HEIGHT + VIDEO_HEADER_HEIGHT + 3 * VIDEO_CARD_PADDING)
+        self.video_card.setStyleSheet(card_style())
 
-        right_layout = QVBoxLayout()
-        right_layout.setContentsMargins(20, 15, 0, 0)
-        right_layout.setSpacing(20)
-        right_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        right_layout.addWidget(self.controls_widget)
-        right_layout.addStretch()
+        video_layout = QVBoxLayout(self.video_card)
+        video_layout.setContentsMargins(VIDEO_CARD_PADDING, VIDEO_CARD_PADDING,
+                                        VIDEO_CARD_PADDING, VIDEO_CARD_PADDING)
+        video_layout.setSpacing(VIDEO_CARD_PADDING)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(6, 0, 6, 0)
+        self.video_title = QLabel("LIVE VIEW")
+        self.video_title.setFont(px_font(14, bold=True, spacing=1.5))
+        self._update_video_title_style()
+        header.addWidget(self.video_title)
+        header.addStretch(1)
+        header.addWidget(self.stats_label)
+        header_widget = QWidget()
+        header_widget.setFixedHeight(VIDEO_HEADER_HEIGHT)
+        header_widget.setStyleSheet("background: transparent;")
+        header_widget.setLayout(header)
+
+        video_layout.addWidget(header_widget)
+        video_layout.addWidget(self.video_label)
 
         main_layout = QHBoxLayout()
-        main_layout.addSpacing(95)
-        main_layout.addLayout(video_layout)
-        main_layout.addLayout(right_layout)
+        main_layout.setContentsMargins(101, 14, 12, 6)
+        main_layout.setSpacing(CARD_GAP)
+        main_layout.addWidget(self.video_card, 0, Qt.AlignmentFlag.AlignTop)
+        main_layout.addWidget(self.controls_widget, 0, Qt.AlignmentFlag.AlignTop)
         main_layout.addStretch()
         self.setLayout(main_layout)
+
+    def _update_video_title_style(self):
+        primary_color = theme_manager.get("primary_color")
+        self.video_title.setStyleSheet(f"color: {primary_color}; border: none; background: transparent;")
 
     def update_stream_button_appearance(self):
         """Update stream button appearance based on state"""
@@ -945,6 +964,9 @@ class CameraFeedScreen(BaseScreen):
         try:
             self._update_video_label_style()
             self._update_stats_label_style()
+            if hasattr(self, 'video_card'):
+                self.video_card.setStyleSheet(card_style())
+                self._update_video_title_style()
             self._update_stream_button_style()
             self._update_tracking_button_style()
             self.logger.info(f"Camera screen updated for theme: {theme_manager.get_display_name()}")
@@ -958,7 +980,7 @@ class CameraFeedScreen(BaseScreen):
         
         if self.streaming_enabled:
             self.logger.info("Starting camera stream")
-            self.stats_label.setText("Stream Stats: Starting stream...")
+            self._set_stats_text("Starting stream...")
             
             # Tell image processor to start connecting
             if hasattr(self, 'image_thread'):
@@ -972,13 +994,13 @@ class CameraFeedScreen(BaseScreen):
                         self.tracking_button.setEnabled(True)
                     else:
                         self.logger.warning(f"Stream start failed: {response.error or f'HTTP {response.status}'}")
-                        self.stats_label.setText("Stream Error: proxy unreachable")
+                        self._set_stats_text("Stream error: proxy unreachable")
 
                 get_http_client().post(f"{self.camera_proxy_base_url}/stream/start",
                                        _on_start_response, timeout_ms=3000, owner=self)
         else:
             self.logger.info("Stopping camera stream")
-            self.stats_label.setText("Stream Stats: Stopping stream...")
+            self._set_stats_text("Stopping stream...")
 
             # Disable tracking when stream stops
             if self.tracking_enabled:
@@ -1031,12 +1053,12 @@ class CameraFeedScreen(BaseScreen):
             self.tracking_button.setEnabled(is_streaming)
 
         if is_streaming and is_active:
-            self.stats_label.setText("Stream Stats: Stream active")
+            self._set_stats_text("Stream active", active=True)
             # Tell image processor to start if proxy is active
             if hasattr(self, 'image_thread'):
                 self.image_thread.start_connecting()
         else:
-            self.stats_label.setText("Stream Stats: Stream inactive")
+            self._set_stats_text("Stream inactive")
 
     @error_boundary
     def update_display(self, processed_data):
@@ -1150,14 +1172,14 @@ class CameraFeedScreen(BaseScreen):
                 running = stats_dict.get('running', False)
                 
                 if running:
-                    self.stats_label.setText(f"Stream Stats: {fps:.1f} FPS, {frame_count} frames")
+                    self._set_stats_text(f"{fps:.1f} FPS · {int(frame_count):,} frames", active=True)
                 else:
-                    self.stats_label.setText("Stream Stats: Not running")
+                    self._set_stats_text("Not running")
             else:
-                self.stats_label.setText(f"Stream Stats: {stats_dict}")
+                self._set_stats_text(f"{stats_dict}")
         except Exception as e:
             self.logger.error(f"Stats update error: {e}")
-            self.stats_label.setText("Stream Stats: Error")
+            self._set_stats_text("Stats error")
 
     def _handle_gesture_detection(self, gesture_type):
         """
