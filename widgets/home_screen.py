@@ -8,27 +8,241 @@ import os
 import time
 import pygame
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+    QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QProgressBar,
     QWidget, QFrame, QListWidget, QListWidgetItem, QSizePolicy, QGridLayout
 )
-from PyQt6.QtGui import QPixmap, QFont
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap, QFont, QColor, QPainter, QPen, QBrush, QRadialGradient, QPainterPath
+from PyQt6.QtCore import Qt, QTimer, QSize, QPointF, QRectF, pyqtSignal
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.logger import get_logger
 
-# Symbols for scene types
-SCENE_TYPE_SYMBOLS = {
-    "MP3": "🎵",
-    "Animation": "🎬",
-    "Combo": "🎵 🎬"
-}
+# Layout - matches the Health screen card positions
+STAGE_WIDTH = 376
+COLUMN_GAP = 16
+CARD_WIDTH = 669
+CONTENT_HEIGHT = 490
+STAGE_IMAGE_SIZE = 318
+CAPTION_HEIGHT = 66
+SCENE_ROW_HEIGHT = 44
+CATEGORIES_PER_ROW = 5
 
-# Tight top gap above the "SCENE SELECTION" header:
-FRAME_TOP_PADDING_PX = 6
-LAYOUT_TOP_MARGIN_PX = 4
+# Fixed colours shared by every theme
+LABEL_GREY = "#9e9e9e"
+TEXT_SOFT = "#d6d6d6"
+ROW_BG = "#1f1f1f"
+PILL_BG = "#242424"
+PILL_BORDER = "#3e3e3e"
+ICON_GREY = "#8a8a8a"
+
+
+def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0,
+            family: str = "Arial") -> QFont:
+    """Font sized in pixels so the layout matches the mockup"""
+    font = QFont(family)
+    if family != "Arial":
+        font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return font
+
+
+def rgba(color: str, alpha: float) -> str:
+    """CSS rgba() string for a theme colour at the given opacity"""
+    c = QColor(color)
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
+
+
+def _make_icon(kind: str, color: str) -> QPixmap:
+    """Small line icon for a scene type: 'audio' (note) or 'anim' (film)"""
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 1.6)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    if kind == "audio":
+        path = QPainterPath()
+        path.moveTo(5, 12)
+        path.lineTo(5, 2)
+        path.lineTo(13, 1)
+        path.lineTo(13, 11)
+        painter.drawPath(path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QPointF(3.2, 12.5), 2.2, 2.2)
+        painter.drawEllipse(QPointF(11.2, 11.5), 2.2, 2.2)
+    else:
+        painter.drawRoundedRect(QRectF(1, 3, 14, 10), 1.5, 1.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        triangle = QPainterPath()
+        triangle.moveTo(6.5, 6)
+        triangle.lineTo(10.5, 8)
+        triangle.lineTo(6.5, 10)
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+    painter.end()
+    return pixmap
+
+
+class StageWidget(QWidget):
+    """WALL-E standing in a theme-coloured spotlight with a floor shadow"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pixmap = None
+        self._glow_color = QColor("#e1a014")
+        self._glow_strength = 0.16
+        self.setFixedSize(STAGE_WIDTH, STAGE_IMAGE_SIZE + 8)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def set_image(self, pixmap):
+        self._pixmap = pixmap
+        self.update()
+
+    def set_glow(self, color: str, strength: float):
+        self._glow_color = QColor(color)
+        self._glow_strength = strength
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        w, h = self.width(), self.height()
+
+        # Spotlight behind WALL-E
+        glow = QRadialGradient(QPointF(w / 2, h * 0.55), w * 0.62)
+        inner = QColor(self._glow_color)
+        inner.setAlphaF(self._glow_strength)
+        mid = QColor(self._glow_color)
+        mid.setAlphaF(0.05)
+        outer = QColor(self._glow_color)
+        outer.setAlphaF(0.0)
+        glow.setColorAt(0.0, inner)
+        glow.setColorAt(0.55, mid)
+        glow.setColorAt(0.75, outer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(glow))
+        painter.drawRect(0, 0, w, h)
+
+        # Floor shadow under the tracks
+        shadow_rect = QRectF(w / 2 - 120, h - 22, 240, 26)
+        shadow = QRadialGradient(shadow_rect.center(), 120)
+        shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
+        shadow.setColorAt(0.7, QColor(0, 0, 0, 0))
+        painter.setBrush(QBrush(shadow))
+        painter.drawEllipse(shadow_rect)
+
+        # WALL-E, bottom-aligned on the floor
+        if self._pixmap is not None and not self._pixmap.isNull():
+            x = (w - self._pixmap.width()) // 2
+            y = h - 8 - self._pixmap.height()
+            painter.drawPixmap(x, y, self._pixmap)
+        painter.end()
+
+
+class SceneRow(QFrame):
+    """One scene in the list: marker, name, playing badge, type icons, duration"""
+
+    def __init__(self, name: str, audio: bool, anim: bool, duration: str):
+        super().__init__()
+        self.setObjectName("scene_row")
+        self.setFixedHeight(SCENE_ROW_HEIGHT)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 0, 14, 0)
+        layout.setSpacing(12)
+
+        self.marker = QFrame()
+        self.marker.setFixedSize(4, 20)
+
+        self.name_label = QLabel(name)
+        self.name_label.setFont(px_font(17))
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+        self.badge = QLabel("PLAYING")
+        self.badge.setFont(px_font(11, bold=True, spacing=1.0))
+        self.badge.hide()
+
+        icons = QHBoxLayout()
+        icons.setSpacing(6)
+        icons_widget = QWidget()
+        icons_widget.setFixedWidth(40)
+        icons_widget.setStyleSheet("background: transparent;")
+        icons_widget.setLayout(icons)
+        icons.setContentsMargins(0, 0, 0, 0)
+        icons.addStretch(1)
+        if audio:
+            note = QLabel()
+            note.setPixmap(_make_icon("audio", ICON_GREY))
+            icons.addWidget(note)
+        if anim:
+            film = QLabel()
+            film.setPixmap(_make_icon("anim", ICON_GREY))
+            icons.addWidget(film)
+
+        self.duration_label = QLabel(duration)
+        self.duration_label.setFont(px_font(14, family="Consolas"))
+        self.duration_label.setFixedWidth(44)
+        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addWidget(self.marker)
+        layout.addWidget(self.name_label, 1)
+        layout.addWidget(self.badge)
+        layout.addWidget(icons_widget)
+        layout.addWidget(self.duration_label)
+
+        self.set_state(selected=False, playing=False)
+
+    def set_state(self, selected: bool, playing: bool):
+        """Style the row for its selected / playing state"""
+        primary = theme_manager.get("primary_color")
+        green = theme_manager.get("green")
+
+        if selected:
+            background, border = rgba(primary, 0.14), f"1px solid {primary}"
+        elif playing:
+            background, border = rgba(green, 0.12), "1px solid transparent"
+        else:
+            background, border = ROW_BG, "1px solid transparent"
+        marker = green if playing else (primary if selected else "transparent")
+        name_color = "white" if (selected or playing) else TEXT_SOFT
+
+        self.setStyleSheet(f"""
+            QFrame#scene_row {{
+                background-color: {background};
+                border: {border};
+                border-radius: 10px;
+            }}
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+        self.marker.setStyleSheet(f"background-color: {marker}; border: none; border-radius: 2px;")
+        self.name_label.setStyleSheet(f"color: {name_color}; background: transparent; border: none;")
+        self.duration_label.setStyleSheet("color: #bdbdbd; background: transparent; border: none;")
+        self.badge.setStyleSheet(
+            f"color: #111111; background-color: {green}; border: none; border-radius: 4px; padding: 3px 8px;"
+        )
+        self.badge.setVisible(playing)
+
+
+class SceneList(QListWidget):
+    """Scene list whose rows always span the full list width"""
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = self.viewport().width()
+        for i in range(self.count()):
+            self.item(i).setSizeHint(QSize(width, SCENE_ROW_HEIGHT))
 
 
 class HomeScreen(BaseScreen):
@@ -202,7 +416,7 @@ class HomeScreen(BaseScreen):
             if success:
                 # Emit signal and update UI
                 self.scene_triggered.emit(cat, current_row)
-                self.progress_label.setText(f"Progress: Playing '{scene_name}'")
+                self._show_playing(scene_name, scene.get("duration", 3.0))
 
                 self.is_playing_scene = True
                 self.last_triggered_scene = scene_name
@@ -232,7 +446,7 @@ class HomeScreen(BaseScreen):
         if hasattr(self, 'is_playing_scene'):
             self.is_playing_scene = False
         self.navigation_locked = False
-        self.progress_label.setText("Progress: Ready to play")
+        self._show_ready()
 
     def keyPressEvent(self, event):
         """Handle keyboard/D-pad input with improved debouncing"""
@@ -312,92 +526,131 @@ class HomeScreen(BaseScreen):
             self.current_scene_index = 0
 
     def _setup_screen(self):
+        """WALL-E stage on the left, scenes card on the right"""
+        self._playing_scene_name = None
+        self._playing_started = 0.0
+        self._playing_duration = 0.0
+        self._scene_rows = []
+
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(100)
+        self._progress_timer.timeout.connect(self._update_progress)
+
         root = QHBoxLayout()
-        # Outer screen margins
-        root.setContentsMargins(80, 20, 90, 5)
+        root.setContentsMargins(101, 40, 12, 6)
+        root.setSpacing(COLUMN_GAP)
 
-        # Left WALL-E image
-        self._create_image_section(root)
-
-        # Right control panel
-        self._create_right_panel(root)
-
+        root.addWidget(self._create_stage(), 0, Qt.AlignmentFlag.AlignTop)
+        root.addWidget(self._create_scene_card(), 0, Qt.AlignmentFlag.AlignTop)
+        root.addStretch(1)
         self.setLayout(root)
 
-    def _create_image_section(self, parent_layout: QHBoxLayout):
-        image_container = QVBoxLayout()
-        image_container.addStretch()
-        self.image_label = QLabel()
-        self._update_main_image()
-        image_container.addWidget(self.image_label)
+        self._apply_styles()
+        self._show_ready()
 
-        image_widget = QWidget()
-        image_widget.setLayout(image_container)
-        image_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
-        parent_layout.addWidget(image_widget)
+    # ---------- Stage ----------
+
+    def _create_stage(self) -> QWidget:
+        """Playback caption, WALL-E in his spotlight, stage line, then the playback controls"""
+        stage = QWidget()
+        stage.setFixedSize(STAGE_WIDTH, CONTENT_HEIGHT)
+        stage.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(stage)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Caption: READY, or NOW PLAYING with the scene name and progress
+        caption = QWidget()
+        caption.setFixedSize(340, CAPTION_HEIGHT)
+        caption_layout = QVBoxLayout(caption)
+        caption_layout.setContentsMargins(0, 0, 0, 0)
+        caption_layout.setSpacing(4)
+
+        self.status_label = QLabel("READY")
+        self.status_label.setFont(px_font(12, spacing=2.0))
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.playing_name_label = QLabel("")
+        self.playing_name_label.setFont(px_font(26, bold=True))
+        self.playing_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.playing_progress = QProgressBar()
+        self.playing_progress.setRange(0, 1000)
+        self.playing_progress.setTextVisible(False)
+        self.playing_progress.setFixedSize(220, 4)
+
+        caption_layout.addWidget(self.status_label)
+        caption_layout.addWidget(self.playing_name_label)
+        caption_layout.addSpacing(6)
+        caption_layout.addWidget(self.playing_progress, 0, Qt.AlignmentFlag.AlignHCenter)
+        caption_layout.addStretch(1)
+        layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        layout.addSpacing(12)
+        self.stage_widget = StageWidget()
+        layout.addWidget(self.stage_widget, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._update_main_image()
+
+        layout.addSpacing(6)
+        self.stage_line = QFrame()
+        self.stage_line.setFixedSize(340, 1)
+        layout.addWidget(self.stage_line, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        layout.addSpacing(17)
+        layout.addWidget(self._create_mode_selector(), 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(1)
+        return stage
 
     def _update_main_image(self):
         """Update the main character image based on current theme"""
         image_path = theme_manager.get_image_path("main")
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path).scaled(
-                320, 320,
+                STAGE_IMAGE_SIZE, STAGE_IMAGE_SIZE,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
-            self.image_label.setPixmap(pixmap)
-            self.image_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
+            self.stage_widget.set_image(pixmap)
 
-    def _create_right_panel(self, parent_layout: QHBoxLayout):
-        self.right_frame = QFrame()
-        self._update_right_frame_style()
-        right_layout = QVBoxLayout(self.right_frame)
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(8, LAYOUT_TOP_MARGIN_PX, 8, 8)
+    def _create_mode_selector(self) -> QWidget:
+        """Sequential / Random switch and the Idle toggle, as pills"""
+        row_widget = QWidget()
+        row_widget.setFixedWidth(340)
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
 
-        # Header
-        self.header = QLabel("SCENE SELECTION")
-        self.header.setFont(QFont("Arial", 22, QFont.Weight.Bold))
-        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_header_style()
-        right_layout.addWidget(self.header)
+        self.mode_segment = QFrame()
+        self.mode_segment.setObjectName("mode_segment")
+        self.mode_segment.setFixedHeight(44)
+        segment_layout = QHBoxLayout(self.mode_segment)
+        segment_layout.setContentsMargins(3, 3, 3, 3)
+        segment_layout.setSpacing(0)
 
-        # Category bar with wrapping
-        self._create_category_bar(right_layout)
+        self.mode_buttons = []
+        for idx, mode in enumerate(["Sequential", "Random"]):
+            btn = QPushButton(mode)
+            btn.setCheckable(True)
+            btn.setChecked(idx == 0)
+            btn.setFont(px_font(14, bold=True))
+            btn.setFixedHeight(38)
+            btn.clicked.connect(lambda checked, i=idx: self._on_mode_selected(i))
+            segment_layout.addWidget(btn, 1)
+            self.mode_buttons.append(btn)
 
-        # Scene queue panel
-        scene_panel = self._create_scene_queue_panel()
-        right_layout.addWidget(scene_panel, 1)
+        self.selected_mode_idx = 0  # Sequential default
 
-        # Mode selector + Idle
-        self._create_mode_selector(right_layout)
+        # Idle toggle button
+        self.idle_button = QPushButton("Idle")
+        self.idle_button.setCheckable(True)
+        self.idle_button.setChecked(False)
+        self.idle_button.setFont(px_font(14, bold=True))
+        self.idle_button.setFixedSize(104, 44)
+        self.idle_button.clicked.connect(self._on_idle_toggled)
 
-        parent_layout.addWidget(self.right_frame)
-
-    def _update_right_frame_style(self):
-        """Update the right frame style based on current theme"""
-        primary_color = theme_manager.get("primary_color")
-        panel_bg = theme_manager.get("panel_bg")
-        self.right_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel_bg};
-                border: 2px solid {primary_color};
-                border-radius: 12px;
-                padding: {FRAME_TOP_PADDING_PX}px 12px 12px 12px;
-            }}
-        """)
-
-    def _update_header_style(self):
-        """Update the header style based on current theme"""
-        primary_color = theme_manager.get("primary_color")
-        self.header.setStyleSheet(f"""
-            QLabel {{
-                color: {primary_color};
-                padding-bottom: 4px;
-                font-weight: bold;
-                border: none;
-            }}
-        """)
+        row.addWidget(self.mode_segment, 1)
+        row.addWidget(self.idle_button)
+        return row_widget
 
     def _init_audio(self):
         """Initialize pygame mixer for sound effects"""
@@ -457,255 +710,326 @@ class HomeScreen(BaseScreen):
             self.logger.error(f"Failed to play sound effect {sound_file}: {e}")
 
 
-    def _get_category_button_style(self, selected: bool) -> str:
-        """Get category button style based on current theme"""
-        base_style = theme_manager.get_button_style("primary", checked=selected)
-        
-        # Add custom padding to prevent text cutoff
-        custom_padding = """
-            QPushButton {
-                padding: 2px 4px;
-            }
-        """
-        
-        return base_style + custom_padding
+    # ---------- Playback caption ----------
+
+    def _show_playing(self, scene_name: str, duration: float):
+        """Show NOW PLAYING with the scene name and start the progress line"""
+        self._playing_scene_name = scene_name
+        self._playing_started = time.monotonic()
+        try:
+            self._playing_duration = max(float(duration), 0.1)
+        except (TypeError, ValueError):
+            self._playing_duration = 3.0
+
+        self.status_label.setText("NOW PLAYING")
+        metrics = self.playing_name_label.fontMetrics()
+        self.playing_name_label.setText(
+            metrics.elidedText(scene_name, Qt.TextElideMode.ElideRight, 340))
+        self.playing_name_label.setVisible(True)
+        self.playing_progress.setValue(0)
+        self.playing_progress.setVisible(True)
+        self._progress_timer.start()
+        self._apply_caption_style()
+        self._refresh_row_states()
+
+    def _show_ready(self):
+        """Show READY with no scene name"""
+        self._playing_scene_name = None
+        self._progress_timer.stop()
+        self.status_label.setText("READY")
+        self.playing_name_label.setVisible(False)
+        self.playing_progress.setVisible(False)
+        self._apply_caption_style()
+        self._refresh_row_states()
+
+    def _update_progress(self):
+        """Advance the progress line from the scene's known duration"""
+        if self._playing_scene_name is None:
+            self._progress_timer.stop()
+            return
+        fraction = (time.monotonic() - self._playing_started) / self._playing_duration
+        self.playing_progress.setValue(int(min(fraction, 1.0) * 1000))
+        if fraction >= 1.0:
+            self._progress_timer.stop()
+
+    def _apply_caption_style(self):
+        """Caption and spotlight colours for the current playback state"""
+        green = theme_manager.get("green")
+        playing = self._playing_scene_name is not None
+        self.status_label.setStyleSheet(
+            f"color: {green if playing else LABEL_GREY}; background: transparent; border: none;")
+        self.stage_widget.set_glow(theme_manager.get("primary_color"), 0.30 if playing else 0.16)
+
+    # ---------- Scenes card ----------
+
+    def _create_scene_card(self) -> QFrame:
+        """Single card: title, category pills, divider, scene list"""
+        self.scene_card = QFrame()
+        self.scene_card.setObjectName("home_card")
+        self.scene_card.setFixedSize(CARD_WIDTH, CONTENT_HEIGHT)
+
+        layout = QVBoxLayout(self.scene_card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.header = QLabel("SCENES")
+        self.header.setFont(px_font(14, bold=True, spacing=1.5))
+        self.current_scene_label = QLabel("")
+        self.current_scene_label.setFont(px_font(13))
+        self.current_scene_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.addWidget(self.header)
+        header.addStretch(1)
+        header.addWidget(self.current_scene_label)
+        layout.addLayout(header)
+
+        # Category pills live in their own holder so they can be rebuilt
+        self.category_holder = QVBoxLayout()
+        self.category_holder.setContentsMargins(0, 0, 0, 0)
+        self._create_category_widget_only()
+        self.category_holder.addWidget(self.category_widget)
+        layout.addLayout(self.category_holder)
+
+        self.divider = QFrame()
+        self.divider.setFixedHeight(1)
+        layout.addWidget(self.divider)
+
+        self.queue_list = SceneList()
+        self.queue_list.setSpacing(2)
+        self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.queue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.queue_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.queue_list.currentRowChanged.connect(lambda _row: self._refresh_row_states())
+        layout.addWidget(self.queue_list, 1)
+
+        # Initial population
+        self._update_scene_queue_panel()
+        return self.scene_card
 
     def _on_category_selected(self, idx: int):
         """Handle category selection with improved state management"""
         # Add bounds checking
         if not hasattr(self, 'category_buttons') or not self.category_buttons:
             return
-            
+
         if idx < 0 or idx >= len(self.category_buttons):
             return
-        
-        # Clear all buttons first so exactly one ends up selected
+
+        # Exactly one category pill is checked
         for i, btn in enumerate(self.category_buttons):
-            btn.setChecked(False)
-            btn.setStyleSheet(self._get_category_button_style(selected=False))
-        
-        # Then set only the target button as selected
-        target_button = self.category_buttons[idx]
-        target_button.setChecked(True)
-        target_button.setStyleSheet(self._get_category_button_style(selected=True))
-        
+            btn.setChecked(i == idx)
+
         # Update the selected category
         self.selected_category_idx = idx
         self.last_triggered_scene = None
         self._update_scene_queue_panel()
-        
+
         # Reset scene selection when category changes
         if hasattr(self, 'queue_list') and self.queue_list.count() > 0:
             self.queue_list.setCurrentRow(0)
             if hasattr(self, 'current_scene_index'):
                 self.current_scene_index = 0
 
-    def _create_scene_queue_panel(self) -> QWidget:
-        self.scene_panel = QFrame()
-        self._update_scene_panel_style()
-        self.scene_layout = QVBoxLayout(self.scene_panel)
-        self.scene_layout.setSpacing(6)
-        self.scene_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Category status header
-        self.current_scene_label = QLabel("Category: --")
-        self.current_scene_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        self._update_current_scene_label_style()
-        self.scene_layout.addWidget(self.current_scene_label, 0)
-
-        # Queue list
-        self.queue_list = QListWidget()
-        self.queue_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.queue_list.setMinimumHeight(120)
-        self._update_queue_list_style()
-        self.scene_layout.addWidget(self.queue_list, 1)
-
-        # Progress
-        self.progress_label = QLabel("Progress: --")
-        self.progress_label.setFont(QFont("Arial", 13))
-        self._update_progress_label_style()
-        self.scene_layout.addWidget(self.progress_label, 0)
-
-        # Stretch priorities
-        self.scene_layout.setStretch(0, 0)  # header - fixed size
-        self.scene_layout.setStretch(1, 1)  # list - expands to fill space
-        self.scene_layout.setStretch(2, 0)  # progress - fixed size
-
-        # Initial population
-        self._update_scene_queue_panel()
-        return self.scene_panel
-
-    def _update_scene_panel_style(self):
-        """Update scene panel style based on current theme"""
-        grey = theme_manager.get("grey")
-        panel_dark = theme_manager.get("panel_dark")
-        self.scene_panel.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel_dark};
-                border: 2px solid {grey};
-                border-radius: 8px;
-                padding: 6px;
-            }}
-        """)
-
-    def _update_current_scene_label_style(self):
-        """Update current scene label style based on current theme"""
-        grey = theme_manager.get("grey")
-        primary_color = theme_manager.get("primary_color")
-        self.current_scene_label.setStyleSheet(f"""
-            QLabel {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {grey}, stop:1 #444);
-                border: 2px solid {grey};
-                border-radius: 6px;
-                color: {primary_color};
-                padding: 4px 0px;
-            }}
-        """)
-
-    def _update_queue_list_style(self):
-        """Update queue list style based on current theme"""
-        grey = theme_manager.get("grey")
-        primary_color = theme_manager.get("primary_color")
-        self.queue_list.setStyleSheet(f"""
-            QListWidget {{
-                background: #222;
-                border: 1px solid {grey};
-                border-radius: 8px;
-                color: white;
-                font-size: 16px;
-                padding: 6px;
-                show-decoration-selected: 1;
-                outline: none;
-            }}
-            QListWidget::item {{
-                padding: 8px 12px;
-                border-radius: 6px;
-                color: white;
-            }}
-            QListWidget::item:selected {{
-                border: 2px solid {primary_color};
-                background: #444;
-                color: white;
-                padding: 8px 12px;
-                border-radius: 8px;
-            }}
-        """)
-
-    def _update_progress_label_style(self):
-        """Update progress label style based on current theme"""
-        primary_color = theme_manager.get("primary_color")
-        self.progress_label.setStyleSheet(f"color: {primary_color}; padding: 2px;")
-
     def _update_scene_queue_panel(self):
-        # Determine selected category
+        """Fill the scene list for the selected category"""
+        self.queue_list.clear()
+        self._scene_rows = []
+
         if not hasattr(self, "categories") or not self.categories:
-            self.current_scene_label.setText("Category: --")
-            self.queue_list.clear()
-            self.progress_label.setText("Progress: --")
+            self.current_scene_label.setText("")
             return
 
         cat = self.categories[self.selected_category_idx]
         scenes = self.category_to_scenes.get(cat, [])
-        self.current_scene_label.setText(f"Category: {cat}")
-        self.queue_list.clear()
 
         if not scenes:
-            self.progress_label.setText("Progress: No scenes in this category")
+            self.current_scene_label.setText(f"{cat} · No scenes in this category")
             return
+
+        count = len(scenes)
+        self.current_scene_label.setText(f"{cat} · {count} scene{'s' if count != 1 else ''}")
 
         # Populate queue with scenes from selected category
         for s in scenes:
-            label = s.get("label", "--")
-            audio_enabled = s.get("audio_enabled", False)
-            script_enabled = s.get("script_enabled", False)
-            if audio_enabled and script_enabled:
-                sym = SCENE_TYPE_SYMBOLS["Combo"]
-            elif audio_enabled:
-                sym = SCENE_TYPE_SYMBOLS["MP3"]
-            elif script_enabled:
-                sym = SCENE_TYPE_SYMBOLS["Animation"]
-            else:
-                sym = "⌘"
-            duration = f"{s.get('duration', '--')}s"
-            text = f"{sym}  {label}    {duration}"
-            self.queue_list.addItem(QListWidgetItem(text))
+            row = SceneRow(
+                name=s.get("label", "--"),
+                audio=bool(s.get("audio_enabled", False)),
+                anim=bool(s.get("script_enabled", False)),
+                duration=f"{s.get('duration', '--')}s",
+            )
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(self.queue_list.viewport().width(), SCENE_ROW_HEIGHT))
+            self.queue_list.addItem(item)
+            self.queue_list.setItemWidget(item, row)
+            self._scene_rows.append((s.get("label", ""), row))
 
         # Select first by default
         if self.queue_list.count() > 0:
             self.queue_list.setCurrentRow(0)
             self.current_scene_index = 0
-        self.progress_label.setText("Progress: Ready to play")
+        self._refresh_row_states()
 
-    def _create_mode_selector(self, parent_layout: QVBoxLayout):
-        self.mode_bar = QHBoxLayout()
-        self.mode_buttons = []
-        modes = ["Sequential", "Random"]
-        font = QFont("Arial", 16, QFont.Weight.Bold)
-        for idx, mode in enumerate(modes):
-            btn = QPushButton(mode)
-            btn.setCheckable(True)
-            btn.setFont(font)
-            btn.setMinimumSize(110, 36)
-            btn.setStyleSheet(self._get_mode_button_style(selected=(idx == 0)))
-            btn.clicked.connect(lambda checked, i=idx: self._on_mode_selected(i))
-            self.mode_bar.addWidget(btn)
-            self.mode_buttons.append(btn)
+    def _refresh_row_states(self):
+        """Mark the selected and playing rows"""
+        if not hasattr(self, "queue_list"):
+            return
+        current = self.queue_list.currentRow()
+        for index, (label, row) in enumerate(self._scene_rows):
+            row.set_state(selected=(index == current),
+                          playing=(label == self._playing_scene_name))
 
-        self.selected_mode_idx = 0  # Sequential default
+    # ---------- Styling ----------
 
-        # Idle toggle button
-        self.idle_button = QPushButton("Idle")
-        self.idle_button.setCheckable(True)
-        self.idle_button.setFont(font)
-        self.idle_button.setMinimumSize(110, 36)
-        self.idle_button.setStyleSheet(self._get_idle_button_style(selected=False))
-        self.idle_button.setChecked(False)
-        self.idle_button.clicked.connect(self._on_idle_toggled)
-        self.mode_bar.addWidget(self.idle_button)
-
-        parent_layout.addLayout(self.mode_bar)
-
-    def _get_mode_button_style(self, selected: bool) -> str:
-        """Get mode button style based on current theme"""
-        return theme_manager.get_button_style("primary", checked=selected)
-
-    def _get_idle_button_style(self, selected: bool) -> str:
-        """Get idle button style based on current theme"""
+    def _apply_styles(self):
+        """Apply theme colours to every styled widget"""
+        primary = theme_manager.get("primary_color")
+        primary_light = theme_manager.get("primary_light")
         green = theme_manager.get("green")
-        green_gradient = theme_manager.get("green_gradient")
-        
-        if selected:
-            return f"""
-            QPushButton {{
-                background: {green_gradient};
-                border: 2px solid {green};
-                border-radius: 8px;
-                color: #222;
-                font-weight: bold;
+        panel_bg = theme_manager.get("panel_bg")
+
+        self.scene_card.setStyleSheet(f"""
+            QFrame#home_card {{
+                background-color: {panel_bg};
+                border: 1px solid {rgba(primary, 0.45)};
+                border-radius: 12px;
             }}
-            """
-        else:
-            return f"""
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+        self.header.setStyleSheet(f"color: {primary}; background: transparent; border: none;")
+        self.current_scene_label.setStyleSheet(f"color: {LABEL_GREY}; background: transparent; border: none;")
+        self.divider.setStyleSheet("background-color: #2e2e2e; border: none;")
+
+        for btn in getattr(self, "category_buttons", []):
+            btn.setStyleSheet(self._get_category_button_style())
+
+        self.queue_list.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item, QListWidget::item:selected, QListWidget::item:hover {{
+                background: transparent;
+                border: none;
+                padding: 0px;
+            }}
+            QScrollBar:vertical {{
+                background: #262626;
+                width: 6px;
+                border-radius: 3px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {primary};
+                border-radius: 3px;
+                min-height: 30px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+        """)
+
+        self.playing_name_label.setStyleSheet("color: white; background: transparent; border: none;")
+        self.playing_progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #2c2c2c;
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {green};
+                border-radius: 2px;
+            }}
+        """)
+        self.stage_line.setStyleSheet(f"""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {rgba(primary, 0)}, stop:0.5 {rgba(primary, 0.6)}, stop:1 {rgba(primary, 0)});
+            border: none;
+        """)
+
+        self.mode_segment.setStyleSheet(f"""
+            QFrame#mode_segment {{
+                background-color: {panel_bg};
+                border: 1px solid #555555;
+                border-radius: 22px;
+            }}
+        """)
+        for btn in self.mode_buttons:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: #bdbdbd;
+                    border: none;
+                    border-radius: 19px;
+                }}
+                QPushButton:checked {{
+                    background: {primary};
+                    color: #111111;
+                }}
+                QPushButton:pressed {{
+                    background: {primary_light};
+                    color: #111111;
+                }}
+            """)
+        self.idle_button.setStyleSheet(self._get_idle_button_style())
+
+        self._apply_caption_style()
+        self._refresh_row_states()
+
+    def _get_category_button_style(self) -> str:
+        """Category pill style; the checked pill fills with the theme colour"""
+        primary = theme_manager.get("primary_color")
+        return f"""
             QPushButton {{
-                background: #222;
-                border: 2px solid {green};
-                border-radius: 8px;
+                background: {PILL_BG};
+                color: {TEXT_SOFT};
+                border: 1px solid {PILL_BORDER};
+                border-radius: 18px;
+                padding: 0px 6px;
+            }}
+            QPushButton:hover {{
+                border-color: {primary};
+            }}
+            QPushButton:checked {{
+                background: {primary};
+                color: #111111;
+                border-color: {primary};
+            }}
+        """
+
+    def _get_idle_button_style(self) -> str:
+        """Idle pill: green outline when off, filled green when on"""
+        green = theme_manager.get("green")
+        panel_bg = theme_manager.get("panel_bg")
+        return f"""
+            QPushButton {{
+                background: {panel_bg};
                 color: {green};
-                font-weight: bold;
+                border: 1px solid {green};
+                border-radius: 22px;
             }}
-            """
+            QPushButton:checked {{
+                background: {green};
+                color: #111111;
+            }}
+        """
 
     def _on_mode_selected(self, idx: int):
         for i, btn in enumerate(self.mode_buttons):
             btn.setChecked(i == idx)
-            btn.setStyleSheet(self._get_mode_button_style(selected=(i == idx)))
         self.selected_mode_idx = idx
 
     def _on_idle_toggled(self):
         """Switch the backend idle loop on or off - idle scenes are scheduled on the Pi"""
         enabled = self.idle_button.isChecked()
-        self.idle_button.setStyleSheet(self._get_idle_button_style(selected=enabled))
+        self.idle_button.setText("Idle On" if enabled else "Idle")
         success = self.send_websocket_message("mode", name="idle", state=enabled)
         if success:
             self.logger.info(f"Idle mode {'activated' if enabled else 'deactivated'} - sent to backend")
@@ -715,32 +1039,8 @@ class HomeScreen(BaseScreen):
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
         try:
-            # Update main image
             self._update_main_image()
-            
-            # Update right frame style
-            self._update_right_frame_style()
-            
-            # Update header style
-            self._update_header_style()
-            
-            # Update category buttons
-            for i, btn in enumerate(self.category_buttons):
-                btn.setStyleSheet(self._get_category_button_style(selected=(i == self.selected_category_idx)))
-            
-            # Update scene panel styles
-            self._update_scene_panel_style()
-            self._update_current_scene_label_style()
-            self._update_queue_list_style()
-            self._update_progress_label_style()
-            
-            # Update mode buttons
-            for i, btn in enumerate(self.mode_buttons):
-                btn.setStyleSheet(self._get_mode_button_style(selected=(i == self.selected_mode_idx)))
-            
-            # Update idle button
-            self.idle_button.setStyleSheet(self._get_idle_button_style(selected=self.idle_button.isChecked()))
-            
+            self._apply_styles()
             self.logger.info(f"Home screen updated for theme: {theme_manager.get_display_name()}")
         except Exception as e:
             self.logger.error(f"Error updating theme: {e}")
@@ -748,56 +1048,30 @@ class HomeScreen(BaseScreen):
     @error_boundary
     def reload_emotions(self):
         """Backward-compatible: refresh categories when SceneScreen updates."""
-        # Clear existing buttons
-        for btn in getattr(self, "category_buttons", []):
-            btn.setParent(None)
-        self.category_buttons = []
-
-        # Clear the grid layout
-        if hasattr(self, 'category_grid'):
-            while self.category_grid.count():
-                item = self.category_grid.takeAt(0)
-                if item.widget():
-                    item.widget().setParent(None)
-
-        # Remove the category widget if it exists
+        # Remove the existing category pills
         if hasattr(self, 'category_widget') and self.category_widget:
+            self.category_holder.removeWidget(self.category_widget)
             self.category_widget.setParent(None)
             self.category_widget = None
+        self.category_buttons = []
 
-        # Get the right layout and find the correct insertion position
-        right_layout = self.right_frame.layout()
-        
-        # Find the header widget to insert after it
-        header_position = -1
-        for i in range(right_layout.count()):
-            item = right_layout.itemAt(i)
-            if item and item.widget() and isinstance(item.widget(), QLabel):
-                if item.widget().text() == "SCENE SELECTION":
-                    header_position = i
-                    break
-        
-        # Create the new category widget
-        self._create_category_widget_only()  # Create widget without adding to layout
-        
-        # Insert at the correct position (right after header)
-        if header_position >= 0:
-            right_layout.insertWidget(header_position + 1, self.category_widget)
-        else:
-            # Fallback: insert at position 1 (assuming header is at 0)
-            right_layout.insertWidget(1, self.category_widget)
-        
+        # Build and insert the new pills
+        self._create_category_widget_only()
+        self.category_holder.addWidget(self.category_widget)
+        for btn in self.category_buttons:
+            btn.setStyleSheet(self._get_category_button_style())
+
         self._update_scene_queue_panel()
         self.logger.info("Categories reloaded from updated scene configuration")
 
     def _create_category_widget_only(self):
-        """Create the category widget without adding it to any layout"""
-        # Create a widget to contain the grid layout
+        """Create the category pill grid without adding it to any layout"""
         self.category_widget = QWidget()
+        self.category_widget.setStyleSheet("background: transparent;")
         self.category_grid = QGridLayout(self.category_widget)
         self.category_grid.setSpacing(8)
         self.category_grid.setContentsMargins(0, 0, 0, 0)
-        
+
         self.category_buttons = []
 
         # Load scenes config
@@ -816,38 +1090,27 @@ class HomeScreen(BaseScreen):
             self.category_to_scenes = {"All": self.scenes[:]}
         self.categories = sorted(self.category_to_scenes.keys(), key=lambda s: s.lower())
 
-        font = QFont("Arial", 18, QFont.Weight.Bold)
-        buttons_per_row = 5
-        
+        font = px_font(14, bold=True)
         for idx, cat in enumerate(self.categories):
             btn = QPushButton(cat)
             btn.setCheckable(True)
+            btn.setChecked(idx == 0)
             btn.setFont(font)
-            btn.setMinimumSize(130, 40)
-            btn.setStyleSheet(self._get_category_button_style(selected=(idx == 0)))
+            btn.setFixedHeight(36)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(lambda checked, i=idx: self._on_category_selected(i))
-            
-            # Calculate row and column for grid placement
-            row = idx // buttons_per_row
-            col = idx % buttons_per_row
-            
+
+            row = idx // CATEGORIES_PER_ROW
+            col = idx % CATEGORIES_PER_ROW
             self.category_grid.addWidget(btn, row, col)
             self.category_buttons.append(btn)
 
         # Make sure all columns have equal stretch
-        for col in range(buttons_per_row):
+        for col in range(CATEGORIES_PER_ROW):
             self.category_grid.setColumnStretch(col, 1)
 
         # default selection
         self.selected_category_idx = 0
-        
-        # Set initial button states
-        if self.category_buttons:
-            self.selected_category_idx = 0
-            self.category_buttons[0].setChecked(True)
-            # Force clear all other buttons
-            for i, btn in enumerate(self.category_buttons[1:], 1):
-                btn.setChecked(False)
 
     def connect_scene_screen_signals(self, scene_screen):
         """Connect signals from SceneScreen to update categories when changed."""
@@ -859,8 +1122,3 @@ class HomeScreen(BaseScreen):
             theme_manager.unregister_callback(self._on_theme_changed)
         except:
             pass  # Ignore errors during cleanup
-
-    def _create_category_bar(self, parent_layout: QVBoxLayout):
-        """Create the category button grid and add it under the header"""
-        self._create_category_widget_only()
-        parent_layout.addWidget(self.category_widget)
