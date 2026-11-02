@@ -329,7 +329,7 @@ class HealthScreen(BaseScreen):
     def _create_graph_card(self) -> QFrame:
         """Graph card with a compact legend in the header"""
         card, layout, header_row = self._make_card(
-            f"PACK VOLTAGE & CURRENT · LAST {int(self.graph_window_seconds)} s",
+            f"PACK VOLTAGE & CURRENT · {int(self.graph_window_seconds)} s",
             self.GRAPH_CARD_HEIGHT)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)

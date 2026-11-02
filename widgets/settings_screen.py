@@ -17,13 +17,119 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QSlider, QPushButton,
     QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QProgressDialog, QApplication
 )
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+
+# Card layout - matches the Health screen card style
+CARD_OBJECT_NAME = "settings_card"
+CARD_GAP = 12
+CONTENT_WIDTH = 1067
+NETWORK_CARD_HEIGHT = 190
+MIDDLE_CARD_HEIGHT = 232
+TEST_BUTTON_WIDTH = 120
+
+# Fixed colours shared by every theme
+LABEL_GREY = "#9e9e9e"
+TEXT_SOFT = "#bdbdbd"
+TILE_BG = "#202020"
+
+
+def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0) -> QFont:
+    """Font sized in pixels so the layout matches the mockup"""
+    font = QFont("Arial")
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return font
+
+
+def card_style() -> str:
+    """Card frame: panel background with the theme colour as a soft border"""
+    primary = QColor(theme_manager.get("primary_color"))
+    panel_bg = theme_manager.get("panel_bg")
+    border = f"rgba({primary.red()}, {primary.green()}, {primary.blue()}, 0.45)"
+    return f"""
+        QFrame#{CARD_OBJECT_NAME} {{
+            background-color: {panel_bg};
+            border: 1px solid {border};
+            border-radius: 10px;
+        }}
+        QLabel {{
+            border: none;
+            background: transparent;
+        }}
+    """
+
+
+def button_style(checked_fill: str = None) -> str:
+    """Button matching the Health screen buttons; checkable ones fill when on"""
+    primary = theme_manager.get("primary_color")
+    style = f"""
+        QPushButton {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #4a4a4a, stop:1 #2a2a2a);
+            color: white;
+            border: 1px solid #666;
+            border-radius: 8px;
+            padding: 4px;
+        }}
+        QPushButton:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #5a5a5a, stop:1 #3a3a3a);
+            border-color: {primary};
+        }}
+        QPushButton:pressed {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #3a3a3a, stop:1 #1a1a1a);
+            border-color: {primary};
+        }}
+        QPushButton:disabled {{
+            background: #333;
+            color: #666;
+            border-color: #444;
+        }}
+    """
+    if checked_fill:
+        style += f"""
+        QPushButton:checked {{
+            background: {checked_fill};
+            border: 1px solid {checked_fill};
+            color: #111111;
+        }}
+        """
+    return style
+
+
+def filled_button_style(fill: str) -> str:
+    """Solid button for the main action"""
+    return f"""
+        QPushButton {{
+            background: {fill};
+            color: #111111;
+            border: 1px solid {fill};
+            border-radius: 8px;
+            padding: 4px;
+        }}
+        QPushButton:hover {{
+            border: 2px solid white;
+        }}
+        QPushButton:pressed {{
+            background: #2e2e2e;
+            color: {fill};
+        }}
+        QPushButton:disabled {{
+            background: #333;
+            color: #666;
+            border-color: #444;
+        }}
+    """
+
 
 class NetworkTestThread(QThread):
     """Background thread for network connectivity testing"""
@@ -475,77 +581,45 @@ class SettingsScreen(BaseScreen):
     # ---------- UI Build ----------
 
     def _setup_screen(self):
-        """Initialize settings interface"""
+        """Initialize settings interface: network card on top, three cards, action buttons"""
         self.config_path = "resources/configs/steamdeck_config.json"
 
-        # Root layout (reduced margins to fit all content)
+        # Styled widgets, re-styled on theme change
+        self._cards = []
+        self._card_titles = []
+        self._captions = []
+        self._soft_labels = []
+        self._value_tiles = []
+        self._plain_buttons = []
+
         root = QVBoxLayout()
-        root.setContentsMargins(98, 15, 90, 5)
-        root.setSpacing(5)
+        root.setContentsMargins(101, 40, 12, 6)
+        root.setSpacing(CARD_GAP)
 
-        # Main themed frame (like Home right panel)
-        self.main_frame = QFrame()
-        self._update_main_frame_style()
+        content = QWidget()
+        content.setFixedWidth(CONTENT_WIDTH)
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(CARD_GAP)
 
-        main = QVBoxLayout(self.main_frame)
-        main.setContentsMargins(0, 3, 0, 0)
-        main.setSpacing(3)
+        # Network sits at the top so the fields stay visible above the on-screen keyboard
+        content_layout.addWidget(self._build_network())
 
-        # Add header
-        self.header = QLabel("Settings Configuration")
-        self.header.setFont(QFont("Arial", 20, QFont.Weight.Bold))
-        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_header_style()
-        main.addWidget(self.header)
+        middle = QHBoxLayout()
+        middle.setSpacing(CARD_GAP)
+        middle.addWidget(self._create_theme_selector(), 1)
+        middle.addWidget(self._build_wave(), 1)
+        middle.addWidget(self._build_logging(), 1)
+        content_layout.addLayout(middle)
 
-        # Theme selector (top row)
-        self._create_theme_selector(main)
+        content_layout.addLayout(self._create_control_buttons())
 
-        # Scrollable content area (to fit lots of options neatly)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._update_scroll_area_style()
-
-        content_widget = QWidget()
-        content_layout = QGridLayout(content_widget)
-        content_layout.setContentsMargins(6, 0, 6, 0)
-        content_layout.setHorizontalSpacing(8)
-        content_layout.setVerticalSpacing(6)
-
-        # Sections
-        self.network_group = self._create_section("Network Configuration")
-        self._build_network(self.network_group)
-
-        self.logging_group = self._create_section("Logging Configuration")
-        self._build_logging(self.logging_group)
-
-        self.wave_group = self._create_section("Wave Detection")
-        self._build_wave(self.wave_group)
-
-        # Two-column layout: Network on left, Logging + Wave stacked on right
-        content_layout.addWidget(self.network_group, 0, 0, 2, 1)  # row, col, rowspan, colspan
-        content_layout.addWidget(self.logging_group, 0, 1)
-        content_layout.addWidget(self.wave_group, 1, 1)
-        
-        # Set column widths
-        content_layout.setColumnStretch(0, 1)  # Network
-        content_layout.setColumnStretch(1, 1)  # Logging + Wave
-        
-        # Add minimal spacing below sections
-        content_layout.setRowMinimumHeight(2, 5)
-        
-        # Buttons row (full width)
-        buttons_layout = self._create_control_buttons()
-        content_layout.addLayout(buttons_layout, 3, 0, 1, 2)  # Span both columns
-
-        self.scroll_area.setWidget(content_widget)
-        main.addWidget(self.scroll_area)
-
-        # Assemble
-        root.addWidget(self.main_frame)
+        root.addWidget(content, 0, Qt.AlignmentFlag.AlignLeft)
+        root.addStretch(1)
         self.setLayout(root)
+
+        self._apply_styles()
 
         self._server_update_pending = False
         self.subscribe("server_update_progress", self._on_server_update_progress)
@@ -554,72 +628,79 @@ class SettingsScreen(BaseScreen):
         # Load config on open
         self.load_config()
 
-    # ---------- Themed header & frame ----------
+    # ---------- Widget helpers ----------
 
-    def _update_main_frame_style(self):
-        """Apply themed frame style (similar to Home right frame)"""
-        primary_color = theme_manager.get("primary_color")
-        panel_bg = theme_manager.get("panel_bg")
-        self.main_frame.setStyleSheet(f"""
-        QFrame {{
-            background-color: {panel_bg};
-            border: 2px solid {primary_color};
-            border-radius: 12px;
-            padding: 6px 6px 12px 6px;
-        }}
-        """)
+    def _make_card(self, title: str, height: int):
+        """Titled card; returns (card, layout)"""
+        card = QFrame()
+        card.setObjectName(CARD_OBJECT_NAME)
+        card.setFixedHeight(height)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
 
-    def _update_header_style(self):
-        """Apply themed header style"""
-        primary = theme_manager.get("primary_color")
-        self.header.setStyleSheet(f"""
-            QLabel {{
-                color: {primary};
-                padding-bottom: 8px;
-                font-weight: bold;
-                border: none;
-                background: transparent;
-            }}
-        """)
+        title_label = QLabel(title)
+        title_label.setFont(px_font(14, bold=True, spacing=1.5))
+        layout.addWidget(title_label)
 
-    def _update_scroll_area_style(self):
-        """Themed scroll bars"""
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        self.scroll_area.setStyleSheet(f"""
-        QScrollArea {{
-            border: none;
-            background-color: transparent;
-        }}
-        QScrollBar:vertical {{
-            background: #2d2d2d;
-            width: 12px;
-            border-radius: 6px;
-        }}
-        QScrollBar::handle:vertical {{
-            background: {primary};
-            border-radius: 6px;
-            min-height: 20px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background: {primary_light};
-        }}
-        """)
+        self._cards.append(card)
+        self._card_titles.append(title_label)
+        return card, layout
+
+    def _make_caption(self, text: str) -> QLabel:
+        """Small grey caption above a control"""
+        label = QLabel(text)
+        label.setFont(px_font(12, spacing=1.0))
+        self._captions.append(label)
+        return label
+
+    def _make_soft_label(self, text: str, pixel_size: int) -> QLabel:
+        """Setting name label"""
+        label = QLabel(text)
+        label.setFont(px_font(pixel_size))
+        self._soft_labels.append(label)
+        return label
+
+    def _make_button(self, text: str, height: int = 44, pixel_size: int = 16) -> QPushButton:
+        """Standard button in the shared card style"""
+        button = QPushButton(text)
+        button.setFont(px_font(pixel_size, bold=True))
+        button.setFixedHeight(height)
+        self._plain_buttons.append(button)
+        return button
+
+    def _make_value_tile(self, text: str, height: int, pixel_size: int) -> QLabel:
+        """Read-only value between - and + buttons"""
+        label = QLabel(text)
+        label.setFont(px_font(pixel_size))
+        label.setFixedHeight(height)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._value_tiles.append(label)
+        return label
+
+    def _make_spinbox(self, minimum: int, maximum: int, value: int, suffix: str) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setFont(px_font(18))
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        spin.setSuffix(suffix)
+        spin.setFixedHeight(40)
+        return spin
 
     # ---------- Theme selector ----------
 
-    def _create_theme_selector(self, parent_layout: QVBoxLayout):
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.setContentsMargins(20, 0, 10, 0)
+    def _create_theme_selector(self) -> QFrame:
+        """Appearance card: theme buttons and system volume"""
+        card, layout = self._make_card("APPEARANCE", MIDDLE_CARD_HEIGHT)
 
-        label = QLabel("Theme:")
-        label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        self._update_label_style(label)
-        row.addWidget(label)
+        layout.addWidget(self._make_caption("THEME"))
+        themes_row = QHBoxLayout()
+        themes_row.setSpacing(8)
 
         self.theme_buttons = {}  # Use dict for easier lookup
-        
+
         # Use available themes reported by ThemeManager
         theme_names = theme_manager.available_themes()
         current_theme = theme_manager.get_theme_name()
@@ -628,77 +709,61 @@ class SettingsScreen(BaseScreen):
             display_name = "WALL-E" if name == "Wall-e" else name
             btn = QPushButton(display_name)
             btn.setCheckable(True)
-            btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-            btn.setMinimumSize(120, 36)
-            
+            btn.setFont(px_font(16, bold=True))
+            btn.setFixedHeight(44)
+
             # Set initial state based on current theme
-            is_current = (name == current_theme)
-            btn.setChecked(is_current)
-            
+            btn.setChecked(name == current_theme)
+
             # Connect with theme name, not display name
             btn.clicked.connect(lambda checked, theme_name=name: self._on_theme_selected(theme_name))
-            
+
             self.theme_buttons[name] = btn
-            row.addWidget(btn)
+            themes_row.addWidget(btn, 1)
+        layout.addLayout(themes_row)
 
-        # Apply initial styling
-        self._update_theme_button_styles()
+        layout.addSpacing(6)
+        layout.addWidget(self._make_caption("SYSTEM VOLUME"))
 
-        row.addStretch()
-        
-        # Add volume control to the right of theme buttons
-        vol_label = QLabel("System Volume:")
-        vol_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        self._update_label_style(vol_label)
-        row.addWidget(vol_label)
-        
-        # Volume adjustment buttons (like confidence)
         vol_control = QHBoxLayout()
-        vol_control.setSpacing(4)
-        
-        # Minus button
-        self.volume_minus_btn = QPushButton("-")
-        self.volume_minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.volume_minus_btn.setFixedSize(30, 26)
+        vol_control.setSpacing(8)
+
+        self.volume_minus_btn = self._make_button("−", 44, 22)
+        self.volume_minus_btn.setFixedWidth(44)
+        self.volume_minus_btn.setAccessibleName("Volume down")
         self.volume_minus_btn.clicked.connect(lambda: self._adjust_volume(-5))
-        self._update_adjust_button_style(self.volume_minus_btn)
-        
-        # Value display
-        self.volume_value = QLabel("70%")
-        self.volume_value.setFont(QFont("Arial", 15))
-        self.volume_value.setMinimumWidth(50)
-        self.volume_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_value_label_style(self.volume_value)
-        
-        # Plus button
-        self.volume_plus_btn = QPushButton("+")
-        self.volume_plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.volume_plus_btn.setFixedSize(30, 26)
+
+        self.volume_value = self._make_value_tile("70%", 44, 20)
+
+        self.volume_plus_btn = self._make_button("+", 44, 22)
+        self.volume_plus_btn.setFixedWidth(44)
+        self.volume_plus_btn.setAccessibleName("Volume up")
         self.volume_plus_btn.clicked.connect(lambda: self._adjust_volume(5))
-        self._update_adjust_button_style(self.volume_plus_btn)
-        
+
         vol_control.addWidget(self.volume_minus_btn)
-        vol_control.addWidget(self.volume_value)
+        vol_control.addWidget(self.volume_value, 1)
         vol_control.addWidget(self.volume_plus_btn)
-        
-        row.addLayout(vol_control)
-        
-        parent_layout.addLayout(row)
+        layout.addLayout(vol_control)
+
+        layout.addStretch(1)
+        return card
 
     def _update_theme_button_styles(self):
         """Update all theme button styles based on current selection"""
         current_theme = theme_manager.get_theme_name()
+        primary = theme_manager.get("primary_color")
         for theme_name, btn in self.theme_buttons.items():
-            is_selected = (theme_name == current_theme)
-            btn.setChecked(is_selected)
-            btn.setStyleSheet(theme_manager.get_button_style("primary", checked=is_selected))
+            btn.setChecked(theme_name == current_theme)
+            btn.setStyleSheet(button_style(checked_fill=primary))
 
     def _on_theme_selected(self, theme_name: str):
         """Handle theme selection"""
         # Only proceed if this is actually a different theme
         if theme_name == theme_manager.get_theme_name():
+            # Clicking the current theme must not leave it unchecked
+            self._update_theme_button_styles()
             return
-            
+
         # Update the theme
         success = theme_manager.set_theme(theme_name)
         if success:
@@ -711,353 +776,206 @@ class SettingsScreen(BaseScreen):
 
     # ---------- Sections ----------
 
-    def _create_section(self, title: str) -> QGroupBox:
-        group = QGroupBox(title)
-        group.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self._update_section_style(group)
-        return group
+    def _build_network(self) -> QFrame:
+        """Network card: full-width URL fields, with the connection test beside the WebSocket"""
+        card, layout = self._make_card("NETWORK", NETWORK_CARD_HEIGHT)
+        layout.setSpacing(6)
 
-    def _update_section_style(self, group: QGroupBox):
-        primary = theme_manager.get("primary_color")
-        panel_bg = theme_manager.get("panel_bg")
-        group.setStyleSheet(f"""
-        QGroupBox {{
-            font-weight: bold;
-            border: 2px solid {primary};
-            border-radius: 6px;
-            margin-top: 12px;
-            padding-top: 8px;
-            color: {primary};
-            background-color: rgba(0, 0, 0, 0.3);
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 15px;
-            padding: 0 6px 0 6px;
-            top: 3px;
-            border-radius: 6px;
-            background-color: {panel_bg};
-            color: {primary};
-        }}
-        """)
-
-    def _build_network(self, group: QGroupBox):
-        layout = QGridLayout()
-        layout.setContentsMargins(8, 0, 8, 4)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(4)
-
-        font = QFont("Arial", 15)
         labels = [
-            ("ESP32 Camera:", "esp32_url", "http://192.168.1.100:81/stream"),
-            ("Camera Proxy:", "proxy_url", "http://10.1.1.230:8081/stream"),
-            ("Control WebSocket:", "control_ws", "ws://10.1.1.230:8766"),
+            ("ESP32 Camera", "esp32_url", "http://192.168.1.100:81/stream"),
+            ("Camera Proxy", "proxy_url", "http://10.1.1.230:8081/stream"),
+            ("Control WebSocket", "control_ws", "ws://10.1.1.230:8766"),
         ]
         self.network_inputs = {}
 
-        for i, (text, key, placeholder) in enumerate(labels):
-            lab = QLabel(text)
-            lab.setFont(font)
-            lab.setMinimumWidth(140)
-            self._update_label_style(lab)
+        for text, key, placeholder in labels:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+
+            lab = self._make_soft_label(text, 16)
+            lab.setFixedWidth(170)
 
             edit = QLineEdit()
-            edit.setFont(font)
-            edit.setFixedHeight(26)
-            edit.setMinimumWidth(200)
+            edit.setFont(px_font(18))
+            edit.setFixedHeight(44)
             edit.setPlaceholderText(placeholder)
-            self._update_input_style(edit)
+
+            row.addWidget(lab)
+            row.addWidget(edit, 1)
+
+            if key == "control_ws":
+                self.test_connection_btn = self._make_button("TEST", 44, 15)
+                self.test_connection_btn.setFixedWidth(TEST_BUTTON_WIDTH)
+                self.test_connection_btn.clicked.connect(self.test_websocket_connection)
+                row.addWidget(self.test_connection_btn)
+            else:
+                row.addSpacing(TEST_BUTTON_WIDTH)
 
             self.network_inputs[key] = edit
-            layout.addWidget(lab, i, 0)
-            layout.addWidget(edit, i, 1, 1, 3)
+            layout.addLayout(row)
 
-        group.setLayout(layout)
+        return card
 
-    def _build_logging(self, group: QGroupBox):
-        layout = QGridLayout()
-        layout.setContentsMargins(8, 0, 8, 4)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(4)
-
-        font = QFont("Arial", 15)
+    def _build_logging(self) -> QFrame:
+        """Logging card: one debug level per row"""
+        card, layout = self._make_card("LOGGING", MIDDLE_CARD_HEIGHT)
 
         items = [
-            ("Global Debug:", "debug_combo"),
-            ("Camera Debug:", "camera_debug_combo"),
-            ("Servo Debug:", "servo_debug_combo"),
-            ("Network Debug:", "network_debug_combo"),
+            ("Global debug", "debug_combo"),
+            ("Camera debug", "camera_debug_combo"),
+            ("Servo debug", "servo_debug_combo"),
+            ("Network debug", "network_debug_combo"),
         ]
         self.debug_combos = {}
 
-        for i, (label_text, key) in enumerate(items):
-            row = i // 2
-            col = (i % 2) * 2
-            lab = QLabel(label_text)
-            lab.setFont(font)
-            self._update_label_style(lab)
+        for label_text, key in items:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            lab = self._make_soft_label(label_text, 15)
 
             combo = QComboBox()
-            combo.setFont(font)
+            combo.setFont(px_font(15))
             combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
-            combo.setFixedHeight(26)
-            combo.setFixedWidth(120)
-            self._update_combo_style(combo)
+            combo.setFixedHeight(38)
+            combo.setFixedWidth(140)
 
             self.debug_combos[key] = combo
-            layout.addWidget(lab, row, col)
-            layout.addWidget(combo, row, col + 1)
+            row.addWidget(lab, 1)
+            row.addWidget(combo)
+            layout.addLayout(row)
 
-        group.setLayout(layout)
+        layout.addStretch(1)
+        return card
 
-    def _build_wave(self, group: QGroupBox):
-        layout = QGridLayout()
-        layout.setContentsMargins(8, 0, 8, 4)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(4)
+    def _build_wave(self) -> QFrame:
+        """Wave detection card: 2x2 grid of controls"""
+        card, layout = self._make_card("WAVE DETECTION", MIDDLE_CARD_HEIGHT)
 
-        font = QFont("Arial", 15)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
 
-        # Row 0: Sample Duration / Sample Rate
-        dur_lab = QLabel("Sample Duration:")
-        self._update_label_style(dur_lab)
-        layout.addWidget(dur_lab, 0, 0)
+        self.sample_duration_spin = self._make_spinbox(1, 10, 3, " s")
+        self.sample_rate_spin = self._make_spinbox(1, 60, 5, " /s")
+        self.stand_down_spin = self._make_spinbox(0, 300, 30, " s")
 
-        self.sample_duration_spin = QSpinBox()
-        self.sample_duration_spin.setFont(font)
-        self.sample_duration_spin.setRange(1, 10)
-        self.sample_duration_spin.setValue(3)
-        self.sample_duration_spin.setFixedHeight(26)
-        self.sample_duration_spin.setMaximumWidth(70)
-        self._update_spinbox_style(self.sample_duration_spin)
-        layout.addWidget(self.sample_duration_spin, 0, 1)
-
-        rate_lab = QLabel("Sample Rate:")
-        self._update_label_style(rate_lab)
-        layout.addWidget(rate_lab, 0, 2)
-
-        self.sample_rate_spin = QSpinBox()
-        self.sample_rate_spin.setFont(font)
-        self.sample_rate_spin.setRange(1, 60)
-        self.sample_rate_spin.setValue(5)
-        self.sample_rate_spin.setFixedHeight(26)
-        self.sample_rate_spin.setMaximumWidth(70)
-        self._update_spinbox_style(self.sample_rate_spin)
-        layout.addWidget(self.sample_rate_spin, 0, 3)
-
-        # Row 1: Confidence / Stand down
-        conf_lab = QLabel("Confidence:")
-        self._update_label_style(conf_lab)
-        layout.addWidget(conf_lab, 1, 0)
-
+        # Confidence: - value +
         conf_row = QHBoxLayout()
         conf_row.setSpacing(4)
-        
-        # Minus button
-        self.confidence_minus_btn = QPushButton("-")
-        self.confidence_minus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.confidence_minus_btn.setFixedSize(30, 26)
+
+        self.confidence_minus_btn = self._make_button("−", 40, 20)
+        self.confidence_minus_btn.setFixedWidth(40)
+        self.confidence_minus_btn.setAccessibleName("Confidence down")
         self.confidence_minus_btn.clicked.connect(lambda: self._adjust_confidence(-5))
-        self._update_adjust_button_style(self.confidence_minus_btn)
-        
-        # Value display
-        self.confidence_value = QLabel("70%")
-        self.confidence_value.setFont(font)
-        self.confidence_value.setMinimumWidth(50)
-        self.confidence_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_value_label_style(self.confidence_value)
-        
-        # Plus button
-        self.confidence_plus_btn = QPushButton("+")
-        self.confidence_plus_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        self.confidence_plus_btn.setFixedSize(30, 26)
+
+        self.confidence_value = self._make_value_tile("70%", 40, 18)
+
+        self.confidence_plus_btn = self._make_button("+", 40, 20)
+        self.confidence_plus_btn.setFixedWidth(40)
+        self.confidence_plus_btn.setAccessibleName("Confidence up")
         self.confidence_plus_btn.clicked.connect(lambda: self._adjust_confidence(5))
-        self._update_adjust_button_style(self.confidence_plus_btn)
-        
+
         conf_row.addWidget(self.confidence_minus_btn)
-        conf_row.addWidget(self.confidence_value)
+        conf_row.addWidget(self.confidence_value, 1)
         conf_row.addWidget(self.confidence_plus_btn)
-        conf_row.addStretch()
-        layout.addLayout(conf_row, 1, 1)
 
-        sd_lab = QLabel("Stand Down:")
-        self._update_label_style(sd_lab)
-        layout.addWidget(sd_lab, 1, 2)
+        cells = [
+            ("SAMPLE DURATION", self.sample_duration_spin, 0, 0),
+            ("SAMPLE RATE", self.sample_rate_spin, 0, 1),
+            ("CONFIDENCE", conf_row, 1, 0),
+            ("STAND DOWN", self.stand_down_spin, 1, 1),
+        ]
+        for caption, control, row, col in cells:
+            cell = QVBoxLayout()
+            cell.setSpacing(4)
+            cell.addWidget(self._make_caption(caption))
+            if isinstance(control, QHBoxLayout):
+                cell.addLayout(control)
+            else:
+                cell.addWidget(control)
+            grid.addLayout(cell, row, col)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
-        self.stand_down_spin = QSpinBox()
-        self.stand_down_spin.setFont(font)
-        self.stand_down_spin.setRange(0, 300)
-        self.stand_down_spin.setValue(30)
-        self.stand_down_spin.setFixedHeight(26)
-        self.stand_down_spin.setMaximumWidth(90)
-        self._update_spinbox_style(self.stand_down_spin)
-        layout.addWidget(self.stand_down_spin, 1, 3)
-
-        group.setLayout(layout)
-
+        layout.addLayout(grid)
+        layout.addStretch(1)
+        return card
 
     # ---------- Buttons row ----------
 
     def _create_control_buttons(self) -> QHBoxLayout:
-        font = QFont("Arial", 20, QFont.Weight.Bold)
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(CARD_GAP)
 
-        self.save_btn = QPushButton("Save Settings")
-        self.save_btn.setFont(font)
+        self.save_btn = QPushButton("SAVE SETTINGS")
+        self.save_btn.setFont(px_font(16, bold=True))
+        self.save_btn.setFixedSize(220, 44)
         self.save_btn.clicked.connect(self.save_config)
-        self.save_btn.setFixedHeight(40)
-        self.save_btn.setMinimumWidth(140)
-        self._update_save_button_style()
 
-        self.reset_btn = QPushButton("Reset")
-        self.reset_btn.setFont(font)
+        self.reset_btn = self._make_button("RESET")
+        self.reset_btn.setFixedWidth(160)
         self.reset_btn.clicked.connect(self.reset_to_defaults)
-        self.reset_btn.setFixedHeight(40)
-        self.reset_btn.setMinimumWidth(110)
-        self._update_reset_button_style()
 
-        self.test_connection_btn = QPushButton("Test")
-        self.test_connection_btn.setFont(font)
-        self.test_connection_btn.clicked.connect(self.test_websocket_connection)
-        self.test_connection_btn.setFixedHeight(40)
-        self.test_connection_btn.setMinimumWidth(100)
-        self._update_test_button_style()
+        self.update_btn = self._make_button("UPDATE GUI")
+        self.update_btn.setFixedWidth(180)
+        self.update_btn.clicked.connect(self.check_for_updates)
+
+        self.update_server_btn = self._make_button("UPDATE SERVER")
+        self.update_server_btn.setFixedWidth(180)
+        self.update_server_btn.clicked.connect(self.check_for_server_updates)
 
         row.addWidget(self.save_btn)
         row.addWidget(self.reset_btn)
-        row.addWidget(self.test_connection_btn)
-        
-        self.update_btn = QPushButton("Update GUI")
-        self.update_btn.setFont(font)
-        self.update_btn.clicked.connect(self.check_for_updates)
-        self.update_btn.setFixedHeight(40)
-        self.update_btn.setMinimumWidth(120)
-        self._update_update_button_style()
+        row.addStretch(1)
         row.addWidget(self.update_btn)
-
-        self.update_server_btn = QPushButton("Update Server")
-        self.update_server_btn.setFont(font)
-        self.update_server_btn.clicked.connect(self.check_for_server_updates)
-        self.update_server_btn.setFixedHeight(40)
-        self.update_server_btn.setMinimumWidth(140)
-        self._update_server_update_button_style()
         row.addWidget(self.update_server_btn)
-
-        row.addStretch()
         return row
 
-    def _update_save_button_style(self):
-        green = theme_manager.get("green")
-        green_gradient = theme_manager.get("green_gradient")
-        self.save_btn.setStyleSheet(f"""
-        QPushButton {{
-            background: {green_gradient};
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-        }}
-        QPushButton:hover {{ 
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #55cc55, stop:1 #339933);
-        }}
-        QPushButton:pressed {{ 
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #339933, stop:1 #226622);
-        }}
-        """)
+    # ---------- Styling ----------
 
-    def _update_reset_button_style(self):
-        red = theme_manager.get("red")
-        self.reset_btn.setStyleSheet(f"""
-        QPushButton {{
-            background-color: {red};
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-        }}
-        QPushButton:hover {{ background-color: #da190b; }}
-        QPushButton:pressed {{ background-color: #c41e3a; }}
-        """)
-
-    def _update_test_button_style(self):
+    def _apply_styles(self):
+        """Apply theme colours to every styled widget"""
         primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        self.test_connection_btn.setStyleSheet(f"""
-        QPushButton {{
-            background-color: {primary};
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-        }}
-        QPushButton:hover {{ background-color: {primary_light}; }}
-        QPushButton:pressed {{ 
-            background-color: {primary};
-        }}
-        """)
+        green = theme_manager.get("green")
 
-    def _update_update_button_style(self):
-        """Style for the Update GUI button"""
-        self.update_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #2196F3;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-        }
-        QPushButton:hover { background-color: #42A5F5; }
-        QPushButton:pressed { background-color: #1976D2; }
-        """)
+        for card in self._cards:
+            card.setStyleSheet(card_style())
+        for title in self._card_titles:
+            title.setStyleSheet(f"color: {primary}; background: transparent; border: none;")
+        for caption in self._captions:
+            caption.setStyleSheet(f"color: {LABEL_GREY}; background: transparent; border: none;")
+        for label in self._soft_labels:
+            label.setStyleSheet(f"color: {TEXT_SOFT}; background: transparent; border: none;")
+        for tile in self._value_tiles:
+            tile.setStyleSheet(
+                f"color: white; background-color: {TILE_BG}; border: none; border-radius: 8px;"
+            )
+        for button in self._plain_buttons:
+            button.setStyleSheet(button_style())
+        self.save_btn.setStyleSheet(filled_button_style(green))
 
-    def _update_server_update_button_style(self):
-        """Style for the Update Server button"""
-        self.update_server_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #7B1FA2;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-        }
-        QPushButton:hover { background-color: #9C27B0; }
-        QPushButton:pressed { background-color: #6A1B9A; }
-        """)
+        for edit in self.network_inputs.values():
+            self._update_input_style(edit)
+        for combo in self.debug_combos.values():
+            self._update_combo_style(combo)
+        for spin in (self.sample_duration_spin, self.sample_rate_spin, self.stand_down_spin):
+            self._update_spinbox_style(spin)
 
-    # ---------- Widget styling helpers ----------
-
-    def _update_label_style(self, label: QLabel):
-        label.setStyleSheet("""
-            color: white; 
-            background: transparent;
-            border: none;
-            padding: 4px 8px;
-            border-radius: 0px;
-            font-size: 15px;
-        """)
+        self._update_theme_button_styles()
 
     def _update_input_style(self, input_field: QLineEdit):
         primary = theme_manager.get("primary_color")
         input_field.setStyleSheet(f"""
         QLineEdit {{
-            background-color: #2d2d2d;
+            background-color: {TILE_BG};
             border: 1px solid #555;
-            border-radius: 4px;
-            padding: 6px;
+            border-radius: 6px;
+            padding: 0px 12px;
             color: white;
-            font-size: 15px;
         }}
-        QLineEdit:focus {{ 
-            border-color: {primary}; 
-            background-color: #333333;
+        QLineEdit:focus {{
+            border: 2px solid {primary};
+            padding: 0px 11px;
         }}
         """)
 
@@ -1065,24 +983,21 @@ class SettingsScreen(BaseScreen):
         primary = theme_manager.get("primary_color")
         combo.setStyleSheet(f"""
         QComboBox {{
-            background-color: #2d2d2d;
+            background-color: {TILE_BG};
             border: 1px solid #555;
-            border-radius: 4px;
-            padding: 6px;
+            border-radius: 6px;
+            padding: 0px 10px;
             color: white;
-            font-size: 15px;
         }}
-        QComboBox:focus {{ 
-            border-color: {primary}; 
-            background-color: #333333;
+        QComboBox:focus {{
+            border-color: {primary};
         }}
-        QComboBox::drop-down {{ border: none; }}
-        QComboBox::down-arrow {{ image: none; border: none; }}
         QComboBox QAbstractItemView {{
-            background-color: #2d2d2d;
+            background-color: {TILE_BG};
             color: white;
             selection-background-color: {primary};
-            font-size: 15px;
+            selection-color: black;
+            border: 1px solid #555;
         }}
         """)
 
@@ -1090,105 +1005,14 @@ class SettingsScreen(BaseScreen):
         primary = theme_manager.get("primary_color")
         spinbox.setStyleSheet(f"""
         QSpinBox {{
-        background-color: #2d2d2d;
-        border: 1px solid #555;
-        border-radius: 4px;
-        padding-top: 2px;
-        padding-bottom: 2px;
-        padding-left: 8px;
-        padding-right: 0px;
-        color: white;
-        min-height: 20px;
-        max-height: 26px;
-        font-size: 15px;
-        font-family: Arial;
-        }}
-        QSpinBox:focus {{ 
-            border-color: {primary}; 
-            background-color: #333333;
-        }}
-        QSpinBox::up-button, QSpinBox::down-button {{
-            font-size: 15px;
-            font-family: Arial;
-            font-weight: bold;
-        }}
-        QSpinBox::up-arrow, QSpinBox::down-arrow {{
-            font-size: 15px;
-        }}
-        """)
-
-    def _update_slider_style(self, slider: QSlider):
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        slider.setStyleSheet(f"""
-        QSlider::groove:horizontal {{
+            background-color: {TILE_BG};
             border: 1px solid #555;
-            height: 6px;
-            background: #2d2d2d;
-            border-radius: 3px;
-        }}
-        QSlider::handle:horizontal {{
-            background: {primary};
-            border: 1px solid {primary};
-            width: 16px;
-            margin: -5px 0;
-            border-radius: 8px;
-        }}
-        QSlider::handle:horizontal:hover {{
-            background: {primary_light};
-            border-color: {primary_light};
-        }}
-        """)
-
-    def _update_value_label_style(self, label: QLabel):
-        primary = theme_manager.get("primary_color")
-        label.setStyleSheet(f"""
-        QLabel {{
-            color: {primary}; 
-            padding: 4px 8px;
-            background: transparent;
-            border: 0px solid transparent !important;
-            outline: 0px solid transparent !important;
-            selection-background-color: transparent;
-            font-size: 15px;
-        }}
-        QLabel:focus {{
-            border: 0px solid transparent !important;
-            outline: 0px solid transparent !important;
-        }}
-        QLabel:hover {{
-            border: 0px solid transparent !important;
-            outline: 0px solid transparent !important;
-        }}
-        """)
-        
-        # Disable all focus and interaction
-        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        
-        # Also try this as a backup - set attribute to prevent focus
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        label.setEnabled(True)  # Keep enabled but non-interactive
-
-    def _update_adjust_button_style(self, button: QPushButton):
-        """Style for +/- adjustment buttons"""
-        primary = theme_manager.get("primary_color")
-        primary_light = theme_manager.get("primary_light")
-        button.setStyleSheet(f"""
-        QPushButton {{
-            background-color: #2d2d2d;
+            border-radius: 6px;
+            padding-left: 10px;
             color: white;
-            border: 1px solid #555;
-            border-radius: 4px;
-            font-weight: bold;
-            padding: 2px;
         }}
-        QPushButton:hover {{
-            background-color: {primary};
+        QSpinBox:focus {{
             border-color: {primary};
-        }}
-        QPushButton:pressed {{
-            background-color: {primary_light};
         }}
         """)
 
@@ -1197,45 +1021,7 @@ class SettingsScreen(BaseScreen):
     def _on_theme_changed(self):
         """Handle theme change by updating all styled components"""
         try:
-            # Frame + header
-            self._update_main_frame_style()
-            if hasattr(self, 'header'):
-                self._update_header_style()
-            self._update_scroll_area_style()
-
-            # Theme buttons - update all button styles
-            self._update_theme_button_styles()
-
-            # Sections
-            for group in self.findChildren(QGroupBox):
-                self._update_section_style(group)
-
-            # Labels
-            for label in self.findChildren(QLabel):
-                if label is getattr(self, "header", None):
-                    self._update_header_style()
-                elif label is getattr(self, "confidence_value", None):
-                    self._update_value_label_style(label)
-                else:
-                    self._update_label_style(label)
-
-            # Inputs
-            for edit in self.findChildren(QLineEdit):
-                self._update_input_style(edit)
-            for combo in self.findChildren(QComboBox):
-                self._update_combo_style(combo)
-            for spin in self.findChildren(QSpinBox):
-                self._update_spinbox_style(spin)
-            for slider in self.findChildren(QSlider):
-                self._update_slider_style(slider)
-
-            # Buttons
-            self._update_save_button_style()
-            self._update_reset_button_style()
-            self._update_test_button_style()
-            self._update_update_button_style()
-            self._update_server_update_button_style()
-
+            self._apply_styles()
             self.logger.info(f"Settings screen updated for theme: {theme_manager.get_theme_name()}")
         except Exception as e:
             self.logger.warning(f"Failed to apply theme changes: {e}")
