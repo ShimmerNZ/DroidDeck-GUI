@@ -689,8 +689,9 @@ class SceneScreen(BaseScreen):
         self.status_label.setFixedHeight(BAR_HEIGHT)
         bar.addWidget(self.status_label, 1)
 
-        self.refresh_btn = QPushButton("REFRESH FROM BACKEND")
-        self.refresh_btn.setFixedSize(210, BAR_HEIGHT)
+        self.refresh_btn = QPushButton("REFRESH")
+        self.refresh_btn.setFixedSize(140, BAR_HEIGHT)
+        self.refresh_btn.setToolTip("Refresh scenes, audio files and Bottango scenes from the backend")
         self.refresh_btn.setFont(px_font(15, bold=True))
         self.refresh_btn.clicked.connect(lambda: self.refresh_from_backend())
         bar.addWidget(self.refresh_btn)
