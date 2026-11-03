@@ -167,15 +167,21 @@ class _StageSplash(QSplashScreen):
 
         # Floor shadow: the gradient is squashed with the oval so it fades on every side
         painter.save()
-        painter.translate(QPointF(STAGE_WIDTH / 2, 234))
-        painter.scale(1.0, 9 / 85)
-        shadow = QRadialGradient(QPointF(0, 0), 85)
+        if theme_manager.get_theme_name() == "Wall-e":
+            # Tilted to sit under both tracks: WALL-E's near track is lower than the far one
+            painter.translate(QPointF(STAGE_WIDTH / 2 + 3, 229))
+            painter.rotate(-10)
+            painter.scale(1.0, 6 / 68)
+        else:
+            painter.translate(QPointF(STAGE_WIDTH / 2, 238))
+            painter.scale(1.0, 5 / 68)
+        shadow = QRadialGradient(QPointF(0, 0), 68)
         shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
         shadow.setColorAt(0.6, QColor(0, 0, 0, 90))
         shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(shadow))
-        painter.drawEllipse(QPointF(0, 0), 85, 85)
+        painter.drawEllipse(QPointF(0, 0), 68, 68)
         painter.restore()
 
         # Droid, bottom-aligned on the floor at its native pixel size

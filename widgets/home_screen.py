@@ -91,10 +91,13 @@ def _make_icon(kind: str, color: str) -> QPixmap:
     return pixmap
 
 
-def _draw_floor_shadow(painter: QPainter, center: QPointF, half_width: float, half_height: float):
-    """Oval shadow whose gradient is squashed with the oval, so it fades vertically too"""
+def _draw_floor_shadow(painter: QPainter, center: QPointF, half_width: float, half_height: float,
+                       angle: float = 0.0):
+    """Oval shadow whose gradient is squashed with the oval, so it fades vertically too.
+    The angle tilts it to follow the perspective of the tracks."""
     painter.save()
     painter.translate(center)
+    painter.rotate(angle)
     painter.scale(1.0, half_height / half_width)
     shadow = QRadialGradient(QPointF(0, 0), half_width)
     shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
@@ -148,9 +151,12 @@ class StageWidget(QWidget):
         painter.drawRect(0, 0, w, h)
 
         # Floor shadow under the tracks: a soft oval fading out on every side
-        # The image has a few transparent pixels below the tracks, so the shadow
-        # sits a little above the image's bottom edge
-        _draw_floor_shadow(painter, QPointF(w / 2, h - 19), 120, 8)
+        if theme_manager.get_theme_name() == "Wall-e":
+            # WALL-E stands at three-quarter view: the near (left) track sits lower
+            # than the far one, so the shadow is tilted to sit under both
+            _draw_floor_shadow(painter, QPointF(w / 2 + 5, h - 30), 134, 11, -10)
+        else:
+            _draw_floor_shadow(painter, QPointF(w / 2, h - 9), 120, 8)
 
         # WALL-E, bottom-aligned on the floor
         if self._pixmap is not None and not self._pixmap.isNull():
