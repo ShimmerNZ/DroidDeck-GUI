@@ -148,7 +148,9 @@ class StageWidget(QWidget):
         painter.drawRect(0, 0, w, h)
 
         # Floor shadow under the tracks: a soft oval fading out on every side
-        _draw_floor_shadow(painter, QPointF(w / 2, h - 9), 120, 8)
+        # The image has a few transparent pixels below the tracks, so the shadow
+        # sits a little above the image's bottom edge
+        _draw_floor_shadow(painter, QPointF(w / 2, h - 19), 120, 8)
 
         # WALL-E, bottom-aligned on the floor
         if self._pixmap is not None and not self._pixmap.isNull():

@@ -167,7 +167,7 @@ class _StageSplash(QSplashScreen):
 
         # Floor shadow: the gradient is squashed with the oval so it fades on every side
         painter.save()
-        painter.translate(QPointF(STAGE_WIDTH / 2, 246))
+        painter.translate(QPointF(STAGE_WIDTH / 2, 234))
         painter.scale(1.0, 9 / 85)
         shadow = QRadialGradient(QPointF(0, 0), 85)
         shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
