@@ -26,6 +26,12 @@ except ImportError:
 # Splash is drawn at its native size, pixel for pixel, so text stays sharp
 SPLASH_WIDTH = 560
 SPLASH_HEIGHT = 320
+
+# The splash window matches the main window (and the Deck screen). Steam's
+# compositor stretches smaller windows to fill the display, which blurs them,
+# so the card is drawn in the middle of a full-size window instead.
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 800
 STAGE_WIDTH = 220
 DROID_SIZE = 160
 
@@ -72,7 +78,7 @@ class _StageSplash(QSplashScreen):
     """Shared drawing for the startup and shutdown splash screens"""
 
     def __init__(self, steps):
-        pixmap = QPixmap(SPLASH_WIDTH, SPLASH_HEIGHT)
+        pixmap = QPixmap(WINDOW_WIDTH, WINDOW_HEIGHT)
         pixmap.fill(QColor("#0b0b0b"))
         super().__init__(pixmap)
 
@@ -126,6 +132,7 @@ class _StageSplash(QSplashScreen):
             QTimer.singleShot(50, self._start_audio)
 
         painter.fillRect(self.rect(), QColor("#0b0b0b"))
+        painter.translate((self.width() - SPLASH_WIDTH) // 2, (self.height() - SPLASH_HEIGHT) // 2)
 
         primary = QColor(theme_manager.get("primary_color"))
         panel = QColor(theme_manager.get("panel_bg"))
