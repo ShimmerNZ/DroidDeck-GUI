@@ -32,6 +32,10 @@ SPLASH_HEIGHT = 320
 # so the card is drawn in the middle of a full-size window instead.
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 800
+
+# The card is laid out at 560x320 and drawn scaled up to this factor. Text and
+# shapes are vector so they stay sharp; the droid image is resampled to match.
+CARD_SCALE = 1.6
 STAGE_WIDTH = 220
 DROID_SIZE = 160
 
@@ -95,7 +99,7 @@ class _StageSplash(QSplashScreen):
         droid = QPixmap(theme_manager.get_image_path("main"))
         if not droid.isNull():
             # Scaled once for the screen's pixel density so it is drawn 1:1
-            ratio = QApplication.primaryScreen().devicePixelRatio()
+            ratio = QApplication.primaryScreen().devicePixelRatio() * CARD_SCALE
             size = int(DROID_SIZE * ratio)
             droid = droid.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.SmoothTransformation)
@@ -132,7 +136,9 @@ class _StageSplash(QSplashScreen):
             QTimer.singleShot(50, self._start_audio)
 
         painter.fillRect(self.rect(), QColor("#0b0b0b"))
-        painter.translate((self.width() - SPLASH_WIDTH) // 2, (self.height() - SPLASH_HEIGHT) // 2)
+        painter.translate((self.width() - SPLASH_WIDTH * CARD_SCALE) / 2,
+                          (self.height() - SPLASH_HEIGHT * CARD_SCALE) / 2)
+        painter.scale(CARD_SCALE, CARD_SCALE)
 
         primary = QColor(theme_manager.get("primary_color"))
         panel = QColor(theme_manager.get("panel_bg"))
