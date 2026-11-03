@@ -8,7 +8,7 @@ fades while shutting down, beside a ticking list of steps.
 
 import os
 from PyQt6.QtWidgets import QApplication, QSplashScreen
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF
 from PyQt6.QtGui import (
     QPixmap, QPainter, QColor, QFont, QPen, QBrush, QRadialGradient, QPainterPath
 )
@@ -23,10 +23,11 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
-# Splash layout is drawn at this size and scaled to the screen
-DESIGN_WIDTH = 760
-DESIGN_HEIGHT = 430
-STAGE_WIDTH = 300
+# Splash is drawn at its native size, pixel for pixel, so text stays sharp
+SPLASH_WIDTH = 560
+SPLASH_HEIGHT = 320
+STAGE_WIDTH = 220
+DROID_SIZE = 160
 
 SUBTITLES = {
     "Wall-e": "Waste Allocation Load Lifter · Earth-Class",
@@ -71,11 +72,7 @@ class _StageSplash(QSplashScreen):
     """Shared drawing for the startup and shutdown splash screens"""
 
     def __init__(self, steps):
-        screen = QApplication.primaryScreen().geometry()
-        width = min(DESIGN_WIDTH, int(screen.width() * 0.44))
-        height = int(width * DESIGN_HEIGHT / DESIGN_WIDTH)
-
-        pixmap = QPixmap(width, height)
+        pixmap = QPixmap(SPLASH_WIDTH, SPLASH_HEIGHT)
         pixmap.fill(QColor("#0b0b0b"))
         super().__init__(pixmap)
 
@@ -89,7 +86,15 @@ class _StageSplash(QSplashScreen):
         self.status_text = ""
         self.status_color = LABEL_GREY
 
-        self._droid = QPixmap(theme_manager.get_image_path("main"))
+        droid = QPixmap(theme_manager.get_image_path("main"))
+        if not droid.isNull():
+            # Scaled once for the screen's pixel density so it is drawn 1:1
+            ratio = QApplication.primaryScreen().devicePixelRatio()
+            size = int(DROID_SIZE * ratio)
+            droid = droid.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+            droid.setDevicePixelRatio(ratio)
+        self._droid = droid
         self._build_label = f"GUI v{GUI_VERSION}"
         self._commit_label = get_build_label()
         self._audio_started = False
@@ -121,13 +126,12 @@ class _StageSplash(QSplashScreen):
             QTimer.singleShot(50, self._start_audio)
 
         painter.fillRect(self.rect(), QColor("#0b0b0b"))
-        painter.scale(self.width() / DESIGN_WIDTH, self.height() / DESIGN_HEIGHT)
 
         primary = QColor(theme_manager.get("primary_color"))
         panel = QColor(theme_manager.get("panel_bg"))
 
         # Card
-        card = QRectF(0.5, 0.5, DESIGN_WIDTH - 1, DESIGN_HEIGHT - 1)
+        card = QRectF(0.5, 0.5, SPLASH_WIDTH - 1, SPLASH_HEIGHT - 1)
         border = QColor(primary)
         border.setAlphaF(0.45)
         painter.setPen(QPen(border, 1))
@@ -143,10 +147,10 @@ class _StageSplash(QSplashScreen):
 
         painter.save()
         clip = QPainterPath()
-        clip.addRoundedRect(QRectF(1, 1, STAGE_WIDTH, DESIGN_HEIGHT - 2), 11, 11)
+        clip.addRoundedRect(QRectF(1, 1, STAGE_WIDTH, SPLASH_HEIGHT - 2), 11, 11)
         painter.setClipPath(clip)
 
-        glow = QRadialGradient(QPointF(STAGE_WIDTH / 2, DESIGN_HEIGHT * 0.58), 230)
+        glow = QRadialGradient(QPointF(STAGE_WIDTH / 2, SPLASH_HEIGHT * 0.58), 170)
         inner = QColor(primary)
         inner.setAlphaF(glow_strength)
         mid = QColor(primary)
@@ -158,95 +162,84 @@ class _StageSplash(QSplashScreen):
         glow.setColorAt(0.7, outer)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(glow))
-        painter.drawRect(QRectF(0, 0, STAGE_WIDTH, DESIGN_HEIGHT))
+        painter.drawRect(QRectF(0, 0, STAGE_WIDTH, SPLASH_HEIGHT))
         painter.restore()
 
         # Floor shadow
-        shadow_rect = QRectF(30, 330, 240, 26)
-        shadow = QRadialGradient(shadow_rect.center(), 120)
+        shadow_rect = QRectF(25, 246, 170, 20)
+        shadow = QRadialGradient(shadow_rect.center(), 85)
         shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
         shadow.setColorAt(0.7, QColor(0, 0, 0, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(shadow))
         painter.drawEllipse(shadow_rect)
 
-        # Droid, bottom-aligned on the floor
+        # Droid, bottom-aligned on the floor at its native pixel size
         if not self._droid.isNull():
-            image = self._droid.scaled(
-                440, 440, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            target = QRectF(0, 0, image.width() / 2, image.height() / 2)
-            target.moveCenter(QPointF(STAGE_WIDTH / 2, 0))
-            target.moveBottom(316)
+            size = self._droid.deviceIndependentSize()
+            x = int((STAGE_WIDTH - size.width()) // 2)
+            y = int(240 - size.height())
             painter.setOpacity(droid_opacity)
-            painter.drawPixmap(target, image, QRectF(image.rect()))
+            painter.drawPixmap(x, y, self._droid)
             painter.setOpacity(1.0)
 
         # Floor line
         line = QColor(primary)
         line.setAlphaF(line_opacity)
         painter.setBrush(line)
-        painter.drawRoundedRect(QRectF(40, 352, 220, 2), 1, 1)
+        painter.drawRect(30, 262, 160, 2)
 
     def _draw_text(self, painter, primary):
         left = STAGE_WIDTH + 6
-        right = DESIGN_WIDTH - 30
+        right = SPLASH_WIDTH - 22
         width = right - left
+        left_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        right_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
         painter.setPen(primary)
-        painter.setFont(_px_font(38, bold=True, spacing=4))
-        painter.drawText(QRectF(left, 24, width, 46), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         "DROIDDECK")
+        painter.setFont(_px_font(28, bold=True, spacing=3))
+        painter.drawText(QRect(left, 18, width, 34), left_align, "DROIDDECK")
 
         subtitle = SUBTITLES.get(theme_manager.get_theme_name(), "")
         painter.setPen(QColor(TEXT_SOFT))
-        painter.setFont(_px_font(14, spacing=0.5))
-        painter.drawText(QRectF(left, 74, width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         subtitle)
+        painter.setFont(_px_font(12))
+        painter.drawText(QRect(left, 54, width, 16), left_align, subtitle)
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#2e2e2e"))
-        painter.drawRect(QRectF(left, 108, width, 1))
+        painter.drawRect(left, 80, width, 1)
 
         # Step list
-        y = 124
-        painter.setFont(_px_font(15))
+        y = 92
+        painter.setFont(_px_font(13))
         for index, label in enumerate(self.steps):
             state = self._step_state(index)
-            self._draw_step_icon(painter, QRectF(left, y + 2, 20, 20), state, primary)
+            self._draw_step_icon(painter, QRectF(left, y + 2, 16, 16), state, primary)
             painter.setPen(QColor("#6a6a6a") if state == "pending" else QColor("white"))
-            painter.drawText(QRectF(left + 30, y, width - 30, 24),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             label.rstrip(". "))
-            y += 31
+            painter.drawText(QRect(left + 24, y, width - 24, 20), left_align, label.rstrip(". "))
+            y += 24
 
         # Status, percentage and bar
-        bar_top = 372
-        painter.setFont(_px_font(13))
+        bar_top = 274
+        painter.setFont(_px_font(12))
         painter.setPen(QColor(self.status_color))
-        painter.drawText(QRectF(left, bar_top - 24, width - 60, 18),
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         self.status_text)
+        painter.drawText(QRect(left, bar_top - 20, width - 50, 16), left_align, self.status_text)
         painter.setPen(QColor(TEXT_SOFT))
-        painter.setFont(_px_font(13, family="Consolas"))
-        painter.drawText(QRectF(right - 60, bar_top - 24, 60, 18),
-                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                         f"{int(self.progress)}%")
+        painter.setFont(_px_font(12, family="Consolas"))
+        painter.drawText(QRect(right - 50, bar_top - 20, 50, 16), right_align, f"{int(self.progress)}%")
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#2a2a2a"))
-        painter.drawRoundedRect(QRectF(left, bar_top, width, 6), 3, 3)
-        fill = width * max(0, min(100, self.progress)) / 100.0
+        painter.drawRoundedRect(QRectF(left, bar_top, width, 5), 2.5, 2.5)
+        fill = round(width * max(0, min(100, self.progress)) / 100.0)
         if fill > 0:
             painter.setBrush(primary)
-            painter.drawRoundedRect(QRectF(left, bar_top, fill, 6), 3, 3)
+            painter.drawRoundedRect(QRectF(left, bar_top, fill, 5), 2.5, 2.5)
 
         painter.setPen(QColor(FOOTER_GREY))
-        painter.setFont(_px_font(12, family="Consolas"))
-        painter.drawText(QRectF(left, bar_top + 14, width, 18),
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._build_label)
-        painter.drawText(QRectF(left, bar_top + 14, width, 18),
-                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._commit_label)
+        painter.setFont(_px_font(11, family="Consolas"))
+        painter.drawText(QRect(left, bar_top + 13, width, 14), left_align, self._build_label)
+        painter.drawText(QRect(left, bar_top + 13, width, 14), right_align, self._commit_label)
 
     def _step_state(self, index: int) -> str:
         if self.all_done or index < self.current_step:
