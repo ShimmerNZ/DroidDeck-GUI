@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Settings Screen (Themed)
 """
@@ -15,12 +17,13 @@ from urllib.parse import urlparse
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QSpinBox, QSlider, QPushButton,
-    QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QProgressDialog, QApplication
+    QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
 )
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
+from widgets.flow_dialog import FlowDialog, STEP_ERROR
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
@@ -1221,108 +1224,133 @@ class SettingsScreen(BaseScreen):
             self._create_default_config()
             QMessageBox.information(self, "Defaults Created", "Default configuration has been created and applied.")
 
+    NETWORK_TEST_STEPS = [
+        "Check URL formats",
+        "Check camera proxy",
+        "Test ESP32 camera",
+        "Test camera proxy",
+        "Test WebSocket",
+    ]
+
     @error_boundary
     def test_websocket_connection(self, checked=False):
-        """Comprehensive network connectivity test with progress dialog"""
-        # Get all network URLs
+        """Network connectivity test shown in a themed step dialog"""
         ws_url = self.network_inputs["control_ws"].text().strip()
         esp32_url = self.network_inputs["esp32_url"].text().strip()
         proxy_url = self.network_inputs["proxy_url"].text().strip()
-        
-        if not any([ws_url, esp32_url, proxy_url]):
+
+        urls = [u for u in (ws_url, esp32_url, proxy_url) if u]
+        if not urls:
             QMessageBox.warning(self, "No URLs to Test", "Please enter at least one network URL before testing.")
             return
 
-        # Create and configure progress dialog
-        self.progress_dialog = QProgressDialog("Initializing network tests...", "Cancel", 0, 0, self)
-        self.progress_dialog.setWindowTitle("Network Connectivity Test")
-        self.progress_dialog.setModal(True)
-        self.progress_dialog.setMinimumDuration(0)
-        self.progress_dialog.show()
-        
-        # Create and start test thread
+        noun = "address" if len(urls) == 1 else "addresses"
+        self.test_dialog = FlowDialog(self, "NETWORK TEST", f"Testing {len(urls)} {noun}")
+        self.test_dialog.show_progress(self.NETWORK_TEST_STEPS, cancellable=True)
+        self.test_dialog.set_status("Initializing network tests...")
+        self.test_dialog.cancel_requested.connect(self._cancel_network_test)
+        self.test_dialog.show()
+
         self.test_thread = NetworkTestThread(
             esp32_url=esp32_url,
-            proxy_url=proxy_url, 
+            proxy_url=proxy_url,
             ws_url=ws_url,
             websocket_sender=self.send_websocket_message if hasattr(self, 'send_websocket_message') else None
         )
-        
-        # Connect signals
         self.test_thread.progress_updated.connect(self.update_test_progress)
         self.test_thread.test_completed.connect(self.show_test_results)
-        self.progress_dialog.canceled.connect(self.test_thread.terminate)
-        
-        # Start testing
         self.test_thread.start()
+
+    def _cancel_network_test(self):
+        if hasattr(self, 'test_thread') and self.test_thread.isRunning():
+            self.test_thread.terminate()
+        if getattr(self, 'test_dialog', None):
+            self.test_dialog.close()
+            self.test_dialog = None
+
     # ---------- Network Testing ----------
 
+    def _network_test_step(self, message: str) -> int:
+        """Which step of the test a progress message belongs to"""
+        text = message.lower()
+        if text.startswith("validating"):
+            return 0
+        if text.startswith("checking camera proxy"):
+            return 1
+        if ("esp32" in text or text.startswith("temporarily disabling")
+                or text.startswith("restoring camera proxy (was")):
+            return 2
+        if "camera proxy" in text or "proxy test" in text:
+            return 3
+        if "websocket" in text:
+            return 4
+        return -1
+
     def update_test_progress(self, message, status):
-        """Update progress dialog with current test status"""
-        if hasattr(self, 'progress_dialog') and self.progress_dialog:
-            self.progress_dialog.setLabelText(message)
-            QApplication.processEvents()  # Keep UI responsive
+        """Advance the test dialog to the step the thread is on"""
+        dialog = getattr(self, 'test_dialog', None)
+        if not dialog:
+            return
+        dialog.set_status(message)
+        step = self._network_test_step(message)
+        if step >= 0:
+            dialog.advance_to(step)
+            dialog.set_progress((step + 0.5) / len(self.NETWORK_TEST_STEPS))
 
     def show_test_results(self, results):
-        """Display comprehensive test results"""
-        if hasattr(self, 'progress_dialog'):
-            self.progress_dialog.close()
-        
-        if 'error' in results:
-            QMessageBox.critical(self, "Test Failed", results['error'])
+        """Show the grouped test results in the test dialog"""
+        dialog = getattr(self, 'test_dialog', None)
+        if not dialog:
             return
-        
-        # Build results display
-        result_lines = ["Network Connectivity Test Results:", ""]
-        
+
+        if 'error' in results:
+            dialog.show_result(False, "Test failed", error=results['error'], primary="CLOSE")
+            dialog.primary_clicked.connect(dialog.close)
+            return
+
         test_categories = [
-            ("URL Format Validation", ['ws_format', 'esp32_format', 'proxy_format']),
-            ("Camera Proxy Management", ['proxy_status', 'proxy_disable', 'proxy_enable']), 
-            ("Network Connectivity", ['esp32_connection', 'proxy_connection', 'websocket_connection'])
+            ("URL FORMAT", ['ws_format', 'esp32_format', 'proxy_format']),
+            ("CAMERA PROXY", ['proxy_initial_status', 'proxy_control']),
+            ("CONNECTIVITY", ['esp32_connection', 'proxy_connection', 'websocket_connection'])
         ]
-        
-        overall_success = True
-        
-        for category, test_keys in test_categories:
-            result_lines.append(f"  {category}:")
-            
-            for key in test_keys:
-                if key in results:
-                    result = results[key]
-                    status = result['status']
-                    message = result['message']
-                    
-                    if status == 'success':
-                        icon = "✅"
-                    elif status == 'warning':
-                        icon = "⚠️"
-                    elif status == 'info':
-                        icon = "ℹ️"
-                    else:
-                        icon = "❌"
-                        overall_success = False
-                    
-                    result_lines.append(f"  {icon} {message}")
-            
-            result_lines.append("")
-        
-        # Add summary
+
+        groups = []
+        passed = failed = 0
+        for category, keys in test_categories:
+            rows = []
+            for key in keys:
+                result = results.get(key)
+                if not isinstance(result, dict):
+                    continue
+                status = result.get('status', 'error')
+                rows.append((status, result.get('message', '')))
+                if status == 'error':
+                    failed += 1
+                elif status == 'success':
+                    passed += 1
+            if rows:
+                groups.append((category, rows))
+
+        overall_success = failed == 0
         if overall_success:
-            result_lines.append("✅ All critical tests passed! Your network configuration looks good.")
+            summary = f"All {passed} tests passed · your network configuration looks good"
         else:
-            result_lines.append("⚠️ Some tests failed. Please check the issues above and verify your network configuration.")
-        
-        # Show results in appropriate dialog type
-        result_text = "\n".join(result_lines)
-        if overall_success:
-            QMessageBox.information(self, "Network Test - Success", result_text)
-        else:
-            QMessageBox.warning(self, "Network Test - Issues Found", result_text)
-        
-        # Log results
+            noun = "test" if failed == 1 else "tests"
+            summary = f"{failed} {noun} failed · {passed} passed · check the issues below"
+
+        dialog.show_report(summary, overall_success, groups, secondary="RUN AGAIN", primary="CLOSE")
+        dialog.primary_clicked.connect(dialog.close)
+        dialog.secondary_clicked.connect(self._rerun_network_test)
+
         passed_count = len([r for r in results.values() if isinstance(r, dict) and r.get('status') == 'success'])
         total_count = len([r for r in results.values() if isinstance(r, dict)])
         self.logger.info(f"Network connectivity test completed: {passed_count}/{total_count} tests passed")
+
+    def _rerun_network_test(self):
+        if getattr(self, 'test_dialog', None):
+            self.test_dialog.close()
+            self.test_dialog = None
+        self.test_websocket_connection()
 
 
     # ---------- Validation / Notifications ----------
@@ -1412,44 +1440,76 @@ class SettingsScreen(BaseScreen):
 
     # ---------- Update System ----------
 
-    def check_for_updates(self):
-        """Check for and install GUI updates from GitHub"""
-        branch = self._ask_branch("Update DroidDeck GUI")
-        if branch is None:
-            return
+    GUI_UPDATE_STEPS = ["Download", "Extract", "Install"]
+    SERVER_UPDATE_STEPS = ["Download", "Extract", "Back up & install", "Restart service"]
 
-        self.update_progress = QProgressDialog("Preparing to update...", "Cancel", 0, 0, self)
-        self.update_progress.setWindowTitle("Updating DroidDeck GUI")
-        self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.update_progress.setMinimumDuration(0)
-        self.update_progress.setCancelButton(None)
-        self.update_progress.setFixedSize(400, 120)
-        self.update_progress.show()
+    def check_for_updates(self):
+        """Choose a branch, then download and install a GUI update from GitHub"""
+        self.update_dialog = FlowDialog(self, "UPDATE DROIDDECK GUI", "Installs on this Steam Deck")
+        self.update_dialog.show_choose([
+            "Downloads the latest GUI from GitHub",
+            "Your config files are kept",
+            "DroidDeck restarts to finish",
+        ])
+        self.update_dialog.start_requested.connect(self._start_gui_update)
+        self.update_dialog.show()
+
+    def _start_gui_update(self, branch: str):
+        dialog = self.update_dialog
+        self._update_branch = branch
+        dialog.set_subtitle(f"{branch} branch")
+        dialog.show_progress(self.GUI_UPDATE_STEPS)
+        dialog.set_status("Preparing to update...")
 
         self.update_thread = UpdateThread(branch=branch)
-        self.update_thread.progress_updated.connect(self._on_update_progress)
+        self.update_thread.progress_updated.connect(self._on_gui_update_progress)
         self.update_thread.update_completed.connect(self._on_gui_update_complete)
         self.update_thread.start()
 
-    def _on_gui_update_complete(self, success: bool, message: str):
-        """Handle GUI update completion; offer to restart the app after a successful update"""
-        if not success:
-            self._on_update_complete(False, message)
+    def _on_gui_update_progress(self, message: str):
+        """Map the update thread's messages onto the step list"""
+        dialog = getattr(self, 'update_dialog', None)
+        if not dialog:
             return
+        dialog.set_status(message)
+        if message.startswith("Downloading:"):
+            try:
+                percent = int(message.split(":")[1].strip().rstrip("%"))
+            except (IndexError, ValueError):
+                percent = 0
+            dialog.advance_to(0, f"{percent}%")
+            dialog.set_progress(0.6 * percent / 100.0)
+        elif message.startswith("Downloading"):
+            dialog.advance_to(0)
+        elif message.startswith("Extracting"):
+            dialog.advance_to(1)
+            dialog.set_progress(0.7)
+        elif message.startswith("Installing"):
+            dialog.advance_to(2)
+            dialog.set_progress(0.85)
 
-        if hasattr(self, 'update_progress'):
-            self.update_progress.close()
+    def _on_gui_update_complete(self, success: bool, message: str):
+        """Show the result; offer to restart the app after a successful update"""
+        dialog = getattr(self, 'update_dialog', None)
+        if not dialog:
+            return
+        if success:
+            dialog.complete_steps()
+            dialog.show_result(True, "Update installed", "DroidDeck needs to restart to use it.",
+                               secondary="LATER", primary="RESTART NOW",
+                               primary_fill=theme_manager.get("green"))
+            dialog.secondary_clicked.connect(dialog.close)
+            dialog.primary_clicked.connect(self._restart_application)
+        else:
+            self._mark_failed_step(dialog)
+            dialog.show_result(False, "Update failed", "The update did not finish.", error=message,
+                               secondary="CLOSE", primary="TRY AGAIN", keep_steps=True)
+            dialog.secondary_clicked.connect(dialog.close)
+            dialog.primary_clicked.connect(lambda: self._start_gui_update(self._update_branch))
 
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle("Update Complete")
-        box.setText("The update was installed. DroidDeck needs to restart to use it.")
-        restart_btn = box.addButton("Restart Now", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-
-        if box.clickedButton() is restart_btn:
-            self._restart_application()
+    def _mark_failed_step(self, dialog):
+        step = dialog.active_step()
+        dialog.set_step(step if step >= 0 else 0, STEP_ERROR)
 
     def _restart_application(self):
         """Close the app normally, then relaunch the same command in place once shutdown finishes"""
@@ -1470,113 +1530,89 @@ class SettingsScreen(BaseScreen):
             QApplication.quit()
 
     def check_for_server_updates(self):
-        """Trigger a backend server update from GitHub"""
-        branch = self._ask_branch("Update DroidDeck Server")
-        if branch is None:
-            return
+        """Choose a branch, then trigger a backend server update from GitHub"""
+        self.update_dialog = FlowDialog(self, "UPDATE DROIDDECK SERVER", "Installs on the Pi")
+        self.update_dialog.show_choose([
+            "Downloads the latest backend from GitHub",
+            "Config files are NOT overwritten",
+            "The backend service restarts automatically",
+        ])
+        self.update_dialog.start_requested.connect(self._start_server_update)
+        self.update_dialog.show()
 
-        reply = QMessageBox.question(
-            self,
-            "Update Server",
-            f"This will update the backend server from GitHub ({branch} branch).\n\n"
-            "Config files will NOT be overwritten.\n"
-            "The backend service will restart automatically.\n\n"
-            "Do you want to proceed?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+    def _start_server_update(self, branch: str):
+        dialog = self.update_dialog
+        self._update_branch = branch
+        dialog.set_subtitle(f"Pi backend · {branch} branch")
+        dialog.show_progress(self.SERVER_UPDATE_STEPS)
 
-        self.update_progress = QProgressDialog("Sending update command to server...", "Cancel", 0, 0, self)
-        self.update_progress.setWindowTitle("Updating DroidDeck Server")
-        self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.update_progress.setMinimumDuration(0)
-        self.update_progress.setCancelButton(None)
-        self.update_progress.setFixedSize(400, 120)
-        self.update_progress.show()
-
+        self._server_update_token = getattr(self, '_server_update_token', 0) + 1
+        token = self._server_update_token
         self._server_update_pending = True
         sent = self.send_websocket_message(
             "server_update", branch=branch, repo=self.SERVER_UPDATE_REPO
         )
         if not sent:
             self._server_update_pending = False
-            self._on_update_complete(False, "Could not send the update command - the backend is not connected.")
+            self._show_server_result(False, "Could not send the update command - the backend is not connected.")
             return
 
-        self._on_update_progress(f"Update command sent ({branch} branch) - waiting for backend...")
-        QTimer.singleShot(self.SERVER_UPDATE_TIMEOUT_MS, self._on_server_update_timeout)
+        dialog.set_status(f"Update command sent ({branch} branch) - waiting for backend...")
+        QTimer.singleShot(self.SERVER_UPDATE_TIMEOUT_MS, lambda: self._on_server_update_timeout(token))
+
+    def _server_update_step(self, message: str) -> int:
+        text = message.lower()
+        if text.startswith("downloading"):
+            return 0
+        if text.startswith("extracting"):
+            return 1
+        if text.startswith("backing up") or text.startswith("installing"):
+            return 2
+        if "restarting" in text:
+            return 3
+        return -1
 
     def _on_server_update_progress(self, data: dict):
         """Show backend update progress while an update started from this screen is running"""
-        if self._server_update_pending:
-            self._on_update_progress(data.get("message", ""))
+        dialog = getattr(self, 'update_dialog', None)
+        if not self._server_update_pending or not dialog:
+            return
+        message = data.get("message", "")
+        dialog.set_status(message)
+        step = self._server_update_step(message)
+        if step >= 0:
+            dialog.advance_to(step)
+            dialog.set_progress((step + 0.5) / len(self.SERVER_UPDATE_STEPS))
 
     def _on_server_update_complete(self, data: dict):
         """Report the backend's actual update result"""
         if not self._server_update_pending:
             return
         self._server_update_pending = False
-        self._on_update_complete(bool(data.get("success")), data.get("message", ""))
+        self._show_server_result(bool(data.get("success")), data.get("message", ""))
 
-    def _on_server_update_timeout(self):
-        """Release the progress dialog if the backend never reports a result"""
-        if not self._server_update_pending:
+    def _on_server_update_timeout(self, token: int):
+        """Release the dialog if the backend never reports a result"""
+        if not self._server_update_pending or token != getattr(self, '_server_update_token', 0):
             return
         self._server_update_pending = False
-        self._on_update_complete(
+        self._show_server_result(
             False,
             "The backend did not report a result. Check the backend log for 'server_update'."
         )
 
-    def _ask_branch(self, title: str) -> str:
-        """Show a branch selection dialog. Returns 'main', 'dev', or None if cancelled."""
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        dialog.setFixedSize(320, 160)
-
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Select branch to update from:"))
-
-        branch_combo = QComboBox()
-        branch_combo.addItems(["main", "dev"])
-        layout.addWidget(branch_combo)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            return branch_combo.currentText()
-        return None
-    
-    def _on_update_progress(self, message: str):
-        """Update progress dialog with current status"""
-        if hasattr(self, 'update_progress'):
-            self.update_progress.setLabelText(message)
-            QApplication.processEvents()
-    
-    def _on_update_complete(self, success: bool, message: str):
-        """Handle update completion"""
-        # Close progress dialog
-        if hasattr(self, 'update_progress'):
-            self.update_progress.close()
-        
-        # Show result message
+    def _show_server_result(self, success: bool, message: str):
+        dialog = getattr(self, 'update_dialog', None)
+        if not dialog:
+            return
         if success:
-            QMessageBox.information(
-                self,
-                "Update Complete",
-                message
-            )
+            dialog.complete_steps()
+            dialog.show_result(True, "Server updated", message or "The backend service is restarting.",
+                               primary="DONE", primary_fill=theme_manager.get("green"))
+            dialog.primary_clicked.connect(dialog.close)
         else:
-            QMessageBox.warning(
-                self,
-                "Update Failed",
-                message
-            )
+            self._mark_failed_step(dialog)
+            dialog.show_result(False, "Update failed", "The server update did not finish.", error=message,
+                               secondary="CLOSE", primary="TRY AGAIN", keep_steps=True)
+            dialog.secondary_clicked.connect(dialog.close)
+            dialog.primary_clicked.connect(lambda: self._start_server_update(self._update_branch))
