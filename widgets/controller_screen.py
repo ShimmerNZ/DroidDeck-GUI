@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QFrame,
     QGridLayout, QComboBox, QSlider, QMessageBox, QScrollArea, QListWidget,
-    QListWidgetItem, QListView, QButtonGroup, QSizePolicy, QAbstractButton
+    QListWidgetItem, QListView, QButtonGroup, QSizePolicy, QAbstractButton, QApplication
 )
 from PyQt6.QtGui import QFont, QColor, QPainter
 from PyQt6.QtCore import Qt, QTimer, QSize, QRectF, pyqtSignal
@@ -381,89 +381,35 @@ class SystemControlHandler(BehaviorHandler):
                 self.logger.error(f"Error in system control handler: {e}")
             return False
 
+    def _find_main_window(self):
+        app = QApplication.instance()
+        for widget in app.topLevelWidgets():
+            if hasattr(widget, 'close_application'):
+                return widget
+        return None
+
     def _handle_exit_app(self):
-        """Handle exit app directly in frontend"""
+        """Confirm, then close the app through the normal shutdown"""
         try:
-            from PyQt6.QtWidgets import QApplication, QMessageBox
-            from PyQt6.QtCore import QTimer
-            from PyQt6.QtGui import QIcon, QPixmap
-            
-            # Get the main application window to use as parent for the dialog
-            app = QApplication.instance()
-            main_window = None
-            for widget in app.topLevelWidgets():
-                if hasattr(widget, 'close_application'):  # Look for the main DroidDeckApplication
-                    main_window = widget
-                    break
-            
-            # Create custom message box
-            msg_box = QMessageBox(main_window)
-            msg_box.setWindowTitle('Exit Application')
-            msg_box.setText('Are you sure you want to exit the WALL-E control application?')
-            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            msg_box.setDefaultButton(QMessageBox.StandardButton.No)
-            
-            # Try to set a custom WALL-E icon
-            try:
-                # Option 1: Use a WALL-E icon from your resources
-                # Replace "wall-e-icon.png" with your actual icon file path
-                icon_path = "resources/icons/exit.png"  # or wherever your WALL-E icon is
-                if os.path.exists(icon_path):
-                    custom_icon = QIcon(icon_path)
-                    msg_box.setIconPixmap(custom_icon.pixmap(64, 64))  # 64x64 pixel icon
-                else:
-                    # Option 2: Use a different built-in icon (no spaceship)
-                    msg_box.setIcon(QMessageBox.Icon.Warning)  # Orange warning triangle
-                    # Or try: QMessageBox.Icon.Information (blue 'i')
-                    # Or: QMessageBox.Icon.Critical (red X)
-            except Exception as e:
-                # Fallback to warning icon if custom icon fails
-                msg_box.setIcon(QMessageBox.Icon.Warning)
-                if self.logger:
-                    self.logger.debug(f"Could not load custom icon: {e}")
-            
-            # Style the message box to match your theme
-            msg_box.setStyleSheet("""
-                QMessageBox {
-                    background-color: #2d2d2d;
-                    color: white;
-                    font-size: 14px;
-                }
-                QMessageBox QPushButton {
-                    background-color: #1e90ff;
-                    color: white;
-                    border: none;
-                    padding: 8px 16px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    min-width: 60px;
-                }
-                QMessageBox QPushButton:hover {
-                    background-color: #4dabf7;
-                }
-                QMessageBox QPushButton:pressed {
-                    background-color: #0d7ae4;
-                }
-            """)
-            
-            # Show the dialog and get result
-            reply = msg_box.exec()
-            
-            if reply == QMessageBox.StandardButton.Yes:
+            from widgets.flow_dialog import FlowDialog
+
+            main_window = self._find_main_window()
+            dialog = FlowDialog(main_window, "DROIDDECK", "Menu button", width=520)
+            dialog.show_confirm("Exit DroidDeck?",
+                                "DroidDeck saves, disconnects from WALL-E and closes.",
+                                primary="EXIT", primary_fill=theme_manager.get("red"))
+
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 if self.logger:
                     self.logger.info("User confirmed app exit via controller")
-                
-                # Try multiple exit methods
-                if main_window and hasattr(main_window, 'close_application'):
-                    # Use the main window's close method if available
+                if main_window is not None:
                     QTimer.singleShot(100, main_window.close_application)
                 else:
-                    # Fallback to direct quit
-                    QTimer.singleShot(100, app.quit)
+                    QTimer.singleShot(100, QApplication.instance().quit)
             else:
                 if self.logger:
                     self.logger.info("User cancelled app exit")
-                    
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error handling exit app: {e}")
@@ -471,34 +417,41 @@ class SystemControlHandler(BehaviorHandler):
                 sys.exit(0)
 
     def _handle_restart_app(self):
-        """Handle restart app directly in frontend"""
+        """Confirm, then close cleanly and relaunch the same command"""
         try:
-            from PyQt6.QtWidgets import QApplication, QMessageBox
-            from PyQt6.QtCore import QTimer
             import sys
-            import os
-            
-            reply = QMessageBox.question(
-                None, 
-                'Restart Application', 
-                'Are you sure you want to restart the WALL-E control application?',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.logger:
-                    self.logger.info("User confirmed app restart via controller")
-                
-                def restart_app():
-                    python = sys.executable
-                    os.execl(python, python, *sys.argv)
-                
-                QTimer.singleShot(100, restart_app)
-            else:
+            import atexit
+            from widgets.flow_dialog import FlowDialog
+
+            main_window = self._find_main_window()
+            dialog = FlowDialog(main_window, "DROIDDECK", "Menu button", width=520)
+            dialog.show_confirm("Restart DroidDeck?",
+                                "The app closes and opens again straight away.",
+                                primary="RESTART")
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 if self.logger:
                     self.logger.info("User cancelled app restart")
-                    
+                return
+
+            if self.logger:
+                self.logger.info("User confirmed app restart via controller")
+
+            argv = [sys.executable] + list(getattr(sys, "orig_argv", [sys.executable] + sys.argv)[1:])
+
+            def relaunch():
+                try:
+                    os.execv(sys.executable, argv)
+                except Exception as e:
+                    print(f"Restart failed, please start DroidDeck manually: {e}")
+
+            if main_window is not None:
+                # Relaunch once the normal shutdown has finished
+                atexit.register(relaunch)
+                QTimer.singleShot(100, main_window.close)
+            else:
+                QTimer.singleShot(100, relaunch)
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error handling restart app: {e}")

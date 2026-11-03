@@ -123,6 +123,28 @@ def _result_icon(success: bool) -> QPixmap:
     return pixmap
 
 
+def _power_icon() -> QPixmap:
+    """Power symbol in a tinted circle, in the theme colour"""
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor(theme_manager.get("primary_color"))
+    fill = QColor(color)
+    fill.setAlphaF(0.15)
+    painter.setPen(QPen(color, 2))
+    painter.setBrush(fill)
+    painter.drawEllipse(QRectF(1, 1, 54, 54))
+    pen = QPen(color, 3.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawLine(QPointF(28, 15), QPointF(28, 28))
+    painter.drawArc(QRectF(16, 16, 24, 24), 125 * 16, 290 * 16)
+    painter.end()
+    return pixmap
+
+
 def _plain_button_style() -> str:
     primary = theme_manager.get("primary_color")
     return f"""
@@ -502,6 +524,38 @@ class FlowDialog(QDialog):
             self.body_layout.addWidget(box)
 
         self._set_buttons(secondary, primary, primary_fill)
+
+    def show_confirm(self, title: str, text: str, secondary: str = "CANCEL",
+                     primary: str = "OK", primary_fill: str = None):
+        """Question with a power icon; primary accepts the dialog, secondary rejects it"""
+        self._closable = True
+        self._disconnect_buttons()
+        self._clear()
+        self._steps = []
+
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        icon = QLabel()
+        icon.setPixmap(_power_icon())
+        icon.setFixedSize(56, 56)
+        row.addWidget(icon)
+        texts = QVBoxLayout()
+        texts.setSpacing(6)
+        title_label = QLabel(title)
+        title_label.setFont(px_font(20, bold=True))
+        title_label.setStyleSheet("color: white;")
+        texts.addWidget(title_label)
+        text_label = QLabel(text)
+        text_label.setFont(px_font(15))
+        text_label.setStyleSheet(f"color: {TEXT_SOFT};")
+        text_label.setWordWrap(True)
+        texts.addWidget(text_label)
+        row.addLayout(texts, 1)
+        self.body_layout.addLayout(row)
+
+        self._set_buttons(secondary, primary, primary_fill)
+        self.secondary_clicked.connect(self.reject)
+        self.primary_clicked.connect(self.accept)
 
     def _remove_progress_bar(self):
         """Drop the bar and status line, keeping the step list"""
