@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DroidDeck Splash Screen with Steam Deck-style loading animations and audio
+DroidDeck startup and shutdown splash screens.
+The theme's droid stands in a spotlight that brightens while loading and
+fades while shutting down, beside a ticking list of steps.
 """
 
-import sys
 import os
-from PyQt6.QtWidgets import QApplication, QSplashScreen, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QProgressBar
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QRect
-from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QPen, QBrush, QLinearGradient
+from PyQt6.QtWidgets import QApplication, QSplashScreen
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtGui import (
+    QPixmap, QPainter, QColor, QFont, QPen, QBrush, QRadialGradient, QPainterPath
+)
+
+from core.theme_manager import theme_manager
+from core.version import GUI_VERSION, get_build_label
 
 # Import pygame for audio
 try:
@@ -17,48 +23,293 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
+# Splash layout is drawn at this size and scaled to the screen
+DESIGN_WIDTH = 760
+DESIGN_HEIGHT = 430
+STAGE_WIDTH = 300
+
+SUBTITLES = {
+    "Wall-e": "Waste Allocation Load Lifter · Earth-Class",
+    "Star Wars": "Astromech Droid Control",
+}
+
+LABEL_GREY = "#9e9e9e"
+TEXT_SOFT = "#bdbdbd"
+FOOTER_GREY = "#7a7a7a"
+
 
 def get_audio_path(filename: str) -> str:
     """Get audio file path from current theme directory"""
     try:
-        from core.theme_manager import theme_manager
         theme_name = theme_manager.get_theme_name()
         audio_path = os.path.join("resources", "theme", theme_name, "audio", filename)
-        
+
         if os.path.exists(audio_path):
             return audio_path
         else:
-            # Fallback to default theme
             audio_path = os.path.join("resources", "theme", "Wall-e", "audio", filename)
             if os.path.exists(audio_path):
                 return audio_path
     except Exception as e:
         print(f"Error getting audio path: {e}")
-    
+
     return None
 
 
-class DroidDeckSplashScreen(QSplashScreen):
-    """Custom splash screen for DroidDeck application startup"""
-    
-    def __init__(self):
-        # Get screen dimensions
+def _px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0, family: str = "Arial") -> QFont:
+    font = QFont(family)
+    if family != "Arial":
+        font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return font
+
+
+class _StageSplash(QSplashScreen):
+    """Shared drawing for the startup and shutdown splash screens"""
+
+    def __init__(self, steps):
         screen = QApplication.primaryScreen().geometry()
-        
-        # Scale splash to 40% of screen width, maintain aspect ratio
-        splash_width = int(screen.width() * 0.4)
-        splash_height = int(splash_width * 0.67)
-        
-        # Create a blank pixmap for the base
-        pixmap = QPixmap(splash_width, splash_height)
-        pixmap.fill(QColor("#0f1419"))
+        width = min(DESIGN_WIDTH, int(screen.width() * 0.6))
+        height = int(width * DESIGN_HEIGHT / DESIGN_WIDTH)
+
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor("#0b0b0b"))
         super().__init__(pixmap)
-        
-        # Make splash stay on top and come to front
-        self.setWindowFlags(Qt.WindowType.SplashScreen | 
-                           Qt.WindowType.WindowStaysOnTopHint)
-        
-        # Initialize messages FIRST
+
+        self.setWindowFlags(Qt.WindowType.SplashScreen |
+                            Qt.WindowType.WindowStaysOnTopHint)
+
+        self.steps = list(steps)
+        self.current_step = 0
+        self.progress = 0
+        self.all_done = False
+        self.status_text = ""
+        self.status_color = LABEL_GREY
+
+        self._droid = QPixmap(theme_manager.get_image_path("main"))
+        self._build_label = f"GUI v{GUI_VERSION}"
+        self._commit_label = get_build_label()
+        self._audio_started = False
+
+        self._center_on_screen()
+
+    def _center_on_screen(self):
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.width()) // 2
+        y = (screen.height() - self.height()) // 2
+        self.move(x, y)
+
+    # Overridden by each splash
+    def _stage_levels(self):
+        """(glow strength, droid opacity, floor line opacity)"""
+        return 0.2, 1.0, 0.9
+
+    def _start_audio(self):
+        pass
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        # Audio starts on the first paint so the screen is visible first
+        if not self._audio_started:
+            self._audio_started = True
+            QTimer.singleShot(50, self._start_audio)
+
+        painter.fillRect(self.rect(), QColor("#0b0b0b"))
+        painter.scale(self.width() / DESIGN_WIDTH, self.height() / DESIGN_HEIGHT)
+
+        primary = QColor(theme_manager.get("primary_color"))
+        panel = QColor(theme_manager.get("panel_bg"))
+
+        # Card
+        card = QRectF(0.5, 0.5, DESIGN_WIDTH - 1, DESIGN_HEIGHT - 1)
+        border = QColor(primary)
+        border.setAlphaF(0.45)
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(panel)
+        painter.drawRoundedRect(card, 12, 12)
+
+        self._draw_stage(painter, primary)
+        self._draw_text(painter, primary)
+        painter.end()
+
+    def _draw_stage(self, painter, primary):
+        glow_strength, droid_opacity, line_opacity = self._stage_levels()
+
+        painter.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(1, 1, STAGE_WIDTH, DESIGN_HEIGHT - 2), 11, 11)
+        painter.setClipPath(clip)
+
+        glow = QRadialGradient(QPointF(STAGE_WIDTH / 2, DESIGN_HEIGHT * 0.58), 230)
+        inner = QColor(primary)
+        inner.setAlphaF(glow_strength)
+        mid = QColor(primary)
+        mid.setAlphaF(glow_strength / 3)
+        outer = QColor(primary)
+        outer.setAlphaF(0.0)
+        glow.setColorAt(0.0, inner)
+        glow.setColorAt(0.4, mid)
+        glow.setColorAt(0.7, outer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(glow))
+        painter.drawRect(QRectF(0, 0, STAGE_WIDTH, DESIGN_HEIGHT))
+        painter.restore()
+
+        # Floor shadow
+        shadow_rect = QRectF(30, 330, 240, 26)
+        shadow = QRadialGradient(shadow_rect.center(), 120)
+        shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
+        shadow.setColorAt(0.7, QColor(0, 0, 0, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(shadow))
+        painter.drawEllipse(shadow_rect)
+
+        # Droid, bottom-aligned on the floor
+        if not self._droid.isNull():
+            image = self._droid.scaled(
+                440, 440, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            target = QRectF(0, 0, image.width() / 2, image.height() / 2)
+            target.moveCenter(QPointF(STAGE_WIDTH / 2, 0))
+            target.moveBottom(316)
+            painter.setOpacity(droid_opacity)
+            painter.drawPixmap(target, image, QRectF(image.rect()))
+            painter.setOpacity(1.0)
+
+        # Floor line
+        line = QColor(primary)
+        line.setAlphaF(line_opacity)
+        painter.setBrush(line)
+        painter.drawRoundedRect(QRectF(40, 352, 220, 2), 1, 1)
+
+    def _draw_text(self, painter, primary):
+        left = STAGE_WIDTH + 6
+        right = DESIGN_WIDTH - 30
+        width = right - left
+
+        painter.setPen(primary)
+        painter.setFont(_px_font(38, bold=True, spacing=4))
+        painter.drawText(QRectF(left, 24, width, 46), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "DROIDDECK")
+
+        subtitle = SUBTITLES.get(theme_manager.get_theme_name(), "")
+        painter.setPen(QColor(TEXT_SOFT))
+        painter.setFont(_px_font(14, spacing=0.5))
+        painter.drawText(QRectF(left, 74, width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         subtitle)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#2e2e2e"))
+        painter.drawRect(QRectF(left, 108, width, 1))
+
+        # Step list
+        y = 124
+        painter.setFont(_px_font(15))
+        for index, label in enumerate(self.steps):
+            state = self._step_state(index)
+            self._draw_step_icon(painter, QRectF(left, y + 2, 20, 20), state, primary)
+            painter.setPen(QColor("#6a6a6a") if state == "pending" else QColor("white"))
+            painter.drawText(QRectF(left + 30, y, width - 30, 24),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             label.rstrip(". "))
+            y += 31
+
+        # Status, percentage and bar
+        bar_top = 372
+        painter.setFont(_px_font(13))
+        painter.setPen(QColor(self.status_color))
+        painter.drawText(QRectF(left, bar_top - 24, width - 60, 18),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         self.status_text)
+        painter.setPen(QColor(TEXT_SOFT))
+        painter.setFont(_px_font(13, family="Consolas"))
+        painter.drawText(QRectF(right - 60, bar_top - 24, 60, 18),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         f"{int(self.progress)}%")
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#2a2a2a"))
+        painter.drawRoundedRect(QRectF(left, bar_top, width, 6), 3, 3)
+        fill = width * max(0, min(100, self.progress)) / 100.0
+        if fill > 0:
+            painter.setBrush(primary)
+            painter.drawRoundedRect(QRectF(left, bar_top, fill, 6), 3, 3)
+
+        painter.setPen(QColor(FOOTER_GREY))
+        painter.setFont(_px_font(12, family="Consolas"))
+        painter.drawText(QRectF(left, bar_top + 14, width, 18),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._build_label)
+        painter.drawText(QRectF(left, bar_top + 14, width, 18),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._commit_label)
+
+    def _step_state(self, index: int) -> str:
+        if self.all_done or index < self.current_step:
+            return "done"
+        if index == self.current_step:
+            return "active"
+        return "pending"
+
+    def _draw_step_icon(self, painter, rect, state, primary):
+        painter.save()
+        painter.translate(rect.topLeft())
+        painter.scale(rect.width() / 24.0, rect.height() / 24.0)
+        if state == "done":
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme_manager.get("green")))
+            painter.drawEllipse(QRectF(1, 1, 22, 22))
+            pen = QPen(QColor("#111111"), 2.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            path = QPainterPath()
+            path.moveTo(7, 12.5)
+            path.lineTo(10.5, 16)
+            path.lineTo(17, 8.5)
+            painter.drawPath(path)
+        elif state == "active":
+            painter.setPen(QPen(primary, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(2, 2, 20, 20))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(primary)
+            painter.drawEllipse(QRectF(7, 7, 10, 10))
+        else:
+            painter.setPen(QPen(QColor("#4a4a4a"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(2, 2, 20, 20))
+        painter.restore()
+
+    def _play(self, filename: str):
+        if not PYGAME_AVAILABLE:
+            return
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            audio_path = get_audio_path(filename)
+            if audio_path and os.path.exists(audio_path):
+                pygame.mixer.music.load(audio_path)
+                pygame.mixer.music.play()
+        except Exception as e:
+            print(f"Failed to play {filename}: {e}")
+
+
+class DroidDeckSplashScreen(_StageSplash):
+    """Startup splash: the spotlight brightens as DroidDeck loads"""
+
+    def __init__(self):
+        # Load the saved theme now so the splash is drawn in it from the first frame
+        try:
+            theme_manager.initialize()
+        except Exception as e:
+            print(f"Could not load saved theme for splash: {e}")
+
         self.messages = [
             "Initializing DroidDeck...",
             "Loading configurations...",
@@ -67,82 +318,61 @@ class DroidDeckSplashScreen(QSplashScreen):
             "Configuring navigation...",
             "Finalizing DroidDeck..."
         ]
+        super().__init__(self.messages)
         self.current_message = 0
-        self.current_step = 0
-        self.progress = 0
-        
-        self._center_on_screen()
-        self._audio_started = False
+        self.status_text = self.messages[0]
+        self._on_complete = None
 
-        # _bring_to_front fires after the first event loop tick;
-        # audio is triggered from paintEvent once the screen is actually rendered
         QTimer.singleShot(100, self._bring_to_front)
-        
-    def _init_audio(self):
-        """Initialize pygame mixer and play startup sound"""
-        if not PYGAME_AVAILABLE:
-            return
-        
-        try:
-            # Initialize pygame mixer if not already initialized
-            if not pygame.mixer.get_init():
-                pygame.mixer.init()
-            
-            # Get startup audio path
-            audio_path = get_audio_path("startup.mp3")
-            
-            if audio_path and os.path.exists(audio_path):
-                pygame.mixer.music.load(audio_path)
-                pygame.mixer.music.play()
-        except Exception as e:
-            print(f"Failed to play startup audio: {e}")
-        
-    def _center_on_screen(self):
-        """Center splash screen on display"""
-        screen = QApplication.primaryScreen().geometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
-        self.move(x, y)
+
+    def _stage_levels(self):
+        if self.all_done:
+            return 0.30, 1.0, 0.9
+        return 0.12 + 0.16 * self.progress / 100.0, 1.0, 0.9
+
+    def _start_audio(self):
+        self._play("startup.mp3")
 
     def _bring_to_front(self):
-        """Bring splash screen to front"""
         self.show()
         self.raise_()
         self.activateWindow()
-        
+
     def update_progress(self, step, message):
         """Update progress based on actual initialization steps"""
         self.current_step = step
         self.progress = int((step / len(self.messages)) * 100)
         self.current_message = min(step, len(self.messages) - 1)
-        
-        # Update the message if provided
+
         if message and step < len(self.messages):
             self.messages[step] = message
-            
-        # Force repaint
+            self.steps[step] = message
+        self.status_text = self.messages[self.current_message]
+        self.status_color = LABEL_GREY
+
         self.update()
         QApplication.processEvents()
-        
+
     def set_message(self, message):
-        """Set custom message without changing step"""
-        if self.current_message < len(self.messages):
-            self.messages[self.current_message] = message
+        """Show a message in the status line without changing step"""
+        self.status_text = message
+        self.status_color = theme_manager.get("red") if "failed" in message.lower() else LABEL_GREY
         self.update()
         QApplication.processEvents()
-    
+
     def finish_loading(self, on_complete=None):
         """Mark loading as complete and wait for startup audio to finish"""
         self.progress = 100
+        self.all_done = True
         self.current_message = len(self.messages) - 1
-        self.messages[-1] = "DroidDeck Ready!"
+        self.status_text = "Ready"
+        self.status_color = theme_manager.get("green")
         self._on_complete = on_complete
         self.update()
         QApplication.processEvents()
 
-        # Give audio a moment to settle, then start polling for completion.
-        # When the startup tune ends the splash closes and the main window appears.
-        # Falls back to a short fixed delay if audio is not available.
+        # The splash closes when the startup tune ends; a short fixed delay
+        # is used when audio is not available
         QTimer.singleShot(300, self._start_audio_wait)
 
     def _start_audio_wait(self):
@@ -156,7 +386,6 @@ class DroidDeckSplashScreen(QSplashScreen):
                     return
             except Exception:
                 pass
-        # Audio not running — close after a brief display of the ready message
         QTimer.singleShot(1000, self._finish)
 
     def _check_audio_complete(self):
@@ -174,7 +403,7 @@ class DroidDeckSplashScreen(QSplashScreen):
         if self._on_complete:
             self._on_complete()
         self.close()
-    
+
     def closeEvent(self, event):
         """Clean up audio and timers when closing"""
         if hasattr(self, '_audio_poll_timer') and self._audio_poll_timer is not None:
@@ -185,195 +414,41 @@ class DroidDeckSplashScreen(QSplashScreen):
             except Exception:
                 pass
         super().closeEvent(event)
-    
-    def paintEvent(self, event):
-        """Custom paint event to draw the splash screen"""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Trigger audio on the first paint — guarantees the screen is visible first
-        if not self._audio_started:
-            self._audio_started = True
-            QTimer.singleShot(50, self._init_audio)
-        
-        # Draw background gradient
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor("#0f1419"))
-        gradient.setColorAt(1, QColor("#1e2328"))
-        painter.fillRect(self.rect(), QBrush(gradient))
-        
-        # Draw servo icon (simplified rotating animation)
-        self._draw_servo_icon(painter)
-        
-        # Draw the UI elements
-        self._draw_ui_elements(painter)
-    
-    def _draw_servo_icon(self, painter):
-        """Draw animated servo icon"""
-        center_x = int(self.width() * 0.25)
-        center_y = int(self.height() * 0.30)
-        
-        painter.save()
-        painter.translate(center_x, center_y)
-        painter.rotate(self.progress * 3)
-        
-        # Draw servo horn style icon
-        painter.setPen(QPen(QColor("#1e90ff"), 3))
-        painter.setBrush(QBrush(QColor("#1e90ff")))
-        
-        # Central circle
-        painter.drawEllipse(-8, -8, 16, 16)
-        
-        # Servo arms
-        for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
-            painter.save()
-            painter.rotate(angle)
-            painter.drawRect(-2, -25, 4, 20)
-            painter.restore()
-        
-        painter.restore()
-    
-    def _draw_ui_elements(self, painter):
-        """Draw UI elements manually"""
-        # Title
-        painter.setPen(QColor("#1e90ff"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.08), QFont.Weight.Bold))
-        title_rect = QRect(
-            int(self.width() * 0.42),
-            int(self.height() * 0.25),
-            int(self.width() * 0.33),
-            int(self.height() * 0.13)
-        )
-        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft, "DROID DECK")
-        
-        # Subtitle
-        painter.setPen(QColor("#87ceeb"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.035)))
-        subtitle_rect = QRect(
-            0,
-            int(self.height() * 0.40),
-            self.width(),
-            int(self.height() * 0.075)
-        )
-        painter.drawText(subtitle_rect, Qt.AlignmentFlag.AlignCenter, "Professional Droid Control System")
-        
-        # Progress bar background
-        progress_rect = QRect(
-            int(self.width() * 0.17),
-            int(self.height() * 0.55),
-            int(self.width() * 0.67),
-            int(self.height() * 0.02)
-        )
-        painter.setPen(QColor("#1e3a5f"))
-        painter.setBrush(QColor("#0f1419"))
-        painter.drawRoundedRect(progress_rect, 4, 4)
-        
-        # Progress bar fill
-        fill_width = int((int(self.width() * 0.67) * min(self.progress, 100)) / 100)
-        if fill_width > 4:
-            fill_rect = QRect(
-                int(self.width() * 0.17) + 2,
-                int(self.height() * 0.55) + 2,
-                fill_width - 4,
-                int(self.height() * 0.01)
-            )
-            gradient = QLinearGradient(fill_rect.left(), 0, fill_rect.right(), 0)
-            gradient.setColorAt(0, QColor("#1e90ff"))
-            gradient.setColorAt(0.5, QColor("#00bfff"))
-            gradient.setColorAt(1, QColor("#87ceeb"))
-            painter.setBrush(QBrush(gradient))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(fill_rect, 2, 2)
-        
-        # Status text
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.03)))
-        status_rect = QRect(
-            0,
-            int(self.height() * 0.625),
-            self.width(),
-            int(self.height() * 0.075)
-        )
-        current_msg = self.messages[min(self.current_message, len(self.messages) - 1)]
-        painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, current_msg)
-        
-        # Version
-        painter.setPen(QColor("#6c757d"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.025)))
-        version_rect = QRect(
-            0,
-            int(self.height() * 0.80),
-            self.width(),
-            int(self.height() * 0.05)
-        )
-        painter.drawText(version_rect, Qt.AlignmentFlag.AlignCenter, "Version 1.0 - Steam Deck Edition")
 
 
-class DroidDeckShutdownSplash(QSplashScreen):
-    """Shutdown splash screen for DroidDeck"""
-    
+class DroidDeckShutdownSplash(_StageSplash):
+    """Shutdown splash: the spotlight fades as DroidDeck powers down"""
+
     def __init__(self):
-        # Get screen dimensions
-        screen = QApplication.primaryScreen().geometry()
-        
-        # Scale splash to 35% of screen width
-        splash_width = int(screen.width() * 0.35)
-        splash_height = int(splash_width * 0.6)
-        
-        pixmap = QPixmap(splash_width, splash_height)
-        pixmap.fill(QColor("#0f1419"))
-        super().__init__(pixmap)
-        
-        # Make it stay on top
-        self.setWindowFlags(Qt.WindowType.SplashScreen | 
-                           Qt.WindowType.WindowStaysOnTopHint)
-        
         self.shutdown_steps = [
-            "Saving configurations...",
-            "Closing connections...", 
-            "Stopping background processes...",
-            "Cleaning up resources...",
-            "DroidDeck shutdown complete"
+            "Saving configurations",
+            "Closing connections",
+            "Stopping processes",
+            "Cleaning resources",
+            "Shutdown complete"
         ]
-        self.current_step = 0
-        self.progress = 0
-        
-        self._center_on_screen()
-        self._audio_started = False
-        
-    def _init_audio(self):
-        """Initialize pygame mixer and play shutdown sound"""
-        if not PYGAME_AVAILABLE:
-            return
-        
-        try:
-            # Initialize pygame mixer if not already initialized
-            if not pygame.mixer.get_init():
-                pygame.mixer.init()
-            
-            # Get shutdown audio path
-            audio_path = get_audio_path("shutdown.mp3")
-            
-            if audio_path and os.path.exists(audio_path):
-                pygame.mixer.music.load(audio_path)
-                pygame.mixer.music.play()
-        except Exception as e:
-            print(f"Failed to play shutdown audio: {e}")
-        
-    def _center_on_screen(self):
-        """Center shutdown splash on screen"""
-        screen = QApplication.primaryScreen().geometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
-        self.move(x, y)
-    
+        super().__init__(self.shutdown_steps)
+        self.status_text = "Shutting down..."
+
+    def _stage_levels(self):
+        fraction = self.progress / 100.0
+        return 0.22 - 0.18 * fraction, 1.0 - 0.45 * fraction, 0.9 - 0.6 * fraction
+
+    def _start_audio(self):
+        self._play("shutdown.mp3")
+
     def update_shutdown_progress(self, step):
         """Update shutdown progress"""
+        self.all_done = step >= len(self.shutdown_steps)
         self.current_step = min(step, len(self.shutdown_steps) - 1)
         self.progress = int((step / len(self.shutdown_steps)) * 100)
+        if self.all_done:
+            self.status_text = "Goodbye"
+        else:
+            self.status_text = f"{self.shutdown_steps[self.current_step]}..."
         self.update()
         QApplication.processEvents()
-    
+
     def closeEvent(self, event):
         """Clean up audio when closing"""
         if PYGAME_AVAILABLE:
@@ -382,84 +457,8 @@ class DroidDeckShutdownSplash(QSplashScreen):
             except Exception:
                 pass
         super().closeEvent(event)
-        
-    def paintEvent(self, event):
-        """Draw shutdown splash"""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Trigger audio on the first paint — guarantees the screen is visible first
-        if not self._audio_started:
-            self._audio_started = True
-            QTimer.singleShot(50, self._init_audio)
-        
-        # Background gradient
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor("#0f1419"))
-        gradient.setColorAt(1, QColor("#1e2328"))
-        painter.fillRect(self.rect(), QBrush(gradient))
-        
-        # Title
-        painter.setPen(QColor("#1e90ff"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.08), QFont.Weight.Bold))
-        title_rect = QRect(
-            0,
-            int(self.height() * 0.20),
-            self.width(),
-            int(self.height() * 0.13)
-        )
-        painter.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, "DROID DECK")
-        
-        # Shutdown message
-        painter.setPen(QColor("#87ceeb"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.047)))
-        subtitle_rect = QRect(
-            0,
-            int(self.height() * 0.37),
-            self.width(),
-            int(self.height() * 0.10)
-        )
-        painter.drawText(subtitle_rect, Qt.AlignmentFlag.AlignCenter, "Shutting Down...")
-        
-        # Progress bar
-        progress_rect = QRect(
-            int(self.width() * 0.15),
-            int(self.height() * 0.53),
-            int(self.width() * 0.70),
-            int(self.height() * 0.02)
-        )
-        painter.setPen(QColor("#1e3a5f"))
-        painter.setBrush(QColor("#0f1419"))
-        painter.drawRoundedRect(progress_rect, 3, 3)
-        
-        # Progress fill
-        fill_width = int((int(self.width() * 0.70) * self.progress) / 100)
-        if fill_width > 0:
-            fill_rect = QRect(
-                int(self.width() * 0.15),
-                int(self.height() * 0.53),
-                fill_width,
-                int(self.height() * 0.02)
-            )
-            painter.setBrush(QColor("#1e90ff"))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(fill_rect, 3, 3)
-        
-        # Status text
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Arial", int(self.height() * 0.037)))
-        if self.current_step < len(self.shutdown_steps):
-            status_rect = QRect(
-                0,
-                int(self.height() * 0.63),
-                self.width(),
-                int(self.height() * 0.08)
-            )
-            painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, 
-                           self.shutdown_steps[self.current_step])
 
 
-# Function to show shutdown splash
 def show_shutdown_splash():
     """Show shutdown splash screen"""
     splash = DroidDeckShutdownSplash()

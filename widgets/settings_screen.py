@@ -24,6 +24,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from widgets.flow_dialog import FlowDialog, STEP_ERROR
+from core.version import save_build_info
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
@@ -497,6 +498,8 @@ class UpdateThread(QThread):
             extract_dir = temp_dir / "extracted"
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
+                # GitHub archives carry the commit id as the zip comment
+                commit = zip_ref.comment.decode("ascii", "ignore").strip()
 
             # Find the extracted folder (GitHub adds repo name prefix)
             extracted_folders = list(extract_dir.iterdir())
@@ -508,6 +511,10 @@ class UpdateThread(QThread):
             # Step 3: Update files (skip protected configs)
             self.progress_updated.emit("Installing update...")
             self._update_files(source_dir, self.app_root)
+            try:
+                save_build_info(self.app_root, self.branch, commit)
+            except Exception as e:
+                print(f"Warning: Could not record installed version: {e}")
 
             self.update_completed.emit(True, "Update completed successfully! Please restart the application.")
 
