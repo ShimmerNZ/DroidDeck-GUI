@@ -71,6 +71,7 @@ class WebSocketManager(QWebSocket):
         self.reconnect_timer.setSingleShot(True)
         self.reconnect_timer.timeout.connect(self.attempt_reconnect)
         self.reconnect_attempts = 0
+        self._shutting_down = False
 
         # Liveness watchdog state
         self._last_rx = time.monotonic()
@@ -168,6 +169,14 @@ class WebSocketManager(QWebSocket):
 
         self._flush_pending_commands()
 
+    def close(self, *args, **kwargs):
+        """Close for good: an app shutdown must not reconnect"""
+        self._shutting_down = True
+        self.reconnect_timer.stop()
+        self._connect_timer.stop()
+        self._liveness_timer.stop()
+        super().close(*args, **kwargs)
+
     def on_disconnected(self):
         """Handle disconnection."""
         self.logger.warning(f"WebSocket disconnected from {self.url}")
@@ -185,7 +194,7 @@ class WebSocketManager(QWebSocket):
         No attempt limit — retries indefinitely so network switches are
         recovered automatically without needing to restart the app.
         """
-        if self.reconnect_timer.isActive():
+        if self._shutting_down or self.reconnect_timer.isActive():
             return
 
         delay = min(
@@ -197,6 +206,8 @@ class WebSocketManager(QWebSocket):
 
     def attempt_reconnect(self):
         """Attempt to reconnect to WebSocket."""
+        if self._shutting_down:
+            return
         self.reconnect_attempts += 1
         self.logger.info(f"Reconnect attempt {self.reconnect_attempts}")
 
