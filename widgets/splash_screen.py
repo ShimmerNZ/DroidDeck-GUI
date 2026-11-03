@@ -165,14 +165,18 @@ class _StageSplash(QSplashScreen):
         painter.drawRect(QRectF(0, 0, STAGE_WIDTH, SPLASH_HEIGHT))
         painter.restore()
 
-        # Floor shadow
-        shadow_rect = QRectF(25, 246, 170, 20)
-        shadow = QRadialGradient(shadow_rect.center(), 85)
+        # Floor shadow: the gradient is squashed with the oval so it fades on every side
+        painter.save()
+        painter.translate(QPointF(STAGE_WIDTH / 2, 246))
+        painter.scale(1.0, 9 / 85)
+        shadow = QRadialGradient(QPointF(0, 0), 85)
         shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
-        shadow.setColorAt(0.7, QColor(0, 0, 0, 0))
+        shadow.setColorAt(0.6, QColor(0, 0, 0, 90))
+        shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(shadow))
-        painter.drawEllipse(shadow_rect)
+        painter.drawEllipse(QPointF(0, 0), 85, 85)
+        painter.restore()
 
         # Droid, bottom-aligned on the floor at its native pixel size
         if not self._droid.isNull():

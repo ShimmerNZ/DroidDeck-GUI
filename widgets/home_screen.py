@@ -91,6 +91,21 @@ def _make_icon(kind: str, color: str) -> QPixmap:
     return pixmap
 
 
+def _draw_floor_shadow(painter: QPainter, center: QPointF, half_width: float, half_height: float):
+    """Oval shadow whose gradient is squashed with the oval, so it fades vertically too"""
+    painter.save()
+    painter.translate(center)
+    painter.scale(1.0, half_height / half_width)
+    shadow = QRadialGradient(QPointF(0, 0), half_width)
+    shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
+    shadow.setColorAt(0.6, QColor(0, 0, 0, 90))
+    shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(shadow))
+    painter.drawEllipse(QPointF(0, 0), half_width, half_width)
+    painter.restore()
+
+
 class StageWidget(QWidget):
     """WALL-E standing in a theme-coloured spotlight with a floor shadow"""
 
@@ -132,13 +147,8 @@ class StageWidget(QWidget):
         painter.setBrush(QBrush(glow))
         painter.drawRect(0, 0, w, h)
 
-        # Floor shadow under the tracks
-        shadow_rect = QRectF(w / 2 - 120, h - 22, 240, 26)
-        shadow = QRadialGradient(shadow_rect.center(), 120)
-        shadow.setColorAt(0.0, QColor(0, 0, 0, 190))
-        shadow.setColorAt(0.7, QColor(0, 0, 0, 0))
-        painter.setBrush(QBrush(shadow))
-        painter.drawEllipse(shadow_rect)
+        # Floor shadow under the tracks: a soft oval fading out on every side
+        _draw_floor_shadow(painter, QPointF(w / 2, h - 9), 120, 8)
 
         # WALL-E, bottom-aligned on the floor
         if self._pixmap is not None and not self._pixmap.isNull():
