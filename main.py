@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Droid Deck - Main Entry Point
 Enhanced with SteamDeck audio support
@@ -79,8 +80,8 @@ def main():
     
     # Create Droid Deck application
     try:
+        # The application shows its own window once the startup splash closes
         droid_deck_app = DroidDeckApplication()
-        droid_deck_app.show()
         
         print("DroidDeck application started successfully")
         sys.exit(app.exec())

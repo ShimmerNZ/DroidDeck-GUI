@@ -61,7 +61,7 @@ class DroidDeckApplication(QMainWindow):
         # Real work counts toward this; the sleep only fires if a step completes
         # faster than the minimum. After all steps finish, the splash holds on
         # "DroidDeck Ready!" until the startup audio track ends.
-        STEP_MIN_DISPLAY = 0.3
+        STEP_MIN_DISPLAY = 0.5
 
         try:
             for i, (message, method) in enumerate(self.init_steps):

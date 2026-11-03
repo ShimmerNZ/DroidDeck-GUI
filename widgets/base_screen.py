@@ -502,14 +502,28 @@ class DynamicHeader(QFrame):
         if websocket is None:
             return
         try:
-            websocket.connected.connect(lambda: self.right_widget.set_websocket_connected(True))
-            websocket.disconnected.connect(lambda: self.right_widget.set_websocket_connected(False))
+            # Bound methods (not lambdas) so Qt drops the connections when the header is deleted
+            websocket.connected.connect(self._on_websocket_connected)
+            websocket.disconnected.connect(self._on_websocket_disconnected)
             # Set initial state
             self.right_widget.set_websocket_connected(websocket.is_connected())
             self._websocket = websocket
             self.logger.info("WebSocket signals connected to WiFi indicator")
         except Exception as e:
             self.logger.warning(f"Could not connect WebSocket signals: {e}")
+
+    def _on_websocket_connected(self):
+        self._set_ws_indicator(True)
+
+    def _on_websocket_disconnected(self):
+        self._set_ws_indicator(False)
+
+    def _set_ws_indicator(self, connected: bool):
+        try:
+            self.right_widget.set_websocket_connected(connected)
+        except RuntimeError:
+            # Indicator already deleted during shutdown
+            pass
 
     def _poll_websocket_state(self):
         """Periodically sync WiFi indicator with actual WebSocket state."""
@@ -545,6 +559,16 @@ class DynamicHeader(QFrame):
 
     def cleanup(self):
         """Cleanup header resources"""
+        if hasattr(self, '_ws_poll_timer'):
+            self._ws_poll_timer.stop()
+        websocket = getattr(self, '_websocket', None)
+        if websocket is not None:
+            for signal, slot in ((websocket.connected, self._on_websocket_connected),
+                                 (websocket.disconnected, self._on_websocket_disconnected)):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
         if hasattr(self, 'network_monitor'):
             self.network_monitor.stop()
 

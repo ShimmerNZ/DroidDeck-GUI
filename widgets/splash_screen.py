@@ -72,7 +72,7 @@ class _StageSplash(QSplashScreen):
 
     def __init__(self, steps):
         screen = QApplication.primaryScreen().geometry()
-        width = min(DESIGN_WIDTH, int(screen.width() * 0.6))
+        width = min(DESIGN_WIDTH, int(screen.width() * 0.44))
         height = int(width * DESIGN_HEIGHT / DESIGN_WIDTH)
 
         pixmap = QPixmap(width, height)
