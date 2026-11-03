@@ -1841,7 +1841,7 @@ class ControllerConfigScreen(BaseScreen):
         column.setSpacing(4)
         column.addWidget(self._caption(caption, track=False))
         column.addWidget(widget)
-        (layout or self.params_layout).addLayout(column)
+        (self.params_layout if layout is None else layout).addLayout(column)
         return column
 
     def _servo_combo(self, current: str, height: int = 44, font_size: int = 16) -> QComboBox:

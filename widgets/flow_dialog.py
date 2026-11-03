@@ -251,7 +251,7 @@ class FlowDialog(QDialog):
     # ---------- Building blocks ----------
 
     def _clear(self, layout=None):
-        layout = layout or self.body_layout
+        layout = self.body_layout if layout is None else layout
         while layout.count():
             child = layout.takeAt(0)
             if child.widget():
