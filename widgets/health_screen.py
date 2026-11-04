@@ -403,6 +403,12 @@ class HealthScreen(BaseScreen):
         self.runtime_label.setTextFormat(Qt.TextFormat.RichText)
         self.runtime_label.setText('<span style="color: #d8d8d8;">Runtime --</span>')
         pack_block.addWidget(self.runtime_label)
+
+        self.usage_label = QLabel()
+        self.usage_label.setFont(self._font(14))
+        self.usage_label.setTextFormat(Qt.TextFormat.RichText)
+        self.usage_label.setText(f'<span style="color: {self.TEXT_SOFT};">Used --</span>')
+        pack_block.addWidget(self.usage_label)
         pack_block.addStretch(1)
 
         pack_widget = QWidget()
@@ -954,6 +960,26 @@ class HealthScreen(BaseScreen):
             text += f'<span style="color: #d8d8d8;"> · {soc:.0f}%</span>'
             self.soc_bar.setValue(max(0, min(100, int(round(soc)))))
         self.runtime_label.setText(text)
+
+        self._update_usage_display(estimate)
+
+    def _update_usage_display(self, estimate: dict):
+        """Charge drawn, session length and peak current since the backend started"""
+        used_mah = estimate.get("mah_consumed")
+        session_minutes = estimate.get("session_minutes")
+        peak = estimate.get("peak_current_session")
+        if used_mah is None:
+            return
+
+        used = f"{used_mah / 1000:.1f} Ah" if used_mah >= 1000 else f"{used_mah:.0f} mAh"
+        parts = [f'Used <b style="color: {self.WHITE};">{used}</b>']
+        if session_minutes is not None:
+            total = int(round(session_minutes))
+            hours, mins = divmod(total, 60)
+            parts.append(f"{hours}h {mins}m" if hours else f"{mins} min")
+        if peak:
+            parts.append(f'peak <b style="color: {self.WHITE};">{peak:.0f} A</b>')
+        self.usage_label.setText(f'<span style="color: {self.TEXT_SOFT};">{" · ".join(parts)}</span>')
 
     def _update_maestro_display(self, hardware: dict, maestro_errors):
         """Maestro rows: connection, error code and error names when available"""
