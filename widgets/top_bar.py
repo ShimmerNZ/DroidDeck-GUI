@@ -406,7 +406,7 @@ class TopBar(QWidget):
         frame = self._alert_color or rgba(theme_manager.get("primary_color"), 0.45)
         self.panel.setStyleSheet(f"""
             QFrame#top_bar {{
-                background-color: rgba(12, 12, 12, 0.78);
+                background-color: {theme_manager.get("panel_bg")};
                 border: 1px solid {frame};
                 border-radius: 12px;
             }}
