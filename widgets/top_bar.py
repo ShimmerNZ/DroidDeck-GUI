@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel, QWidget
-from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen, QPolygonF
+from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen, QPolygonF, QLinearGradient
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 
 from core.logger import get_logger
@@ -21,12 +21,17 @@ from core.theme_manager import theme_manager
 from core.battery import battery_profile
 from threads.network_monitor import NetworkMonitorThread
 
-# Position over the header band of the background image
-BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT = 102, 70, 1084, 64
+# Recess over the header band, lined up with the edges of the body panel;
+# the bar sits inside it like the screens sit inside the body panel
+RECESS_X, RECESS_Y, RECESS_WIDTH, RECESS_HEIGHT = 102, 64, 1084, 76
+RECESS_INSET = 5
+RECESS_RADIUS = 16
+BAR_WIDTH = RECESS_WIDTH - 2 * RECESS_INSET
+BAR_HEIGHT = RECESS_HEIGHT - 2 * RECESS_INSET
 
 ROBOT_CELL_WIDTH = 190
 GAUGE_CELL_WIDTH = 250
-WIFI_CELL_WIDTH = 200
+WIFI_CELL_WIDTH = 160
 DECK_CELL_WIDTH = 180
 
 # Room left for the alert text: the status cell less its margins, icon and gaps
@@ -202,14 +207,16 @@ class WarningIcon(QWidget):
         painter.drawEllipse(QPointF(10, 14.7), 1.1, 1.1)
 
 
-class TopBar(QFrame):
-    """Status bar over the header band; parented to the main window"""
+class TopBar(QWidget):
+    """Status bar in its own recess over the header band; parented to the main window"""
 
     def __init__(self, parent: QWidget, pi_ip: str = "10.42.0.1"):
         super().__init__(parent)
         self.logger = get_logger("ui")
-        self.setObjectName("top_bar")
-        self.setGeometry(BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT)
+        self.setGeometry(RECESS_X, RECESS_Y, RECESS_WIDTH, RECESS_HEIGHT)
+        self.panel = QFrame(self)
+        self.panel.setObjectName("top_bar")
+        self.panel.setGeometry(RECESS_INSET, RECESS_INSET, BAR_WIDTH, BAR_HEIGHT)
         self.pi_ip = pi_ip
 
         # Last good readings; None until one arrives
@@ -252,8 +259,31 @@ class TopBar(QFrame):
 
     # ---------- Layout ----------
 
+    def paintEvent(self, event):
+        """Dark recess with a shaded top edge and a faint lit lower lip"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+
+        painter.setPen(QPen(QColor(0, 0, 0), 1))
+        painter.setBrush(QColor(10, 11, 13))
+        painter.drawRoundedRect(rect, RECESS_RADIUS, RECESS_RADIUS)
+
+        shade = QLinearGradient(0, 0, 0, RECESS_INSET * 2)
+        shade.setColorAt(0, QColor(0, 0, 0, 150))
+        shade.setColorAt(1, QColor(0, 0, 0, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(shade)
+        painter.drawRoundedRect(rect, RECESS_RADIUS, RECESS_RADIUS)
+
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        lip = QRectF(rect.left() + RECESS_RADIUS, rect.bottom() - 0.5,
+                     rect.width() - 2 * RECESS_RADIUS, 0)
+        painter.drawLine(lip.topLeft(), lip.topRight())
+
     def _build(self):
-        layout = QHBoxLayout(self)
+        layout = QHBoxLayout(self.panel)
         layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(0)
 
@@ -374,7 +404,7 @@ class TopBar(QFrame):
 
     def _apply_theme(self):
         frame = self._alert_color or rgba(theme_manager.get("primary_color"), 0.45)
-        self.setStyleSheet(f"""
+        self.panel.setStyleSheet(f"""
             QFrame#top_bar {{
                 background-color: rgba(12, 12, 12, 0.78);
                 border: 1px solid {frame};
