@@ -22,7 +22,7 @@ from core.battery import battery_profile
 from threads.network_monitor import NetworkMonitorThread
 
 # Position over the header band of the background image
-BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT = 100, 70, 1080, 64
+BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT = 102, 70, 1084, 64
 
 ROBOT_CELL_WIDTH = 190
 GAUGE_CELL_WIDTH = 250
