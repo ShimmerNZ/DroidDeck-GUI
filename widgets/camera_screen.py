@@ -747,6 +747,8 @@ class CameraFeedScreen(BaseScreen):
         theme_manager.register_callback(self._on_theme_changed)
 
     def _setup_screen(self):
+        wave_config = config_manager.get_wave_config()
+
         # Gesture sampling: one buffer of recent gestures per tracked person
         self.sample_buffers: Dict[int, deque] = {}
         self.last_gesture_time = 0
