@@ -964,10 +964,9 @@ class HealthScreen(BaseScreen):
         self._update_usage_display(estimate)
 
     def _update_usage_display(self, estimate: dict):
-        """Charge drawn, session length and peak current since the backend started"""
+        """Charge drawn and session length since the backend started"""
         used_mah = estimate.get("mah_consumed")
         session_minutes = estimate.get("session_minutes")
-        peak = estimate.get("peak_current_session")
         if used_mah is None:
             return
 
@@ -977,8 +976,6 @@ class HealthScreen(BaseScreen):
             total = int(round(session_minutes))
             hours, mins = divmod(total, 60)
             parts.append(f"{hours}h {mins}m" if hours else f"{mins} min")
-        if peak:
-            parts.append(f'peak <b style="color: {self.WHITE};">{peak:.0f} A</b>')
         self.usage_label.setText(f'<span style="color: {self.TEXT_SOFT};">{" · ".join(parts)}</span>')
 
     def _update_maestro_display(self, hardware: dict, maestro_errors):
