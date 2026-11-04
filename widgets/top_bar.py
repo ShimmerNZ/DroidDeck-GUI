@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel, QWidget
-from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen, QPolygonF, QLinearGradient
+from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen, QPolygonF, QLinearGradient, QImage
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 
 from core.logger import get_logger
@@ -72,6 +72,25 @@ def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0) -> QFont:
 def rgba(color: str, alpha: float) -> str:
     c = QColor(color)
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
+
+
+# Point inside the body panel of every background image; the bar takes its colour
+# from here so it matches the area behind the screens
+BODY_PANEL_SAMPLE = (640, 400)
+BODY_PANEL_FALLBACK = "#131313"
+_body_panel_colors = {}
+
+
+def body_panel_color() -> str:
+    """Colour of the current theme's body panel, read from its background image"""
+    path = theme_manager.get_image_path("background")
+    if path not in _body_panel_colors:
+        image = QImage(path)
+        if image.isNull():
+            _body_panel_colors[path] = BODY_PANEL_FALLBACK
+        else:
+            _body_panel_colors[path] = image.pixelColor(*BODY_PANEL_SAMPLE).name()
+    return _body_panel_colors[path]
 
 
 def bolt_polygon(cx: float, cy: float, scale: float) -> QPolygonF:
@@ -406,7 +425,7 @@ class TopBar(QWidget):
         frame = self._alert_color or rgba(theme_manager.get("primary_color"), 0.45)
         self.panel.setStyleSheet(f"""
             QFrame#top_bar {{
-                background-color: {theme_manager.get("panel_bg")};
+                background-color: {body_panel_color()};
                 border: 1px solid {frame};
                 border-radius: 12px;
             }}
