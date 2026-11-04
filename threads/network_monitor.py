@@ -21,6 +21,9 @@ class NetworkMonitorThread(QThread):
     # WiFi signal — emitted every 2 seconds
     wifi_updated = pyqtSignal(int, str, float)  # signal_percent, status_text, unused(0.0)
 
+    # Name of the connected WiFi network - emitted when it changes ("" when not connected)
+    ssid_updated = pyqtSignal(str)
+
     # Pi backend connectivity — emitted every 5 seconds independently
     connectivity_updated = pyqtSignal(float, bool)  # ping_ms, is_connected
 
@@ -36,6 +39,7 @@ class NetworkMonitorThread(QThread):
 
         self.running = False
         self.bandwidth_test_requested = False
+        self._last_ssid = None
 
         self.logger.info(f"Network monitor initialized for {pi_ip} on {self.platform}")
 
@@ -50,6 +54,11 @@ class NetworkMonitorThread(QThread):
                 wifi_percent = self.get_wifi_signal_strength()
                 status_text = self.format_wifi_status(wifi_percent)
                 self.wifi_updated.emit(wifi_percent, status_text, 0.0)
+
+                ssid = self.get_wifi_ssid()
+                if ssid != self._last_ssid:
+                    self._last_ssid = ssid
+                    self.ssid_updated.emit(ssid)
 
                 # Pi connectivity — independent 5s cadence
                 now = time.monotonic()
@@ -82,6 +91,34 @@ class NetworkMonitorThread(QThread):
         except Exception:
             self.logger.debug("Pi connectivity: unreachable")
             return 0.0, False
+
+    def get_wifi_ssid(self) -> str:
+        """Name of the connected WiFi network on Linux, or "" if unknown"""
+        if self.platform != "linux":
+            return ""
+        try:
+            dev_result = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=3)
+            iface_match = re.search(r'Interface\s+(\S+)', dev_result.stdout)
+            if iface_match:
+                link_result = subprocess.run(
+                    ['iw', iface_match.group(1), 'link'], capture_output=True, text=True, timeout=3
+                )
+                ssid_match = re.search(r'SSID:\s*(.+)', link_result.stdout)
+                if ssid_match:
+                    return ssid_match.group(1).strip()
+        except Exception as e:
+            self.logger.debug(f"iw SSID lookup failed: {e}")
+        try:
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'],
+                capture_output=True, text=True, timeout=3
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith('yes:'):
+                    return line.split(':', 1)[1].strip()
+        except Exception as e:
+            self.logger.debug(f"nmcli SSID lookup failed: {e}")
+        return ""
 
     def get_wifi_signal_strength(self) -> int:
         """Get WiFi signal strength percentage for current platform"""

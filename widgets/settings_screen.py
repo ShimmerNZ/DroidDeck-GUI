@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QSlider, QPushButton,
     QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
 )
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QValidator
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
@@ -33,9 +33,10 @@ from core.utils import error_boundary
 CARD_OBJECT_NAME = "settings_card"
 CARD_GAP = 12
 CONTENT_WIDTH = 1067
-NETWORK_CARD_HEIGHT = 190
-MIDDLE_CARD_HEIGHT = 232
-TEST_BUTTON_WIDTH = 120
+TOP_CARD_HEIGHT = 176
+NETWORK_CARD_WIDTH = 640
+MIDDLE_CARD_HEIGHT = 246
+TEST_BUTTON_WIDTH = 100
 
 # Fixed colours shared by every theme
 LABEL_GREY = "#9e9e9e"
@@ -133,6 +134,51 @@ def filled_button_style(fill: str) -> str:
             border-color: #444;
         }}
     """
+
+
+# Battery types in button order; the backend supplies each type's cell values
+BATTERY_TYPES = [("lithium", "Lithium"), ("lifepo4", "LiFePO4"), ("lead_acid", "Lead acid")]
+LEAD_ACID_CELLS_PER_BATTERY = 6
+LEAD_ACID_BATTERY_VOLTS = 12
+
+
+class OptionSpinBox(QSpinBox):
+    """Spin box that steps through a list of options shown by label"""
+
+    def __init__(self):
+        super().__init__()
+        self._options = []
+        self._labels = []
+        self.lineEdit().setReadOnly(True)
+
+    def set_options(self, options, labels, current):
+        """Replace the options and select current (or the nearest option)"""
+        self.blockSignals(True)
+        self._options = list(options)
+        self._labels = list(labels)
+        self.setRange(0, max(0, len(self._options) - 1))
+        if self._options:
+            nearest = min(range(len(self._options)), key=lambda i: abs(self._options[i] - current))
+            self.setValue(nearest)
+        self.blockSignals(False)
+        self.lineEdit().setText(self.textFromValue(self.value()))
+
+    def option(self):
+        """The selected option, or None before options are set"""
+        if not self._options:
+            return None
+        return self._options[self.value()]
+
+    def textFromValue(self, value):
+        if 0 <= value < len(self._labels):
+            return self._labels[value]
+        return ""
+
+    def valueFromText(self, text):
+        return self._labels.index(text) if text in self._labels else self.value()
+
+    def validate(self, text, pos):
+        return (QValidator.State.Acceptable, text, pos)
 
 
 class NetworkTestThread(QThread):
@@ -614,12 +660,18 @@ class SettingsScreen(BaseScreen):
         content_layout.setSpacing(CARD_GAP)
 
         # Network sits at the top so the fields stay visible above the on-screen keyboard
-        content_layout.addWidget(self._build_network())
+        top = QHBoxLayout()
+        top.setSpacing(CARD_GAP)
+        network = self._build_network()
+        network.setFixedWidth(NETWORK_CARD_WIDTH)
+        top.addWidget(network)
+        top.addWidget(self._build_wave(), 1)
+        content_layout.addLayout(top)
 
         middle = QHBoxLayout()
         middle.setSpacing(CARD_GAP)
         middle.addWidget(self._create_theme_selector(), 1)
-        middle.addWidget(self._build_wave(), 1)
+        middle.addWidget(self._build_battery(), 2)
         middle.addWidget(self._build_logging(), 1)
         content_layout.addLayout(middle)
 
@@ -634,6 +686,7 @@ class SettingsScreen(BaseScreen):
         self._server_update_pending = False
         self.subscribe("server_update_progress", self._on_server_update_progress)
         self.subscribe("server_update_complete", self._on_server_update_complete)
+        self.subscribe("battery_config_data", self._on_battery_config)
 
         # Load config on open
         self.load_config()
@@ -788,7 +841,7 @@ class SettingsScreen(BaseScreen):
 
     def _build_network(self) -> QFrame:
         """Network card: full-width URL fields, with the connection test beside the WebSocket"""
-        card, layout = self._make_card("NETWORK", NETWORK_CARD_HEIGHT)
+        card, layout = self._make_card("NETWORK", TOP_CARD_HEIGHT)
         layout.setSpacing(6)
 
         labels = [
@@ -803,18 +856,18 @@ class SettingsScreen(BaseScreen):
             row.setSpacing(12)
 
             lab = self._make_soft_label(text, 16)
-            lab.setFixedWidth(170)
+            lab.setFixedWidth(150)
 
             edit = QLineEdit()
-            edit.setFont(px_font(18))
-            edit.setFixedHeight(44)
+            edit.setFont(px_font(17))
+            edit.setFixedHeight(40)
             edit.setPlaceholderText(placeholder)
 
             row.addWidget(lab)
             row.addWidget(edit, 1)
 
             if key == "control_ws":
-                self.test_connection_btn = self._make_button("TEST", 44, 15)
+                self.test_connection_btn = self._make_button("TEST", 40, 15)
                 self.test_connection_btn.setFixedWidth(TEST_BUTTON_WIDTH)
                 self.test_connection_btn.clicked.connect(self.test_websocket_connection)
                 row.addWidget(self.test_connection_btn)
@@ -847,7 +900,7 @@ class SettingsScreen(BaseScreen):
             combo.setFont(px_font(15))
             combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
             combo.setFixedHeight(38)
-            combo.setFixedWidth(140)
+            combo.setFixedWidth(110)
 
             self.debug_combos[key] = combo
             row.addWidget(lab, 1)
@@ -859,7 +912,7 @@ class SettingsScreen(BaseScreen):
 
     def _build_wave(self) -> QFrame:
         """Wave detection card: 2x2 grid of controls"""
-        card, layout = self._make_card("WAVE DETECTION", MIDDLE_CARD_HEIGHT)
+        card, layout = self._make_card("WAVE DETECTION", TOP_CARD_HEIGHT)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -910,6 +963,243 @@ class SettingsScreen(BaseScreen):
         layout.addLayout(grid)
         layout.addStretch(1)
         return card
+
+    def _build_battery(self) -> QFrame:
+        """Battery card: type, pack size and capacity, with the derived alert levels"""
+        card, layout = self._make_card("BATTERY", MIDDLE_CARD_HEIGHT)
+        layout.setSpacing(6)
+
+        self._battery_table = None
+        self._battery_loaded_config = None
+
+        # Type buttons and series / voltage
+        type_row = QHBoxLayout()
+        type_row.setSpacing(12)
+
+        type_cell = QVBoxLayout()
+        type_cell.setSpacing(4)
+        type_cell.addWidget(self._make_caption("TYPE"))
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        self.battery_type_buttons = {}
+        for key, label in BATTERY_TYPES:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFont(px_font(15, bold=True))
+            btn.setFixedHeight(40)
+            btn.clicked.connect(lambda checked, chemistry=key: self._on_battery_type_selected(chemistry))
+            self.battery_type_buttons[key] = btn
+            buttons.addWidget(btn, 1)
+        type_cell.addLayout(buttons)
+        type_row.addLayout(type_cell, 1)
+
+        series_cell = QVBoxLayout()
+        series_cell.setSpacing(4)
+        self.battery_series_caption = self._make_caption("SERIES")
+        series_cell.addWidget(self.battery_series_caption)
+        self.battery_series_spin = OptionSpinBox()
+        self.battery_series_spin.setFont(px_font(17))
+        self.battery_series_spin.setFixedSize(170, 40)
+        self.battery_series_spin.valueChanged.connect(self._on_battery_series_changed)
+        series_cell.addWidget(self.battery_series_spin)
+        type_row.addLayout(series_cell)
+        layout.addLayout(type_row)
+
+        # Capacity
+        capacity_row = QHBoxLayout()
+        capacity_row.setSpacing(12)
+        self.battery_packs_spin = self._make_spinbox(1, 10, 1, "")
+        self.battery_parallel_spin = self._make_spinbox(1, 40, 12, "P")
+        self.battery_cell_mah_spin = self._make_spinbox(100, 20000, 3000, "")
+        self.battery_cell_mah_spin.setSingleStep(100)
+        self.battery_ah_spin = self._make_spinbox(1, 400, 20, "")
+        self.battery_capacity_cells = {}
+        for key, caption, spin in (
+            ("packs", "PACKS", self.battery_packs_spin),
+            ("parallel", "PARALLEL", self.battery_parallel_spin),
+            ("cell_mah", "CELL mAh", self.battery_cell_mah_spin),
+            ("battery_ah", "BATTERY Ah", self.battery_ah_spin),
+        ):
+            spin.setFont(px_font(17))
+            cell = QWidget()
+            cell.setStyleSheet("background: transparent;")
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(4)
+            cell_layout.addWidget(self._make_caption(caption))
+            cell_layout.addWidget(spin)
+            self.battery_capacity_cells[key] = cell
+            capacity_row.addWidget(cell, 1)
+        layout.addLayout(capacity_row)
+
+        # Alert levels, worked out from the type and series
+        alert_row = QHBoxLayout()
+        alert_row.setSpacing(12)
+        alert_caption = self._make_caption("ALERT LEVELS")
+        alert_caption.setFixedWidth(110)
+        alert_row.addWidget(alert_caption)
+        self.battery_alert_tiles = []
+        self.battery_alert_values = {}
+        for key, caption in (("low", "LOW"), ("critical", "CRITICAL")):
+            tile = QFrame()
+            tile.setFixedHeight(40)
+            tile_layout = QHBoxLayout(tile)
+            tile_layout.setContentsMargins(12, 0, 12, 0)
+            tile_layout.setSpacing(10)
+            name = QLabel(caption)
+            name.setFont(px_font(12, spacing=1.0))
+            name.setObjectName(f"battery_alert_{key}")
+            value = QLabel("--")
+            value.setFont(px_font(17))
+            tile_layout.addWidget(name)
+            tile_layout.addWidget(value, 1)
+            self.battery_alert_tiles.append((tile, name, value, key))
+            self.battery_alert_values[key] = value
+            alert_row.addWidget(tile, 1)
+        layout.addLayout(alert_row)
+
+        # Pack voltages, or a warning when the pack is beyond the voltage sensor
+        self.battery_info_label = QLabel("Waiting for the robot connection")
+        self.battery_info_label.setFont(px_font(13))
+        self.battery_info_label.setFixedHeight(20)
+        layout.addWidget(self.battery_info_label)
+
+        layout.addStretch(1)
+        self._set_battery_enabled(False)
+        self._show_capacity_fields("lithium")
+        return card
+
+    def _set_battery_enabled(self, enabled: bool):
+        """Battery controls only work once the backend has sent the battery types"""
+        for btn in self.battery_type_buttons.values():
+            btn.setEnabled(enabled)
+        for spin in (self.battery_series_spin, self.battery_packs_spin, self.battery_parallel_spin,
+                     self.battery_cell_mah_spin, self.battery_ah_spin):
+            spin.setEnabled(enabled)
+
+    def _show_capacity_fields(self, chemistry: str):
+        """Cell packs show parallel count and cell mAh; lead acid shows battery Ah"""
+        mode = "cells"
+        if self._battery_table and chemistry in self._battery_table:
+            mode = self._battery_table[chemistry].get("capacity_mode", "cells")
+        elif chemistry == "lead_acid":
+            mode = "battery"
+        self.battery_capacity_cells["parallel"].setVisible(mode == "cells")
+        self.battery_capacity_cells["cell_mah"].setVisible(mode == "cells")
+        self.battery_capacity_cells["battery_ah"].setVisible(mode == "battery")
+        self.battery_series_caption.setText("VOLTAGE" if chemistry == "lead_acid" else "SERIES")
+
+    def _selected_battery_type(self) -> str:
+        for key, btn in self.battery_type_buttons.items():
+            if btn.isChecked():
+                return key
+        return "lithium"
+
+    def _series_label(self, chemistry: str, series: int) -> str:
+        """Series option as shown: '4S · 14.8 V', or '36 V · 3 × 12 V' for lead acid"""
+        if chemistry == "lead_acid":
+            batteries = series // LEAD_ACID_CELLS_PER_BATTERY
+            text = f"{batteries * LEAD_ACID_BATTERY_VOLTS} V"
+            if batteries > 1:
+                text += f" · {batteries} × {LEAD_ACID_BATTERY_VOLTS} V"
+            return text
+        nominal = self._battery_table[chemistry]["cell"]["nominal"] * series
+        return f"{series}S · {nominal:.1f} V"
+
+    def _set_series_options(self, chemistry: str, current: int):
+        options = self._battery_table[chemistry]["series_options"]
+        labels = [self._series_label(chemistry, option) for option in options]
+        self.battery_series_spin.set_options(options, labels, current)
+
+    def _on_battery_type_selected(self, chemistry: str):
+        """Switch type: keep one button checked and refresh the series options"""
+        for key, btn in self.battery_type_buttons.items():
+            btn.setChecked(key == chemistry)
+        if not self._battery_table or chemistry not in self._battery_table:
+            return
+        current = self.battery_series_spin.option() or 0
+        self._set_series_options(chemistry, current)
+        self._show_capacity_fields(chemistry)
+        self._update_battery_display()
+
+    def _on_battery_series_changed(self, _index: int):
+        self._update_battery_display()
+
+    def _update_battery_display(self):
+        """Alert levels and pack voltages for the selected type and series"""
+        chemistry = self._selected_battery_type()
+        series = self.battery_series_spin.option()
+        if not self._battery_table or chemistry not in self._battery_table or series is None:
+            return
+        cell = self._battery_table[chemistry]["cell"]
+        self.battery_alert_values["low"].setText(f"{cell['low'] * series:.1f} V")
+        self.battery_alert_values["critical"].setText(f"{cell['critical'] * series:.1f} V")
+
+        full = cell["full"] * series
+        sensor_max = (self._battery_loaded_config or {}).get("sensor_max_voltage", full)
+        if full > sensor_max:
+            self.battery_info_label.setText(
+                f"{full:.1f} V full is above the sensor range ({sensor_max:.1f} V). "
+                "Rewire the divider first."
+            )
+            self.battery_info_label.setStyleSheet(
+                f"color: {theme_manager.get('red')}; background: transparent; border: none;"
+            )
+        else:
+            self.battery_info_label.setText(
+                f"Full {full:.1f} V · Nominal {cell['nominal'] * series:.1f} V · "
+                f"Empty {cell['empty'] * series:.1f} V"
+            )
+            self.battery_info_label.setStyleSheet(
+                f"color: {LABEL_GREY}; background: transparent; border: none;"
+            )
+
+    def _battery_form_config(self) -> dict:
+        """Battery config as currently set on the card"""
+        config = dict(self._battery_loaded_config or {})
+        config.update({
+            "chemistry": self._selected_battery_type(),
+            "series": self.battery_series_spin.option(),
+            "packs": self.battery_packs_spin.value(),
+            "parallel": self.battery_parallel_spin.value(),
+            "cell_mah": self.battery_cell_mah_spin.value(),
+            "battery_ah": self.battery_ah_spin.value(),
+        })
+        return config
+
+    def _request_battery_config(self):
+        if self.websocket and self.websocket.is_connected():
+            self.send_websocket_message("get_battery_config")
+
+    def _on_battery_config(self, data: dict):
+        """Fill the battery card from the backend's config and battery types"""
+        table = data.get("chemistries")
+        config = data.get("config")
+        if not isinstance(table, dict) or not isinstance(config, dict):
+            return
+        self._battery_table = table
+        self._battery_loaded_config = dict(config)
+
+        chemistry = config.get("chemistry", "lithium")
+        if chemistry not in table:
+            chemistry = next(iter(table))
+        for key, btn in self.battery_type_buttons.items():
+            btn.setChecked(key == chemistry)
+        self._set_series_options(chemistry, config.get("series", 0))
+        for key, spin in (("packs", self.battery_packs_spin), ("parallel", self.battery_parallel_spin),
+                          ("cell_mah", self.battery_cell_mah_spin), ("battery_ah", self.battery_ah_spin)):
+            if key in config:
+                spin.setValue(int(config[key]))
+        self._show_capacity_fields(chemistry)
+        self._set_battery_enabled(True)
+        self._update_battery_display()
+        if data.get("saved"):
+            self.logger.info("Battery config saved on backend")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_battery_table", None) is None:
+            self._request_battery_config()
 
     # ---------- Buttons row ----------
 
@@ -968,8 +1258,19 @@ class SettingsScreen(BaseScreen):
             self._update_input_style(edit)
         for combo in self.debug_combos.values():
             self._update_combo_style(combo)
-        for spin in (self.sample_duration_spin, self.sample_rate_spin, self.stand_down_spin):
+        for spin in (self.sample_duration_spin, self.sample_rate_spin, self.stand_down_spin,
+                     self.battery_series_spin, self.battery_packs_spin, self.battery_parallel_spin,
+                     self.battery_cell_mah_spin, self.battery_ah_spin):
             self._update_spinbox_style(spin)
+
+        for btn in self.battery_type_buttons.values():
+            btn.setStyleSheet(button_style(checked_fill=primary))
+        red = theme_manager.get("red")
+        for tile, name, value, key in self.battery_alert_tiles:
+            tile.setStyleSheet(f"QFrame {{ background-color: {TILE_BG}; border: none; border-radius: 6px; }}")
+            name.setStyleSheet(f"color: {red if key == 'critical' else primary}; background: transparent;")
+            value.setStyleSheet("color: white; background: transparent;")
+        self._update_battery_display()
 
         self._update_theme_button_styles()
 
@@ -1184,6 +1485,14 @@ class SettingsScreen(BaseScreen):
                         "network": self.debug_combos["network_debug_combo"].currentText(),
                     }
                 )
+
+                # Battery settings live on the Pi; only send them when changed,
+                # since applying them restarts the run-time estimate
+                if self._battery_table is not None:
+                    battery_config = self._battery_form_config()
+                    if battery_config != self._battery_loaded_config:
+                        self.logger.info(f"Sending battery config to backend: {battery_config}")
+                        self.send_websocket_message("save_battery_config", config=battery_config)
             else:
                 self.logger.warning("WebSocket not available - settings not sent to backend")
 

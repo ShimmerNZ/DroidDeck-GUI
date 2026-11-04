@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QColor
 from core.theme_manager import theme_manager
 from core.logger import get_logger
-from core.utils import BATTERY_LOW_VOLTAGE, BATTERY_CRITICAL_VOLTAGE
+from core.battery import battery_profile
 
 
 class VoltageAlarmMonitor(QObject):
@@ -72,13 +72,15 @@ class VoltageAlarmMonitor(QObject):
 
     def _evaluate(self, average: float):
         """Return the alarm level for an averaged voltage, with clear margin"""
-        if average < BATTERY_CRITICAL_VOLTAGE:
+        critical = battery_profile.critical_voltage
+        low = battery_profile.low_voltage
+        if average < critical:
             return "CRITICAL"
-        if self._level == "CRITICAL" and average < BATTERY_CRITICAL_VOLTAGE + self.CLEAR_MARGIN:
+        if self._level == "CRITICAL" and average < critical + self.CLEAR_MARGIN:
             return "CRITICAL"
-        if average < BATTERY_LOW_VOLTAGE:
+        if average < low:
             return "LOW"
-        if self._level in ("LOW", "CRITICAL") and average < BATTERY_LOW_VOLTAGE + self.CLEAR_MARGIN:
+        if self._level in ("LOW", "CRITICAL") and average < low + self.CLEAR_MARGIN:
             return "LOW"
         return None
 

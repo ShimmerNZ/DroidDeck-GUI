@@ -5,6 +5,7 @@ WALL-E Control System - Health Monitoring Screen (Themed)
 Displays pack voltage and current, motion, Raspberry Pi and network status
 """
 
+import math
 import time
 from collections import deque
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
@@ -17,7 +18,8 @@ from core.config_manager import config_manager as _config_manager
 
 from widgets.base_screen import BaseScreen
 from core.theme_manager import theme_manager
-from core.utils import error_boundary, BATTERY_LOW_VOLTAGE, BATTERY_CRITICAL_VOLTAGE
+from core.utils import error_boundary
+from core.battery import battery_profile
 from widgets.bandwidth_test_splash import show_bandwidth_test_splash
 
 
@@ -282,8 +284,6 @@ class HealthScreen(BaseScreen):
         self.graph_widget.setMouseEnabled(x=False, y=False)
         self.graph_widget.showGrid(x=False, y=True, alpha=0.15)
 
-        # 4S pack range - zoomed so sag and the alarm thresholds are visible
-        self.graph_widget.setYRange(12, 17, padding=0)
         self.graph_widget.setXRange(-self.graph_window_seconds, 0, padding=0)
 
         tick_font = self._font(11)
@@ -293,16 +293,17 @@ class HealthScreen(BaseScreen):
             axis.setPen("#3a3a3a")
             axis.setStyle(tickFont=tick_font)
 
-        plot.getAxis("left").setTicks([[(v, f"{v}V" if v == 17 else str(v)) for v in range(12, 18)]])
         half = int(self.graph_window_seconds / 2)
         full = int(self.graph_window_seconds)
         plot.getAxis("bottom").setTicks([[(-full, f"-{full} s"), (-half, f"-{half} s"), (0, "now")]])
 
         # Battery alarm thresholds
-        self.low_threshold_line = pg.InfiniteLine(pos=BATTERY_LOW_VOLTAGE, angle=0)
-        self.critical_threshold_line = pg.InfiniteLine(pos=BATTERY_CRITICAL_VOLTAGE, angle=0)
+        self.low_threshold_line = pg.InfiniteLine(pos=battery_profile.low_voltage, angle=0)
+        self.critical_threshold_line = pg.InfiniteLine(pos=battery_profile.critical_voltage, angle=0)
         plot.addItem(self.low_threshold_line)
         plot.addItem(self.critical_threshold_line)
+        self._apply_battery_range()
+        battery_profile.changed.connect(self._apply_battery_range)
 
         # Current curves on a second view box with the right-hand axis
         self.current_view = pg.ViewBox()
@@ -325,6 +326,21 @@ class HealthScreen(BaseScreen):
         self.voltage_curve = plot.plot(antialias=True)
 
         self._update_graph_pens()
+
+    def _apply_battery_range(self):
+        """Zoom the voltage axis to the pack's range and move the alarm lines"""
+        bottom = math.floor(battery_profile.empty_voltage)
+        top = max(math.ceil(battery_profile.full_voltage), bottom + 2)
+        span = top - bottom
+        step = 1 if span <= 6 else (2 if span <= 12 else 5)
+
+        ticks = list(range(math.ceil(bottom / step) * step, top + 1, step))
+        self.graph_widget.setYRange(bottom, top, padding=0)
+        self.graph_widget.getPlotItem().getAxis("left").setTicks(
+            [[(v, f"{v}V" if v == ticks[-1] else str(v)) for v in ticks]]
+        )
+        self.low_threshold_line.setPos(battery_profile.low_voltage)
+        self.critical_threshold_line.setPos(battery_profile.critical_voltage)
 
     def _create_graph_card(self) -> QFrame:
         """Graph card with a compact legend in the header"""
@@ -798,9 +814,9 @@ class HealthScreen(BaseScreen):
 
     def _pack_state(self, voltage: float):
         """Return (state text, colour) for a pack voltage"""
-        if voltage < BATTERY_CRITICAL_VOLTAGE:
+        if voltage < battery_profile.critical_voltage:
             return "CRITICAL", theme_manager.get("red")
-        if voltage < BATTERY_LOW_VOLTAGE:
+        if voltage < battery_profile.low_voltage:
             return "LOW", self.AMBER
         return "GOOD", theme_manager.get("green")
 

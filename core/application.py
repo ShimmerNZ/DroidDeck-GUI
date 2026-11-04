@@ -6,7 +6,7 @@ Droid Deck Control System - Main Application Class with Front Splash & Shutdown
 
 import os
 import time
-from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QHBoxLayout, QFrame, QWidget, QPushButton, QApplication
+from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QHBoxLayout, QFrame, QWidget, QPushButton, QApplication, QLabel
 from PyQt6.QtGui import QPixmap, QPalette, QBrush, QIcon, QFont
 from PyQt6.QtCore import Qt, QTimer, QSize
 
@@ -14,8 +14,9 @@ from .config_manager import config_manager
 from .logger import get_logger, logger_manager
 from .websocket_manager import WebSocketManager
 from .theme_manager import theme_manager
+from .battery import battery_profile
 from .utils import MemoryManager, error_boundary
-from widgets.base_screen import DynamicHeader
+from widgets.top_bar import TopBar
 from widgets.home_screen import HomeScreen
 from widgets.camera_screen import CameraFeedScreen  
 from widgets.health_screen import HealthScreen
@@ -164,8 +165,7 @@ class DroidDeckApplication(QMainWindow):
     
     def _setup_screens(self):
         """Initialize all application screens"""
-        self.header = DynamicHeader("Home", pi_ip=self.pi_ip)
-        self.header.setFixedWidth(1280)
+        self.header = TopBar(self, pi_ip=self.pi_ip)
         self.header.connect_websocket_signals(self.websocket)
         self.stack = QStackedWidget()
 
@@ -240,10 +240,12 @@ class DroidDeckApplication(QMainWindow):
         self.voltage_alarm = VoltageAlarmMonitor(self)
         self.websocket.register_handler("telemetry", self._on_telemetry)
         self.websocket.register_handler("failsafe_state", self._on_failsafe_state)
-        # The connection may have come up during startup before the handler
-        # existed, so ask again now that the reply can be applied
+        self.websocket.register_handler("battery_config_data", self._on_battery_config)
+        # The connection may have come up during startup before the handlers
+        # existed, so ask again now that the replies can be applied
         if self.websocket.is_connected():
             self._request_failsafe_state()
+            self._request_battery_config()
     
     def _setup_controller_thread(self):
         """Initialize and start the Steam Deck controller thread with thread-safe WebSocket"""
@@ -323,6 +325,7 @@ class DroidDeckApplication(QMainWindow):
         ws = WebSocketManager(ws_url)
         # Request failsafe state from backend every time we (re)connect
         ws.connected.connect(self._request_failsafe_state)
+        ws.connected.connect(self._request_battery_config)
         return ws
 
     def _request_failsafe_state(self):
@@ -332,6 +335,19 @@ class DroidDeckApplication(QMainWindow):
             if hasattr(self, 'logger'):
                 self.logger.info("Requested failsafe state sync from backend")
     
+    def _request_battery_config(self):
+        """Ask backend for the battery profile - called on every (re)connect."""
+        if hasattr(self, 'websocket'):
+            self.websocket.send_command("get_battery_config")
+
+    def _on_battery_config(self, data: dict):
+        """Apply the backend's battery thresholds to the header, graphs and alarm"""
+        if battery_profile.apply(data.get("profile")) and hasattr(self, 'logger'):
+            self.logger.info(
+                f"Battery profile updated: low {battery_profile.low_voltage}V, "
+                f"critical {battery_profile.critical_voltage}V"
+            )
+
     def _setup_memory_management(self):
         """Setup periodic memory cleanup"""
         self.memory_timer = QTimer()
@@ -442,14 +458,16 @@ class DroidDeckApplication(QMainWindow):
         # CHANGE: Reduce top spacing to move header down by 5px
         layout.addSpacing(75)  # Was 60, now 55 (5px less)
         
-        # Header container
-        header_container = QWidget()
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.addWidget(self.header)
-        header_container.setLayout(header_layout)
-        
-        layout.addWidget(header_container)
+        # The header row keeps its height so the screens stay where they are;
+        # the top bar is drawn over it at a fixed position
+        header_row = QWidget()
+        header_row_layout = QHBoxLayout(header_row)
+        header_row_layout.setContentsMargins(0, 7, 0, 0)
+        header_row_spacer = QLabel(" ")
+        header_row_spacer.setFont(QFont("Arial", 30))
+        header_row_layout.addWidget(header_row_spacer)
+
+        layout.addWidget(header_row)
         layout.addSpacing(2)
         layout.addWidget(self.stack)
         layout.addWidget(nav_frame)
@@ -460,6 +478,7 @@ class DroidDeckApplication(QMainWindow):
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+        self.header.raise_()
         
         # Set initial screen
         self.switch_screen(self.home_screen, "Home")
@@ -504,7 +523,6 @@ class DroidDeckApplication(QMainWindow):
     def switch_screen(self, screen, name: str):
         """Switch to specified screen and update navigation with themed icons"""
         self.stack.setCurrentWidget(screen)
-        self.header.set_screen_name(name)
         
         # Update navigation icons with theme support
         for btn_name, nav_info in self.nav_buttons.items():
@@ -564,11 +582,11 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.blockSignals(False)
     
     def _on_telemetry(self, data: dict):
-        """Update header voltage and the battery alarm from telemetry"""
+        """Update the top bar and the battery alarm from telemetry"""
         voltage = data.get("battery_voltage") or 0.0
         if voltage > 0:
-            self.header.update_voltage(voltage)
             self.voltage_alarm.add_reading(voltage)
+        self.header.update_telemetry(data)
 
     def _on_failsafe_state(self, data: dict):
         """Apply the backend's authoritative failsafe state without sending anything back"""
