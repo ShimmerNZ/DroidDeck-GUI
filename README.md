@@ -16,7 +16,7 @@ A PyQt6 control interface for droid animatronics, built to run full screen on a 
 ### User Interface
 - **Card-style screens** at the Deck's native 1280×800
 - **Themes**: Wall-e and Star Wars, each with its own droid image, icons, background and sounds
-- **Dynamic header**: Connection status, Wi-Fi signal, battery and failsafe button on every screen
+- **Top bar**: Robot and Steam Deck battery, track and electronics current, active alerts and the Wi-Fi link (network name and ping) on every screen
 - **Startup and shutdown screens** showing progress, GUI version and installed commit
 
 ### Technical Highlights
@@ -157,6 +157,7 @@ python main.py
 ├── main.py                        # Application entry point
 ├── core/
 │   ├── application.py             # Main window, startup/shutdown sequence, navigation
+│   ├── battery.py                 # Robot battery thresholds from the backend
 │   ├── config_manager.py          # JSON config loading and saving
 │   ├── deck.py                    # Steam Deck HID reader with IMU support
 │   ├── http_client.py             # Non-blocking HTTP requests
@@ -166,7 +167,7 @@ python main.py
 │   ├── version.py                 # GUI version and installed commit
 │   └── websocket_manager.py       # Backend WebSocket link
 ├── widgets/
-│   ├── base_screen.py             # Shared screen base and dynamic header
+│   ├── base_screen.py             # Shared screen base
 │   ├── home_screen.py
 │   ├── camera_screen.py
 │   ├── health_screen.py
@@ -179,7 +180,8 @@ python main.py
 │   ├── flow_dialog.py             # Themed dialogs: updates, network test, exit/restart
 │   ├── bandwidth_test_splash.py
 │   ├── voltage_alert_splash.py
-│   └── splash_screen.py           # Startup and shutdown screens
+│   ├── splash_screen.py           # Startup and shutdown screens
+│   └── top_bar.py                 # Status bar across the top of every screen
 ├── threads/
 │   ├── image_processor.py         # Camera stream, gestures and person detection
 │   ├── person_tracker.py          # Stable IDs for tracked people
@@ -301,7 +303,7 @@ Available behaviours: `direct_servo`, `multi_servo`, `toggle_servo`, `joystick_p
 2. **Launch DroidDeck**
    - Gaming Mode: launch "DroidDeck" from the Steam library
    - Desktop Mode: `~/DroidDeck/launch.sh`
-3. **Check the link**: the header shows the backend connection; Settings → **NETWORK TEST** checks the WebSocket, camera proxy and ESP32 camera
+3. **Check the link**: the top bar shows the Wi-Fi network, ping and backend connection; Settings → **NETWORK TEST** checks the WebSocket, camera proxy and ESP32 camera
 4. **Set up the robot**: configure channels on the Servo screen, mappings on the Controller screen and scenes on the Scene screen
 
 ## 🎮 Steam Deck Controls
@@ -486,7 +488,7 @@ On other systems, logs are printed to the terminal.
 
 ## 🔒 Safety Features
 
-- **Failsafe button** in the header on every screen: stops all motion on the robot; state is kept in sync with the backend
+- **Failsafe button** on every screen: stops all motion on the robot; state is kept in sync with the backend
 - **Failsafe release is never queued**: if the link is down, releasing failsafe is dropped rather than sent later
 - **Connection monitoring**: Automatic reconnection with backoff
 - **Battery alerts**: Low (below 14.0 V) and critical (below 13.2 V) pack voltage alerts, averaged over 10 seconds so track current sag doesn't trigger false alarms
