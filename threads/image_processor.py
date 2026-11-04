@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Image Processing Thread - Camera stream and gesture detection.
+Image Processing Thread - Camera stream, person tracking and gestures.
+One multi-person MediaPipe pose model finds everyone in view; each person's
+landmarks give their box for the tracker and any raised-arm gesture.
 MediaPipe is imported lazily on first tracking enable so normal camera use
 has no startup cost and does not require MediaPipe to be installed.
 """
@@ -15,15 +17,15 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger
 from core.utils import error_boundary
-from threads.person_tracker import PersonTracker
+from threads.person_tracker import PersonTracker, Detection
 
 # Overlay colours are RGB, matching the frame buffer
 PERSON_BOX_COLOR = (230, 230, 230)
 FOCUS_BOX_COLOR = (255, 190, 0)
 ATTENTION_STATE_TIMEOUT = 5.0
 
-# Person/body detection (separate from the single-person gesture pose below):
-# a multi-pose MediaPipe Tasks model, tracking up to this many people at once
+# Person/body detection: a multi-pose MediaPipe Tasks model, tracking up to
+# this many people at once
 POSE_LANDMARKER_MODEL_FILENAME = "pose_landmarker_lite.task"
 MAX_TRACKED_PEOPLE = 4
 # A landmark counts toward a person's bounding box only above this visibility
@@ -36,9 +38,16 @@ MIN_VISIBLE_LANDMARKS = 4
 # hand landmarks flicker across the visibility cut-off far more than the
 # head, torso and legs do
 BOX_EXCLUDED_LANDMARKS = frozenset(range(13, 23))
-# The single-person gesture model runs on 1 in this many frames; the frames in
-# between reuse its last result. Multi-person detection still runs every frame.
-GESTURE_DETECTION_INTERVAL = 4
+# MediaPipe pose landmark indices
+LEFT_SHOULDER, RIGHT_SHOULDER = 11, 12
+LEFT_ELBOW, RIGHT_ELBOW = 13, 14
+LEFT_WRIST, RIGHT_WRIST = 15, 16
+# Skeleton lines drawn on the overlay: shoulders, arms, torso and legs
+SKELETON_CONNECTIONS = (
+    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
+    (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28),
+)
+GESTURE_LABELS = {"left_wave": "WAVE", "right_wave": "WAVE", "hands_up": "HANDS UP"}
 
 
 def _read_mjpeg_part(raw):
@@ -78,11 +87,12 @@ def _read_mjpeg_part(raw):
 
 class ProcessedFrameData:
     """Container for processed frame data"""
-    def __init__(self, frame=None, gesture_detected=None, pose_landmarks=None, people=None):
+    def __init__(self, frame=None, people=None):
         self.frame = frame
-        self.gesture_detected = gesture_detected  # None, "left_wave", "right_wave", or "hands_up"
-        self.pose_landmarks = pose_landmarks
-        self.people = people  # None when person detection is unavailable, else a list of tracked people
+        # None when person detection is unavailable, else a list of tracked
+        # people; each carries a "gesture" of None, "left_wave", "right_wave"
+        # or "hands_up"
+        self.people = people
 
 class ImageProcessingThread(QThread):
     """Thread for processing camera stream with enhanced gesture detection"""
@@ -104,26 +114,23 @@ class ImageProcessingThread(QThread):
 
         # MediaPipe state - initialised lazily when tracking is first enabled
         # so startup is fast and MediaPipe is not required for basic streaming
-        self.mp_pose = None
-        self.pose = None
-        self.mp_drawing = None
-        self.pose_detection_available = False
         self._mediapipe_load_attempted = False
         self._mp_module = None
 
-        # Last gesture model result, reused on frames where the model is skipped
-        self._gesture_frame_counter = 0
-        self._last_gesture_landmarks = None
-        self._last_gesture = None
-
         # Multi-pose body detection feeds the person tracker used for
-        # attention behaviour - separate from self.pose above, which is a
-        # single-person model used only for gesture detection
+        # attention behaviour and gestures
         self.person_landmarker = None
         self.people_detection_available = False
         self.person_tracker = PersonTracker()
         self._tracker_reset_pending = False
         self._pose_timestamp_ms = 0
+
+        # Overlays are only drawn while the camera screen is on show
+        self.display_active = True
+
+        # Detection time per frame, averaged into the stats once a second
+        self._detect_ms_total = 0.0
+        self._detect_count = 0
 
         # Attention state reported by the backend, used to highlight the focused person
         self._attention_state = None
@@ -154,16 +161,17 @@ class ImageProcessingThread(QThread):
         self.logger.info("Image processing thread stopped")
 
     def set_tracking_enabled(self, enabled):
-        """Enable/disable gesture tracking"""
+        """Enable/disable person tracking and gestures"""
         self.tracking_enabled = enabled
         if enabled and not self._mediapipe_load_attempted:
             self._load_mediapipe()
         if not enabled:
             self._tracker_reset_pending = True
-            self._gesture_frame_counter = 0
-            self._last_gesture_landmarks = None
-            self._last_gesture = None
-        self.logger.info(f"Gesture tracking {'enabled' if enabled else 'disabled'}")
+        self.logger.info(f"Person tracking {'enabled' if enabled else 'disabled'}")
+
+    def set_display_active(self, active):
+        """Draw overlays only while the camera screen is showing"""
+        self.display_active = active
 
     def _load_mediapipe(self):
         """Lazily import and initialise MediaPipe on first tracking enable.
@@ -172,17 +180,6 @@ class ImageProcessingThread(QThread):
         try:
             import mediapipe as mp
             self._mp_module = mp
-            self.mp_pose = mp.solutions.pose
-            self.pose = self.mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                enable_segmentation=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self.mp_drawing = mp.solutions.drawing_utils
-            self.pose_detection_available = True
-            self.logger.info("MediaPipe pose detection initialised")
         except ImportError:
             self.logger.warning("MediaPipe not available - pose detection disabled")
             return
@@ -352,9 +349,14 @@ class ImageProcessingThread(QThread):
                     # Emit stats every second
                     if current_time - last_stats_time >= 1.0:
                         fps = frame_count_local / (current_time - last_stats_time)
+                        detect_ms = (self._detect_ms_total / self._detect_count
+                                     if self._detect_count else None)
+                        self._detect_ms_total = 0.0
+                        self._detect_count = 0
                         self.stats_updated.emit({
                             'fps': fps,
                             'frame_count': self.frame_count,
+                            'detect_ms': detect_ms,
                             'running': True
                         })
                         frame_count_local = 0
@@ -421,60 +423,14 @@ class ImageProcessingThread(QThread):
                 new_height = int(height * scale)
                 frame_rgb = cv2.resize(frame_rgb, (new_width, new_height))
 
-            gesture_detected = None
-            pose_landmarks = None
-            people = self._detect_people(frame_rgb) if self.tracking_enabled else None
+            tracked = self._detect_people(frame_rgb) if self.tracking_enabled else None
 
-            # Gesture detection if available and tracking enabled
-            if self.pose_detection_available and self.pose and self.tracking_enabled:
-                try:
-                    # Run the gesture model on 1 in GESTURE_DETECTION_INTERVAL
-                    # frames and reuse its last result on the frames between,
-                    # so gestures are still reported on every frame
-                    if self._gesture_frame_counter % GESTURE_DETECTION_INTERVAL == 0:
-                        # MediaPipe expects RGB, and we already have RGB
-                        results = self.pose.process(frame_rgb)
-                        self._last_gesture_landmarks = results.pose_landmarks
-                        self._last_gesture = (
-                            self._detect_gestures(results.pose_landmarks.landmark)
-                            if results.pose_landmarks else None
-                        )
-                    self._gesture_frame_counter += 1
-
-                    if self._last_gesture_landmarks:
-                        pose_landmarks = self._last_gesture_landmarks
-
-                        # Draw pose landmarks on frame (convert to BGR for drawing, then back to RGB)
-                        frame_bgr_for_drawing = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                        self.mp_drawing.draw_landmarks(
-                            frame_bgr_for_drawing,
-                            pose_landmarks,
-                            self.mp_pose.POSE_CONNECTIONS
-                        )
-                        frame_rgb = cv2.cvtColor(frame_bgr_for_drawing, cv2.COLOR_BGR2RGB)
-
-                        gesture_detected = self._last_gesture
-
-                        # Draw gesture indicator if detected
-                        if gesture_detected:
-                            frame_bgr_for_text = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                            gesture_text = gesture_detected.replace("_", " ").upper() + " DETECTED!"
-                            color = (0, 255, 0) if gesture_detected != "hands_up" else (255, 165, 0)  # Green for waves, orange for hands up
-                            cv2.putText(frame_bgr_for_text, gesture_text, (10, 30),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                            frame_rgb = cv2.cvtColor(frame_bgr_for_text, cv2.COLOR_BGR2RGB)
-
-                except Exception as e:
-                    self.logger.debug(f"Pose detection error: {e}")
-
-            if people is not None:
-                self._draw_people_overlay(frame_rgb, people)
+            if tracked is not None and self.display_active:
+                self._draw_people_overlay(frame_rgb, tracked)
 
             return ProcessedFrameData(
                 frame=frame_rgb,
-                gesture_detected=gesture_detected,
-                pose_landmarks=pose_landmarks,
-                people=people
+                people=None if tracked is None else [t.as_dict() for t in tracked]
             )
 
         except Exception as e:
@@ -482,27 +438,37 @@ class ImageProcessingThread(QThread):
             return None
 
     def _draw_people_overlay(self, frame_rgb, people):
-        """Draw a box and id for each tracked person, highlighting the focused one,
-        and show the attention state along the bottom edge."""
+        """Draw a skeleton, box and id for each tracked person, highlighting the
+        focused one and any gesture, and show the attention state along the
+        bottom edge."""
         try:
             height, width = frame_rgb.shape[:2]
             state_fresh = (time.monotonic() - self._attention_updated_at) < ATTENTION_STATE_TIMEOUT
             focus_id = self._attention_focus_id if state_fresh else None
 
             for person in people:
-                focused = person["id"] == focus_id
+                focused = person.track_id == focus_id
                 color = FOCUS_BOX_COLOR if focused else PERSON_BOX_COLOR
                 thickness = 3 if focused else 1
 
-                half_w = person["w"] * width / 2.0
-                half_h = person["h"] * height / 2.0
-                x1 = int(person["cx"] * width - half_w)
-                y1 = int(person["cy"] * height - half_h)
-                x2 = int(person["cx"] * width + half_w)
-                y2 = int(person["cy"] * height + half_h)
+                points = person.points
+                for a, b in SKELETON_CONNECTIONS:
+                    if a < len(points) and b < len(points) and points[a] and points[b]:
+                        pa = (int(points[a][0] * width), int(points[a][1] * height))
+                        pb = (int(points[b][0] * width), int(points[b][1] * height))
+                        cv2.line(frame_rgb, pa, pb, color, 1)
+
+                half_w = person.w * width / 2.0
+                half_h = person.h * height / 2.0
+                x1 = int(person.cx * width - half_w)
+                y1 = int(person.cy * height - half_h)
+                x2 = int(person.cx * width + half_w)
+                y2 = int(person.cy * height + half_h)
                 cv2.rectangle(frame_rgb, (x1, y1), (x2, y2), color, thickness)
 
-                label = f"#{person['id']}"
+                label = f"#{person.track_id}"
+                if person.gesture:
+                    label += f" {GESTURE_LABELS.get(person.gesture, '')}"
                 label_y = y1 - 6 if y1 > 22 else y2 + 18
                 cv2.putText(frame_rgb, label, (x1, label_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
@@ -514,7 +480,7 @@ class ImageProcessingThread(QThread):
             self.logger.debug(f"People overlay error: {e}")
 
     def _detect_people(self, frame_rgb):
-        """Detect bodies and return the tracked people as a list of dicts.
+        """Detect bodies and return the tracked people.
         Returns None when person detection is unavailable so callers can tell
         'nobody in view' (empty list) apart from 'not looking'."""
         if not (self.people_detection_available and self.person_landmarker):
@@ -531,7 +497,10 @@ class ImageProcessingThread(QThread):
             # Tasks API requires strictly increasing timestamps in VIDEO mode
             timestamp_ms = max(int(time.monotonic() * 1000), self._pose_timestamp_ms + 1)
             self._pose_timestamp_ms = timestamp_ms
+            started = time.perf_counter()
             result = self.person_landmarker.detect_for_video(mp_image, timestamp_ms)
+            self._detect_ms_total += (time.perf_counter() - started) * 1000.0
+            self._detect_count += 1
         except Exception as e:
             self.logger.debug(f"Person detection error: {e}")
             return None
@@ -553,57 +522,42 @@ class ImageProcessingThread(QThread):
             box_w = min(1.0, x_max - x_min)
             box_h = min(1.0, y_max - y_min)
             score = sum(lm.visibility for lm in visible) / len(visible)
-            detections.append((cx, cy, box_w, box_h, score))
+
+            shoulder_width = 0.0
+            left, right = landmarks[LEFT_SHOULDER], landmarks[RIGHT_SHOULDER]
+            if min(left.visibility, right.visibility) >= MIN_LANDMARK_VISIBILITY:
+                shoulder_width = abs(left.x - right.x)
+
+            points = [(lm.x, lm.y) if lm.visibility >= MIN_LANDMARK_VISIBILITY else None
+                      for lm in landmarks]
+            detections.append(Detection(cx, cy, box_w, box_h, score, shoulder_width,
+                                        self._detect_gesture(landmarks), points))
 
         return self.person_tracker.update(detections, time.monotonic())
 
-    def _detect_gestures(self, landmarks):
+    @staticmethod
+    def _detect_gesture(landmarks):
         """
-        Enhanced gesture detection for multiple gesture types
-        Returns: None, "left_wave", "right_wave", or "hands_up"
+        Raised-arm gesture for one person: an arm counts as raised when the
+        wrist is above the elbow and the elbow above the shoulder.
+        Returns None, "left_wave", "right_wave" or "hands_up"; the camera
+        view is mirrored, so the person's left arm is reported as a right wave.
         """
-        try:
-            # Get all required landmarks
-            left_wrist = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST]
-            left_elbow = landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW]
-            left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+        def raised(wrist, elbow, shoulder):
+            parts = (landmarks[wrist], landmarks[elbow], landmarks[shoulder])
+            if any(part.visibility < MIN_LANDMARK_VISIBILITY for part in parts):
+                return False
+            return parts[0].y < parts[1].y < parts[2].y
 
-            right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
-            right_elbow = landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
-            right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
-
-            # Check visibility thresholds
-            visibility_threshold = 0.5
-
-            # Check if left arm is raised (waving position)
-            left_arm_raised = (
-                left_wrist.y < left_elbow.y < left_shoulder.y and
-                left_wrist.visibility > visibility_threshold and
-                left_elbow.visibility > visibility_threshold and
-                left_shoulder.visibility > visibility_threshold
-            )
-
-            # Check if right arm is raised (waving position)
-            right_arm_raised = (
-                right_wrist.y < right_elbow.y < right_shoulder.y and
-                right_wrist.visibility > visibility_threshold and
-                right_elbow.visibility > visibility_threshold and
-                right_shoulder.visibility > visibility_threshold
-            )
-
-            # Determine gesture type based on arm positions
-            if left_arm_raised and right_arm_raised:
-                return "hands_up"
-            elif left_arm_raised:
-                return "right_wave"
-            elif right_arm_raised:
-                return "left_wave"
-            else:
-                return None
-
-        except Exception as e:
-            self.logger.debug(f"Gesture detection error: {e}")
-            return None
+        left = raised(LEFT_WRIST, LEFT_ELBOW, LEFT_SHOULDER)
+        right = raised(RIGHT_WRIST, RIGHT_ELBOW, RIGHT_SHOULDER)
+        if left and right:
+            return "hands_up"
+        if left:
+            return "right_wave"
+        if right:
+            return "left_wave"
+        return None
 
     def stop(self):
         """Legacy method for compatibility - calls stop_processing"""

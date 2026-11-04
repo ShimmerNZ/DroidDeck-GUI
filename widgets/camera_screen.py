@@ -29,6 +29,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Minimum seconds between people updates sent to the backend (10 Hz)
 PEOPLE_SEND_INTERVAL = 0.1
+GESTURES = ("hands_up", "left_wave", "right_wave")
 
 # Card layout - matches the Health screen card style
 CARD_OBJECT_NAME = "camera_card"
@@ -746,14 +747,8 @@ class CameraFeedScreen(BaseScreen):
         theme_manager.register_callback(self._on_theme_changed)
 
     def _setup_screen(self):
-        wave_config = config_manager.get_wave_config()
-
-        # Wave detection state
-        self.sample_buffers = {
-            'left_wave': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"]),
-            'right_wave': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"]),
-            'hands_up': deque(maxlen=wave_config["sample_duration"] * wave_config["sample_rate"])
-        }
+        # Gesture sampling: one buffer of recent gestures per tracked person
+        self.sample_buffers: Dict[int, deque] = {}
         self.last_gesture_time = 0
         self.last_sample_time = 0
         self.last_people_send_time = 0.0
@@ -865,47 +860,6 @@ class CameraFeedScreen(BaseScreen):
 
     def _update_tracking_button_style(self):
         self.tracking_button.setStyleSheet(button_style(theme_manager.get("green")))
-
-    def get_gesture_detection_status(self):
-        """Get current status of gesture detection buffers (for debugging)"""
-        if not hasattr(self, 'sample_buffers'):
-            return "Gesture detection not initialized"
-        
-        status = {}
-        wave_config = config_manager.get_wave_config()
-        current_time = time.time()
-        
-        # Shared stand-down status
-        time_since_last = current_time - self.last_gesture_time
-        in_standdown = time_since_last < wave_config['stand_down_time']
-        standdown_remaining = max(0, wave_config['stand_down_time'] - time_since_last)
-        
-        status['shared_standdown'] = {
-            'active': in_standdown,
-            'time_since_last_gesture': f"{time_since_last:.1f}s",
-            'remaining_time': f"{standdown_remaining:.1f}s" if in_standdown else "Ready",
-            'standdown_period': f"{wave_config['stand_down_time']}s"
-        }
-        
-        # Individual gesture buffer status
-        status['gestures'] = {}
-        for gesture_type, buffer in self.sample_buffers.items():
-            if len(buffer) > 0:
-                confidence = sum(buffer) / len(buffer)
-                status['gestures'][gesture_type] = {
-                    'buffer_length': len(buffer),
-                    'confidence': f"{confidence:.2%}",
-                    'threshold': f"{wave_config['confidence_threshold']:.2%}",
-                    'ready_to_trigger': confidence >= wave_config['confidence_threshold'] and not in_standdown
-                }
-            else:
-                status['gestures'][gesture_type] = {
-                    'buffer_length': 0, 
-                    'confidence': '0%',
-                    'ready_to_trigger': False
-                }
-        
-        return status
 
     def setup_layout(self):
         """Live view card on the left, stream and settings cards on the right"""
@@ -1069,26 +1023,27 @@ class CameraFeedScreen(BaseScreen):
                 return
 
             frame_rgb = processed_data.frame
-            gesture_detected = processed_data.gesture_detected
 
             if frame_rgb is None:
                 self.video_label.setText("Camera not available")
                 return
 
-            # Handle gesture detection if tracking enabled
-            if self.tracking_enabled and gesture_detected:
-                self._handle_gesture_detection(gesture_detected)
-
             # Report who is in view to the backend for attention behaviour,
-            # and cache the list so a click on the video can be matched
-            # against it
+            # sample their gestures, and cache the list so a click on the
+            # video can be matched against it
             if self.tracking_enabled and processed_data.people is not None:
                 self._last_people = processed_data.people
                 self._send_people(processed_data.people)
+                self._handle_gestures(processed_data.people)
 
-            # Convert frame to Qt pixmap and display
             height, width, channel = frame_rgb.shape
             self._last_frame_size = (width, height)
+
+            # Tracking carries on from other screens; only draw when on show
+            if not self.isVisible():
+                return
+
+            # Convert frame to Qt pixmap and display
             bytes_per_line = 3 * width
             q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
             pixmap = QPixmap.fromImage(q_img).scaled(
@@ -1169,10 +1124,14 @@ class CameraFeedScreen(BaseScreen):
             if isinstance(stats_dict, dict):
                 fps = stats_dict.get('fps', 0)
                 frame_count = stats_dict.get('frame_count', 0)
+                detect_ms = stats_dict.get('detect_ms')
                 running = stats_dict.get('running', False)
-                
+
                 if running:
-                    self._set_stats_text(f"{fps:.1f} FPS · {int(frame_count):,} frames", active=True)
+                    text = f"{fps:.1f} FPS · {int(frame_count):,} frames"
+                    if detect_ms is not None:
+                        text += f" · detect {detect_ms:.0f} ms"
+                    self._set_stats_text(text, active=True)
                 else:
                     self._set_stats_text("Not running")
             else:
@@ -1181,51 +1140,59 @@ class CameraFeedScreen(BaseScreen):
             self.logger.error(f"Stats update error: {e}")
             self._set_stats_text("Stats error")
 
-    def _handle_gesture_detection(self, gesture_type):
+    def _handle_gestures(self, people):
         """
-        Handle multiple gesture types with confidence buffering
-        Uses SHARED stand-down timer for all gestures to prevent being too busy
-        gesture_type: "left_wave", "right_wave", or "hands_up"
+        Sample each tracked person's gesture at the configured rate and send
+        it once it has been held for the confidence share of the sample
+        duration. The send names the person, so the robot can look at them
+        first. A shared stand-down stops gestures firing back to back.
         """
         wave_config = config_manager.get_wave_config()
         current_time = time.time()
-        
-        # Sample rate limiting
         if current_time - self.last_sample_time < 1.0 / wave_config["sample_rate"]:
-            return  # Don't process if we're sampling too fast
-        
+            return
         self.last_sample_time = current_time
-        
-        # Add detection to the appropriate buffer
-        self.sample_buffers[gesture_type].append(True)
-        
-        # Check confidence for the detected gesture ONLY if buffer is full
-        buffer = self.sample_buffers[gesture_type]
-        if len(buffer) == buffer.maxlen:  # Wait for FULL buffer (3 seconds)
-            confidence = sum(buffer) / len(buffer)
-            
-            self.logger.debug(f"{gesture_type} buffer full: {confidence:.2%} confidence (need {wave_config['confidence_threshold']:.2%})")
-            
-            if confidence >= wave_config["confidence_threshold"]:
-                # Check SHARED stand-down time for ALL gestures
-                if current_time - self.last_gesture_time >= wave_config["stand_down_time"]:
-                    # Send the appropriate gesture message
-                    self.send_websocket_message("gesture", name=gesture_type)
-                    
-                    # Update the SHARED gesture timer (prevents any gesture for stand-down period)
-                    self.last_gesture_time = current_time
-                    
-                    # Clear ALL buffers to prevent other gestures from triggering immediately
-                    for gesture in self.sample_buffers:
-                        self.sample_buffers[gesture].clear()
-                    
-                    # Log the detection
-                    gesture_name = gesture_type.replace("_", " ").title()
-                    self.logger.info(f"{gesture_name} gesture detected and sent! (Confidence: {confidence:.2%})")
-                else:
-                    # Still in stand-down period
-                    remaining_time = wave_config["stand_down_time"] - (current_time - self.last_gesture_time)
-                    self.logger.debug(f"{gesture_type} detected but in stand-down period ({remaining_time:.1f}s remaining)")
+
+        sample_count = max(1, int(wave_config["sample_duration"] * wave_config["sample_rate"]))
+        visible = {person["id"]: person for person in people}
+        for person_id in [i for i in self.sample_buffers if i not in visible]:
+            del self.sample_buffers[person_id]
+        for person_id, person in visible.items():
+            buffer = self.sample_buffers.get(person_id)
+            if buffer is None or buffer.maxlen != sample_count:
+                buffer = deque(buffer or (), maxlen=sample_count)
+                self.sample_buffers[person_id] = buffer
+            buffer.append(person.get("gesture"))
+
+        if current_time - self.last_gesture_time < wave_config["stand_down_time"]:
+            return
+
+        threshold = wave_config["confidence_threshold"]
+        for person_id, buffer in self.sample_buffers.items():
+            if len(buffer) < buffer.maxlen:
+                continue
+            for gesture in GESTURES:
+                confidence = sum(1 for g in buffer if g == gesture) / len(buffer)
+                if confidence < threshold:
+                    continue
+                self.send_websocket_message("gesture", name=gesture, person_id=person_id,
+                                            confidence=round(confidence, 2))
+                self.last_gesture_time = current_time
+                for other in self.sample_buffers.values():
+                    other.clear()
+                self.logger.info(f"Gesture {gesture} from person {person_id} sent "
+                                 f"(held {confidence:.0%} of {wave_config['sample_duration']}s)")
+                return
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'image_thread'):
+            self.image_thread.set_display_active(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, 'image_thread'):
+            self.image_thread.set_display_active(False)
 
     @error_boundary
     def toggle_tracking(self, checked=None):
