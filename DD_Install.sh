@@ -185,17 +185,11 @@ pip install --upgrade pip setuptools wheel
 echo "Installing Python dependencies..."
 pip install PyQt6==6.7.1 PyQt6-Qt6==6.7.3
 pip install pyqtgraph==0.13.7
-pip install websockets==12.0
 pip install requests==2.32.3
 pip install numpy==1.24.4
-pip install Pillow==10.4.0
-pip install psutil==6.0.0
-pip install watchdog==4.0.1
-pip install jsonschema==4.19.2
-pip install python-dateutil==2.8.2
+pip install pygame==2.6.0
 
 echo "Installing optional packages..."
-pip install pygame==2.6.0     || echo "pygame install failed (optional)"
 pip install hid==1.0.6            || echo "hid install failed (optional)"
 pip install scipy              || echo "scipy install failed (optional)"
 pip install opencv-python==4.10.0.84 || echo "OpenCV install failed (optional)"
@@ -207,7 +201,7 @@ export QT_QPA_PLATFORM=xcb
 python -c "
 import PyQt6.QtCore
 print(f'PyQt6 {PyQt6.QtCore.qVersion()} OK')
-import pyqtgraph, websockets, requests, numpy, psutil
+import pyqtgraph, requests, numpy, pygame
 print('Core dependencies OK')
 try:
     import hid; hid.Device  # verify hid 1.0.6 API
@@ -402,7 +396,7 @@ test_installation() {
 
     if distrobox enter "$CONTAINER_NAME" -- bash -c "
         source /home/deck/droiddeck_env/bin/activate 2>/dev/null &&
-        python -c 'import PyQt6, websockets, requests, numpy; print(\"Core dependencies OK\")'
+        python -c 'import PyQt6, pyqtgraph, requests, numpy, pygame; print(\"Core dependencies OK\")'
     " 2>/dev/null; then
         print_success "Python dependencies OK"
     else

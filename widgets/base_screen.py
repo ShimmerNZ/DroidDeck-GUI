@@ -4,11 +4,8 @@
 WALL-E Control System - Base Screen Components
 """
 
-import random
 from abc import ABC, abstractmethod
-from PyQt6.QtWidgets import QWidget, QLabel, QFrame, QHBoxLayout
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import QWidget
 
 from core.logger import get_logger
 from core.utils import error_boundary
@@ -85,45 +82,3 @@ class BaseScreen(QWidget, ABC, metaclass=WidgetABCMeta):
         else:
             self.logger.warning(f"Cannot send {message_type}: WebSocket not connected")
             return False
-
-
-class StatusMixin:
-    """Mixin class providing status update functionality"""
-    
-    def __init__(self):
-        self._status_callbacks = []
-    
-    def add_status_callback(self, callback):
-        """Add callback function for status updates"""
-        self._status_callbacks.append(callback)
-    
-    def update_status(self, message: str, level: str = "info"):
-        """Update status with specified message and level"""
-        for callback in self._status_callbacks:
-            try:
-                callback(message, level)
-            except Exception as e:
-                if hasattr(self, 'logger'):
-                    self.logger.error(f"Status callback error: {e}")
-
-
-class PlaceholderScreen(BaseScreen):
-    """Placeholder screen for features under development"""
-    
-    def __init__(self, title: str, websocket=None):
-        self.title = title
-        super().__init__(websocket)
-    
-    def _setup_screen(self):
-        """Setup placeholder screen UI"""
-        from PyQt6.QtWidgets import QVBoxLayout
-        
-        self.setFixedSize(1280, 800)
-        
-        label = QLabel(f"{self.title} Screen Coming Soon")
-        label.setFont(QFont("Arial", 24))
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        layout = QVBoxLayout()
-        layout.addWidget(label)
-        self.setLayout(layout)
