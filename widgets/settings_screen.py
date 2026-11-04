@@ -17,13 +17,13 @@ from urllib.parse import urlparse
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QSpinBox, QSlider, QPushButton,
-    QComboBox, QMessageBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
+    QComboBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
 )
 from PyQt6.QtGui import QFont, QColor, QValidator
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
-from widgets.flow_dialog import FlowDialog, STEP_ERROR
+from widgets.flow_dialog import FlowDialog, STEP_ERROR, show_message, ask_confirm
 from core.version import save_build_info
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
@@ -1496,34 +1496,22 @@ class SettingsScreen(BaseScreen):
             else:
                 self.logger.warning("WebSocket not available - settings not sent to backend")
 
-            QMessageBox.information(
-                self,
-                "Settings Saved",
-                "Configuration updated successfully.\n\n"
-                "Note: Some changes (e.g., global log level, volume) may require app restart."
-            )
+            show_message(self, "SETTINGS", "Settings saved",
+                         "Some changes, such as the global log level, take effect after a restart.")
             self.logger.info("Configuration updated successfully")
             self._notify_config_changes()
         else:
-            QMessageBox.critical(
-                self,
-                "Save Failed",
-                "Failed to save configuration.\n\nPlease check file permissions and try again."
-            )
+            show_message(self, "SETTINGS", "Save failed",
+                         "The settings could not be saved. Check the file permissions and try again.",
+                         kind="error")
             self.logger.error("Failed to save configuration")
 
     @error_boundary
     def reset_to_defaults(self):
         """Reset configuration to default values"""
-        reply = QMessageBox.question(
-            self,
-            "Reset to Defaults",
-            "Are you sure you want to reset all settings to default values?\n\n"
-            "This action cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not ask_confirm(self, "SETTINGS", "Reset to defaults?",
+                           "All settings go back to their default values. This cannot be undone.",
+                           confirm="RESET", danger=True):
             return
 
         cfg = config_manager.get_config(self.config_path)
@@ -1532,13 +1520,14 @@ class SettingsScreen(BaseScreen):
             cfg["current"] = defaults.copy()
             if config_manager.save_config(self.config_path, cfg):
                 self.load_config()
-                QMessageBox.information(self, "Reset Complete", "Configuration has been reset to defaults.")
+                show_message(self, "SETTINGS", "Reset complete", "Settings are back to their defaults.")
                 self.logger.info("Configuration reset to defaults")
             else:
-                QMessageBox.critical(self, "Reset Failed", "Failed to reset configuration.")
+                show_message(self, "SETTINGS", "Reset failed", "The settings could not be reset.", kind="error")
         else:
             self._create_default_config()
-            QMessageBox.information(self, "Defaults Created", "Default configuration has been created and applied.")
+            show_message(self, "SETTINGS", "Defaults created",
+                         "A default configuration has been created and applied.")
 
     NETWORK_TEST_STEPS = [
         "Check URL formats",
@@ -1557,7 +1546,8 @@ class SettingsScreen(BaseScreen):
 
         urls = [u for u in (ws_url, esp32_url, proxy_url) if u]
         if not urls:
-            QMessageBox.warning(self, "No URLs to Test", "Please enter at least one network URL before testing.")
+            show_message(self, "SETTINGS", "Nothing to test",
+                         "Enter at least one network address before testing.", kind="warning")
             return
 
         noun = "address" if len(urls) == 1 else "addresses"
@@ -1691,11 +1681,8 @@ class SettingsScreen(BaseScreen):
             errors.append("Sample rate must be at least 1 Hz")
 
         if errors:
-            QMessageBox.warning(
-                self,
-                "Invalid Settings",
-                "Please correct the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
-            )
+            show_message(self, "SETTINGS", "Check these settings",
+                         "\n".join(f"• {e}" for e in errors), kind="warning")
             return False
         return True
 

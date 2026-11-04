@@ -12,13 +12,14 @@ import time
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QFrame,
-    QGridLayout, QComboBox, QSlider, QMessageBox, QScrollArea, QListWidget,
+    QGridLayout, QComboBox, QSlider, QScrollArea, QListWidget,
     QListWidgetItem, QListView, QButtonGroup, QSizePolicy, QAbstractButton, QApplication
 )
 from PyQt6.QtGui import QFont, QColor, QPainter
 from PyQt6.QtCore import Qt, QTimer, QSize, QRectF, pyqtSignal
 
 from widgets.base_screen import BaseScreen
+from widgets.flow_dialog import show_message, ask_confirm
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
@@ -1462,39 +1463,11 @@ class ControllerConfigScreen(BaseScreen):
                                "Controller calibration completed successfully!\n"
                                "New settings have been applied.")
 
-    def _message_box_style(self) -> str:
-        return """
-            QMessageBox {
-                background-color: #2d2d2d;
-                color: white;
-            }
-            QMessageBox QPushButton {
-                background-color: #1e90ff;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 3px;
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #4dabf7;
-            }
-        """
-
     def show_error_message(self, title: str, message: str):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle(title)
-        msg_box.setText(message)
-        msg_box.setIcon(QMessageBox.Icon.Critical)
-        msg_box.setStyleSheet(self._message_box_style())
-        msg_box.exec()
+        show_message(self, "CONTROLLER", title, message, kind="error")
 
     def show_info_message(self, title: str, message: str):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle(title)
-        msg_box.setText(message)
-        msg_box.setIcon(QMessageBox.Icon.Information)
-        msg_box.setStyleSheet(self._message_box_style())
-        msg_box.exec()
+        show_message(self, "CONTROLLER", title, message)
 
     # ========================================
     # MAPPING LIST
@@ -1598,12 +1571,9 @@ class ControllerConfigScreen(BaseScreen):
         if row is None:
             return
         name = input_display_name(row['input'])
-        reply = QMessageBox.question(
-            self, "Delete Mapping",
-            f"Delete the {BEHAVIOR_TAGS.get(row['behavior'], 'mapping')} mapping on {name}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not ask_confirm(self, "CONTROLLER", "Delete mapping?",
+                           f"Delete the {BEHAVIOR_TAGS.get(row['behavior'], 'mapping')} mapping on {name}?",
+                           confirm="DELETE", danger=True):
             return
         self._remove_mapping_row(self.selected_row_index)
 
@@ -2316,8 +2286,8 @@ class ControllerConfigScreen(BaseScreen):
         self._check_for_conflicts()
         if any(row['conflict_detected'] for row in self.mapping_rows):
             self._refresh_all_rows()
-            QMessageBox.warning(self, "Conflicts Detected",
-                                "Please resolve all joystick conflicts before saving.")
+            show_message(self, "CONTROLLER", "Conflicts detected",
+                         "Resolve the joystick conflicts before saving.", kind="warning")
             return
 
         # List format supports multiple mappings per input
@@ -2342,11 +2312,13 @@ class ControllerConfigScreen(BaseScreen):
             total_rows = sum(len(v) for v in controller_config.values())
             self._dirty = False
             self._update_dirty_label()
-            QMessageBox.information(self, "Saved", f"Saved {total_rows} mappings across {len(controller_config)} inputs.")
+            show_message(self, "CONTROLLER", "Mappings saved",
+                         f"Saved {total_rows} mappings across {len(controller_config)} inputs.")
             self.logger.info(f"Saved {total_rows} controller mappings")
 
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save controller mappings: {e}")
+            show_message(self, "CONTROLLER", "Save failed",
+                         "The controller mappings could not be saved.", kind="error", error=str(e))
             self.logger.error(f"Failed to save controller mappings: {e}")
 
     def cleanup(self):

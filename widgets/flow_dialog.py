@@ -3,7 +3,8 @@
 """
 WALL-E Control System - Flow Dialog
 One themed window that steps through a task: choose, progress, result.
-Used for the GUI / server updates and the network test.
+Used for the GUI / server updates, the network test, and the themed
+message and confirmation pop-ups shared by every screen.
 """
 
 from PyQt6.QtWidgets import (
@@ -141,6 +142,29 @@ def _power_icon() -> QPixmap:
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawLine(QPointF(28, 15), QPointF(28, 28))
     painter.drawArc(QRectF(16, 16, 24, 24), 125 * 16, 290 * 16)
+    painter.end()
+    return pixmap
+
+
+def _warning_icon() -> QPixmap:
+    """Exclamation mark in an amber tinted circle"""
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor(WARN_ORANGE)
+    fill = QColor(color)
+    fill.setAlphaF(0.15)
+    painter.setPen(QPen(color, 2))
+    painter.setBrush(fill)
+    painter.drawEllipse(QRectF(1, 1, 54, 54))
+    pen = QPen(color, 3.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(28, 16), QPointF(28, 32))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawEllipse(QPointF(28, 39.5), 2.4, 2.4)
     painter.end()
     return pixmap
 
@@ -483,8 +507,8 @@ class FlowDialog(QDialog):
 
     def show_result(self, success: bool, title: str, text: str = "", error: str = None,
                     secondary: str = None, primary: str = None, primary_fill: str = None,
-                    keep_steps: bool = False):
-        """Tick or cross with a message; the step list can stay above it"""
+                    keep_steps: bool = False, warning: bool = False):
+        """Tick, cross or warning with a message; the step list can stay above it"""
         self._closable = True
         self._disconnect_buttons()
         if keep_steps:
@@ -496,7 +520,7 @@ class FlowDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(16)
         icon = QLabel()
-        icon.setPixmap(_result_icon(success))
+        icon.setPixmap(_warning_icon() if warning else _result_icon(success))
         icon.setFixedSize(56, 56)
         row.addWidget(icon)
         texts = QVBoxLayout()
@@ -526,8 +550,8 @@ class FlowDialog(QDialog):
         self._set_buttons(secondary, primary, primary_fill)
 
     def show_confirm(self, title: str, text: str, secondary: str = "CANCEL",
-                     primary: str = "OK", primary_fill: str = None):
-        """Question with a power icon; primary accepts the dialog, secondary rejects it"""
+                     primary: str = "OK", primary_fill: str = None, warning: bool = False):
+        """Question with a power (or warning) icon; primary accepts, secondary rejects"""
         self._closable = True
         self._disconnect_buttons()
         self._clear()
@@ -536,7 +560,7 @@ class FlowDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(18)
         icon = QLabel()
-        icon.setPixmap(_power_icon())
+        icon.setPixmap(_warning_icon() if warning else _power_icon())
         icon.setFixedSize(56, 56)
         row.addWidget(icon)
         texts = QVBoxLayout()
@@ -636,3 +660,25 @@ class FlowDialog(QDialog):
         """)
         self.body_layout.addWidget(scroll)
         self._set_buttons(secondary, primary)
+
+
+def show_message(parent, header: str, title: str, text: str = "", kind: str = "success",
+                 error: str = None, button: str = "OK"):
+    """Themed pop-up with a tick, cross or warning and a single button.
+
+    kind is "success", "error" or "warning". Blocks until dismissed.
+    """
+    dialog = FlowDialog(parent, header)
+    dialog.show_result(kind == "success", title, text, error=error, primary=button,
+                       warning=(kind == "warning"))
+    dialog.primary_clicked.connect(dialog.accept)
+    dialog.exec()
+
+
+def ask_confirm(parent, header: str, title: str, text: str, confirm: str = "OK",
+                danger: bool = False) -> bool:
+    """Themed yes/no question; returns True when confirmed. Danger makes the button red."""
+    dialog = FlowDialog(parent, header)
+    dialog.show_confirm(title, text, secondary="CANCEL", primary=confirm,
+                        primary_fill=theme_manager.get("red") if danger else None, warning=True)
+    return dialog.exec() == QDialog.DialogCode.Accepted

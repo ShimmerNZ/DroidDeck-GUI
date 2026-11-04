@@ -9,7 +9,7 @@ on-screen keyboard.
 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QWidget,
-    QComboBox, QMessageBox, QLineEdit, QListWidget, QListWidgetItem,
+    QComboBox, QLineEdit, QListWidget, QListWidgetItem,
     QListView, QFrame, QSizePolicy, QAbstractButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QPointF, QRectF, QRegularExpression
@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QFont, QColor, QPainter, QPen, QPixmap, QPainterPath, QIcon, QRegularExpressionValidator
 )
 from widgets.base_screen import BaseScreen
+from widgets.flow_dialog import show_message, ask_confirm
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
@@ -1021,38 +1022,10 @@ class SceneScreen(BaseScreen):
         self._mark_dirty()
 
     def _show_idle_info(self):
-        primary = theme_manager.get("primary_color")
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setWindowTitle("Idle Category")
-        msg.setText("💤 Idle is an exclusive category")
-        msg.setInformativeText(
-            "Idle scenes use ADDITIVE blending and layer over joystick control.\n\n"
-            "For safety, Idle scenes should only contain subtle head/neck movements.\n\n"
-            "Other categories have been deselected."
-        )
-        msg.setStyleSheet(f"""
-            QMessageBox {{
-                background-color: #222;
-            }}
-            QMessageBox QLabel {{
-                color: {primary};
-                font-size: 14px;
-            }}
-            QPushButton {{
-                background-color: #333;
-                border: 2px solid {primary};
-                border-radius: 6px;
-                color: {primary};
-                padding: 8px 16px;
-                font-weight: bold;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: #444;
-            }}
-        """)
-        msg.exec()
+        show_message(self, "SCENES", "Idle is an exclusive category",
+                     "Idle scenes use additive blending and layer over joystick control, so they "
+                     "should only contain subtle head and neck movements. Other categories have "
+                     "been deselected.", kind="warning")
 
     def _on_audio_toggled(self, checked: bool):
         self._update_enabled_fields()
@@ -1269,12 +1242,15 @@ class SceneScreen(BaseScreen):
                 success = msg.get("success", False)
                 if success:
                     self._sync_calculated_durations(msg.get("scenes", []), emit=False)
-                    QMessageBox.information(self, "Saved", "Scenes saved successfully to backend.")
+                    show_message(self, "SCENES", "Scenes saved",
+                                 f"{len(self.scenes_data)} scenes saved and sent to the backend.")
                     self.update_status(f"{len(self.scenes_data)} scenes · all saved", green)
                     self.scenes_updated.emit()
                 else:
                     error = msg.get("error", "Unknown error")
-                    QMessageBox.critical(self, "Error", f"Failed to save to backend: {error}")
+                    show_message(self, "SCENES", "Backend save failed",
+                                 "The scenes were saved on the Deck but the backend could not save them.",
+                                 kind="error", error=str(error))
                     self.update_status("Save failed", red)
 
             elif msg_type == "bottango_scenes_updated":
@@ -1462,12 +1438,9 @@ class SceneScreen(BaseScreen):
             return
         scene_name = scene.get("label") or "this scene"
 
-        reply = QMessageBox.question(
-            self, "Delete Scene",
-            f"Are you sure you want to delete '{scene_name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not ask_confirm(self, "SCENES", "Delete scene?",
+                           f"Delete '{scene_name}'? It is removed when you next save.",
+                           confirm="DELETE", danger=True):
             return
 
         visible = self._visible_scenes()
@@ -1513,12 +1486,12 @@ class SceneScreen(BaseScreen):
         names = [s["label"] for s in scene_data]
 
         if len(names) != len(set(names)):
-            QMessageBox.critical(self, "Error", "Scene names must be unique.")
+            show_message(self, "SCENES", "Duplicate names", "Every scene needs a unique name.", kind="error")
             self.update_status("Validation failed: Duplicate names", red)
             return
 
         if any(not name for name in names):
-            QMessageBox.critical(self, "Error", "All scenes must have names.")
+            show_message(self, "SCENES", "Missing names", "Every scene needs a name.", kind="error")
             self.update_status("Validation failed: Empty names", red)
             return
 
@@ -1526,7 +1499,7 @@ class SceneScreen(BaseScreen):
 
         success = config_manager.save_config(SCENES_CONFIG_PATH, scene_data)
         if not success:
-            QMessageBox.critical(self, "Error", "Failed to save local configuration.")
+            show_message(self, "SCENES", "Save failed", "The scenes could not be saved on the Deck.", kind="error")
             self.update_status("Local save failed", red)
             return
 
@@ -1539,9 +1512,9 @@ class SceneScreen(BaseScreen):
             self.logger.info("Scene configuration saved locally and sent to backend")
             self.update_status("Saved locally, waiting for backend...", primary)
         else:
-            QMessageBox.warning(self, "Warning",
-                "Scenes saved locally but could not sync to backend. "
-                "Backend will use local file on restart.")
+            show_message(self, "SCENES", "Saved on the Deck only",
+                         "The backend is not connected. The scenes are sent if it reconnects "
+                         "shortly; otherwise save again once it is back.", kind="warning")
             self.update_status("Saved locally only", "orange")
             self.scenes_updated.emit()
 
