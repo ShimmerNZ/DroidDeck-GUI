@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QSlider, QPushButton,
     QComboBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
 )
-from PyQt6.QtGui import QFont, QColor, QValidator
+from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from widgets.base_screen import BaseScreen
@@ -142,43 +142,23 @@ LEAD_ACID_CELLS_PER_BATTERY = 6
 LEAD_ACID_BATTERY_VOLTS = 12
 
 
-class OptionSpinBox(QSpinBox):
-    """Spin box that steps through a list of options shown by label"""
-
-    def __init__(self):
-        super().__init__()
-        self._options = []
-        self._labels = []
-        self.lineEdit().setReadOnly(True)
+class OptionComboBox(QComboBox):
+    """Drop-down of numeric options shown by label"""
 
     def set_options(self, options, labels, current):
         """Replace the options and select current (or the nearest option)"""
         self.blockSignals(True)
-        self._options = list(options)
-        self._labels = list(labels)
-        self.setRange(0, max(0, len(self._options) - 1))
-        if self._options:
-            nearest = min(range(len(self._options)), key=lambda i: abs(self._options[i] - current))
-            self.setValue(nearest)
+        self.clear()
+        for option, label in zip(options, labels):
+            self.addItem(label, option)
+        if options:
+            nearest = min(range(len(options)), key=lambda i: abs(options[i] - current))
+            self.setCurrentIndex(nearest)
         self.blockSignals(False)
-        self.lineEdit().setText(self.textFromValue(self.value()))
 
     def option(self):
         """The selected option, or None before options are set"""
-        if not self._options:
-            return None
-        return self._options[self.value()]
-
-    def textFromValue(self, value):
-        if 0 <= value < len(self._labels):
-            return self._labels[value]
-        return ""
-
-    def valueFromText(self, text):
-        return self._labels.index(text) if text in self._labels else self.value()
-
-    def validate(self, text, pos):
-        return (QValidator.State.Acceptable, text, pos)
+        return self.currentData()
 
 
 class NetworkTestThread(QThread):
@@ -918,9 +898,9 @@ class SettingsScreen(BaseScreen):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
 
-        self.sample_duration_spin = self._make_spinbox(1, 10, 3, " s")
-        self.sample_rate_spin = self._make_spinbox(1, 60, 5, " /s")
-        self.stand_down_spin = self._make_spinbox(0, 300, 30, " s")
+        self.sample_duration_spin = self._make_spinbox(1, 10, 3, "")
+        self.sample_rate_spin = self._make_spinbox(1, 60, 5, "")
+        self.stand_down_spin = self._make_spinbox(0, 300, 30, "")
 
         # Confidence: - value +
         conf_row = QHBoxLayout()
@@ -943,10 +923,10 @@ class SettingsScreen(BaseScreen):
         conf_row.addWidget(self.confidence_plus_btn)
 
         cells = [
-            ("SAMPLE DURATION", self.sample_duration_spin, 0, 0),
-            ("SAMPLE RATE", self.sample_rate_spin, 0, 1),
+            ("SAMPLE DURATION (SEC)", self.sample_duration_spin, 0, 0),
+            ("SAMPLE RATE (PER SEC)", self.sample_rate_spin, 0, 1),
             ("CONFIDENCE", conf_row, 1, 0),
-            ("STAND DOWN", self.stand_down_spin, 1, 1),
+            ("STAND DOWN (SEC)", self.stand_down_spin, 1, 1),
         ]
         for caption, control, row, col in cells:
             cell = QVBoxLayout()
@@ -997,11 +977,11 @@ class SettingsScreen(BaseScreen):
         series_cell.setSpacing(4)
         self.battery_series_caption = self._make_caption("SERIES")
         series_cell.addWidget(self.battery_series_caption)
-        self.battery_series_spin = OptionSpinBox()
-        self.battery_series_spin.setFont(px_font(17))
-        self.battery_series_spin.setFixedSize(170, 40)
-        self.battery_series_spin.valueChanged.connect(self._on_battery_series_changed)
-        series_cell.addWidget(self.battery_series_spin)
+        self.battery_series_combo = OptionComboBox()
+        self.battery_series_combo.setFont(px_font(17))
+        self.battery_series_combo.setFixedSize(170, 40)
+        self.battery_series_combo.currentIndexChanged.connect(self._on_battery_series_changed)
+        series_cell.addWidget(self.battery_series_combo)
         type_row.addLayout(series_cell)
         layout.addLayout(type_row)
 
@@ -1009,7 +989,7 @@ class SettingsScreen(BaseScreen):
         capacity_row = QHBoxLayout()
         capacity_row.setSpacing(12)
         self.battery_packs_spin = self._make_spinbox(1, 10, 1, "")
-        self.battery_parallel_spin = self._make_spinbox(1, 40, 12, "P")
+        self.battery_parallel_spin = self._make_spinbox(1, 40, 12, "")
         self.battery_cell_mah_spin = self._make_spinbox(100, 20000, 3000, "")
         self.battery_cell_mah_spin.setSingleStep(100)
         self.battery_ah_spin = self._make_spinbox(1, 400, 20, "")
@@ -1073,7 +1053,7 @@ class SettingsScreen(BaseScreen):
         """Battery controls only work once the backend has sent the battery types"""
         for btn in self.battery_type_buttons.values():
             btn.setEnabled(enabled)
-        for spin in (self.battery_series_spin, self.battery_packs_spin, self.battery_parallel_spin,
+        for spin in (self.battery_series_combo, self.battery_packs_spin, self.battery_parallel_spin,
                      self.battery_cell_mah_spin, self.battery_ah_spin):
             spin.setEnabled(enabled)
 
@@ -1109,7 +1089,7 @@ class SettingsScreen(BaseScreen):
     def _set_series_options(self, chemistry: str, current: int):
         options = self._battery_table[chemistry]["series_options"]
         labels = [self._series_label(chemistry, option) for option in options]
-        self.battery_series_spin.set_options(options, labels, current)
+        self.battery_series_combo.set_options(options, labels, current)
 
     def _on_battery_type_selected(self, chemistry: str):
         """Switch type: keep one button checked and refresh the series options"""
@@ -1117,7 +1097,7 @@ class SettingsScreen(BaseScreen):
             btn.setChecked(key == chemistry)
         if not self._battery_table or chemistry not in self._battery_table:
             return
-        current = self.battery_series_spin.option() or 0
+        current = self.battery_series_combo.option() or 0
         self._set_series_options(chemistry, current)
         self._show_capacity_fields(chemistry)
         self._update_battery_display()
@@ -1128,7 +1108,7 @@ class SettingsScreen(BaseScreen):
     def _update_battery_display(self):
         """Alert levels and pack voltages for the selected type and series"""
         chemistry = self._selected_battery_type()
-        series = self.battery_series_spin.option()
+        series = self.battery_series_combo.option()
         if not self._battery_table or chemistry not in self._battery_table or series is None:
             return
         cell = self._battery_table[chemistry]["cell"]
@@ -1159,7 +1139,7 @@ class SettingsScreen(BaseScreen):
         config = dict(self._battery_loaded_config or {})
         config.update({
             "chemistry": self._selected_battery_type(),
-            "series": self.battery_series_spin.option(),
+            "series": self.battery_series_combo.option(),
             "packs": self.battery_packs_spin.value(),
             "parallel": self.battery_parallel_spin.value(),
             "cell_mah": self.battery_cell_mah_spin.value(),
@@ -1259,9 +1239,10 @@ class SettingsScreen(BaseScreen):
         for combo in self.debug_combos.values():
             self._update_combo_style(combo)
         for spin in (self.sample_duration_spin, self.sample_rate_spin, self.stand_down_spin,
-                     self.battery_series_spin, self.battery_packs_spin, self.battery_parallel_spin,
+                     self.battery_packs_spin, self.battery_parallel_spin,
                      self.battery_cell_mah_spin, self.battery_ah_spin):
             self._update_spinbox_style(spin)
+        self._update_combo_style(self.battery_series_combo)
 
         for btn in self.battery_type_buttons.values():
             btn.setStyleSheet(button_style(checked_fill=primary))
