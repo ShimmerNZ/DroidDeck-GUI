@@ -16,7 +16,8 @@ A PyQt6 control interface for droid animatronics, built to run full screen on a 
 ### User Interface
 - **Card-style screens** at the Deck's native 1280×800
 - **Themes**: Wall-e and Star Wars, each with its own droid image, icons, background and sounds
-- **Top bar**: Robot and Steam Deck battery, track and electronics current, active alerts and the Wi-Fi link (network name and ping) on every screen
+- **Top bar**: Robot and Steam Deck battery, track and electronics current, active alerts (or the drive mode when there are none) and the Wi-Fi link (network name and ping) on every screen
+- **Crowd mode**: Caps track speed to a set percentage for driving around people; always on when the backend starts
 - **Startup and shutdown screens** showing progress, GUI version and installed commit
 
 ### Technical Highlights
@@ -205,7 +206,7 @@ All app settings live in `resources/configs/`. Most can be changed from the GUI,
 
 | File | Purpose | Edited from |
 |---|---|---|
-| `steamdeck_config.json` | Backend and camera URLs, logging levels, wave detection, volume | Settings screen |
+| `steamdeck_config.json` | Backend and camera URLs, logging levels, wave detection (file only), volume | Settings screen |
 | `servo_config.json` | Servo names, limits, home positions, NEMA stepper settings | Servo screen |
 | `controller_config.json` | Controller input mappings | Controller screen |
 | `controller_mappings.json` | Controller button/axis definitions | — |
@@ -378,7 +379,7 @@ DroidDeck can use the Steam Deck's built-in accelerometer to drive head servos: 
 
 ### Settings Screen
 - **Network**: Backend and camera URLs, network test
-- **Wave detection**: Sample duration, rate, confidence and stand-down time
+- **Drive**: Crowd mode on/off and its speed limit (10–100%), applied straight away; the limit is saved on the Pi
 - **Logging**: Global and per-module log levels
 - **Appearance**: Theme and system volume
 - **UPDATE GUI** / **UPDATE SERVER** (see below)

@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse 
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QSlider, QPushButton,
     QComboBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
 )
@@ -42,6 +42,19 @@ TEST_BUTTON_WIDTH = 100
 LABEL_GREY = "#9e9e9e"
 TEXT_SOFT = "#bdbdbd"
 TILE_BG = "#202020"
+
+# Crowd mode speed limit, matching the backend's range and step
+CROWD_SPEED_MIN = 10
+CROWD_SPEED_MAX = 100
+CROWD_SPEED_STEP = 5
+
+# Wave detection values used when none have been saved yet
+DEFAULT_WAVE_DETECTION = {
+    "sample_duration": 3,
+    "sample_rate": 5,
+    "confidence_threshold": 0.7,
+    "stand_down_time": 30,
+}
 
 
 def px_font(pixel_size: int, bold: bool = False, spacing: float = 0.0) -> QFont:
@@ -645,7 +658,7 @@ class SettingsScreen(BaseScreen):
         network = self._build_network()
         network.setFixedWidth(NETWORK_CARD_WIDTH)
         top.addWidget(network)
-        top.addWidget(self._build_wave(), 1)
+        top.addWidget(self._build_drive(), 1)
         content_layout.addLayout(top)
 
         middle = QHBoxLayout()
@@ -667,6 +680,9 @@ class SettingsScreen(BaseScreen):
         self.subscribe("server_update_progress", self._on_server_update_progress)
         self.subscribe("server_update_complete", self._on_server_update_complete)
         self.subscribe("battery_config_data", self._on_battery_config)
+        self.subscribe("drive_mode", self._on_drive_mode)
+        if self.websocket is not None and hasattr(self.websocket, "connected"):
+            self.websocket.connected.connect(self._on_backend_connected)
 
         # Load config on open
         self.load_config()
@@ -890,58 +906,59 @@ class SettingsScreen(BaseScreen):
         layout.addStretch(1)
         return card
 
-    def _build_wave(self) -> QFrame:
-        """Wave detection card: 2x2 grid of controls"""
-        card, layout = self._make_card("WAVE DETECTION", TOP_CARD_HEIGHT)
+    def _build_drive(self) -> QFrame:
+        """Drive card: crowd mode and its speed limit, applied to the robot straight away"""
+        card, layout = self._make_card("DRIVE", TOP_CARD_HEIGHT)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        self._crowd_mode = None
+        self._crowd_percent = None
 
-        self.sample_duration_spin = self._make_spinbox(1, 10, 3, "")
-        self.sample_rate_spin = self._make_spinbox(1, 60, 5, "")
-        self.stand_down_spin = self._make_spinbox(0, 300, 30, "")
+        row = QHBoxLayout()
+        row.setSpacing(12)
 
-        # Confidence: - value +
-        conf_row = QHBoxLayout()
-        conf_row.setSpacing(4)
+        mode_cell = QVBoxLayout()
+        mode_cell.setSpacing(4)
+        mode_cell.addWidget(self._make_caption("CROWD MODE"))
+        self.crowd_mode_btn = QPushButton("ON")
+        self.crowd_mode_btn.setCheckable(True)
+        self.crowd_mode_btn.setFont(px_font(16, bold=True))
+        self.crowd_mode_btn.setFixedSize(150, 44)
+        self.crowd_mode_btn.clicked.connect(self._on_crowd_mode_clicked)
+        mode_cell.addWidget(self.crowd_mode_btn)
+        row.addLayout(mode_cell)
 
-        self.confidence_minus_btn = self._make_button("−", 40, 20)
-        self.confidence_minus_btn.setFixedWidth(40)
-        self.confidence_minus_btn.setAccessibleName("Confidence down")
-        self.confidence_minus_btn.clicked.connect(lambda: self._adjust_confidence(-5))
+        speed_cell = QVBoxLayout()
+        speed_cell.setSpacing(4)
+        speed_cell.addWidget(self._make_caption("SPEED LIMIT"))
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(8)
 
-        self.confidence_value = self._make_value_tile("70%", 40, 18)
+        self.crowd_minus_btn = self._make_button("−", 44, 22)
+        self.crowd_minus_btn.setFixedWidth(44)
+        self.crowd_minus_btn.setAccessibleName("Speed limit down")
+        self.crowd_minus_btn.clicked.connect(lambda: self._adjust_crowd_speed(-CROWD_SPEED_STEP))
 
-        self.confidence_plus_btn = self._make_button("+", 40, 20)
-        self.confidence_plus_btn.setFixedWidth(40)
-        self.confidence_plus_btn.setAccessibleName("Confidence up")
-        self.confidence_plus_btn.clicked.connect(lambda: self._adjust_confidence(5))
+        self.crowd_speed_value = self._make_value_tile("--", 44, 20)
 
-        conf_row.addWidget(self.confidence_minus_btn)
-        conf_row.addWidget(self.confidence_value, 1)
-        conf_row.addWidget(self.confidence_plus_btn)
+        self.crowd_plus_btn = self._make_button("+", 44, 22)
+        self.crowd_plus_btn.setFixedWidth(44)
+        self.crowd_plus_btn.setAccessibleName("Speed limit up")
+        self.crowd_plus_btn.clicked.connect(lambda: self._adjust_crowd_speed(CROWD_SPEED_STEP))
 
-        cells = [
-            ("SAMPLE DURATION (SEC)", self.sample_duration_spin, 0, 0),
-            ("SAMPLE RATE (PER SEC)", self.sample_rate_spin, 0, 1),
-            ("CONFIDENCE", conf_row, 1, 0),
-            ("STAND DOWN (SEC)", self.stand_down_spin, 1, 1),
-        ]
-        for caption, control, row, col in cells:
-            cell = QVBoxLayout()
-            cell.setSpacing(4)
-            cell.addWidget(self._make_caption(caption))
-            if isinstance(control, QHBoxLayout):
-                cell.addLayout(control)
-            else:
-                cell.addWidget(control)
-            grid.addLayout(cell, row, col)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        speed_row.addWidget(self.crowd_minus_btn)
+        speed_row.addWidget(self.crowd_speed_value, 1)
+        speed_row.addWidget(self.crowd_plus_btn)
+        speed_cell.addLayout(speed_row)
+        row.addLayout(speed_cell, 1)
+        layout.addLayout(row)
 
-        layout.addLayout(grid)
+        hint = self._make_soft_label(
+            "Caps track speed while on. Crowd mode is always on when the backend starts.", 13)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         layout.addStretch(1)
+
+        self._update_drive_controls()
         return card
 
     def _build_battery(self) -> QFrame:
@@ -1180,6 +1197,55 @@ class SettingsScreen(BaseScreen):
         super().showEvent(event)
         if getattr(self, "_battery_table", None) is None:
             self._request_battery_config()
+        if self.websocket and self.websocket.is_connected():
+            self.send_websocket_message("get_drive_mode")
+
+    # ---------- Drive ----------
+
+    def _on_backend_connected(self):
+        """A restarted backend is back in crowd mode, so fetch its state again"""
+        if self.isVisible():
+            self.send_websocket_message("get_drive_mode")
+
+    def _on_drive_mode(self, data: dict):
+        """Show the crowd mode state the backend is enforcing"""
+        crowd_mode = data.get("crowd_mode")
+        percent = data.get("crowd_speed_percent")
+        if not isinstance(crowd_mode, bool) or not isinstance(percent, (int, float)):
+            return
+        self._crowd_mode = crowd_mode
+        self._crowd_percent = int(percent)
+        self._update_drive_controls()
+
+    def _on_crowd_mode_clicked(self):
+        """Ask the backend to switch crowd mode; the button follows its reply"""
+        if self._crowd_mode is None:
+            self._update_drive_controls()
+            return
+        self.send_websocket_message("set_drive_mode", crowd_mode=not self._crowd_mode)
+        self._update_drive_controls()
+
+    def _adjust_crowd_speed(self, delta: int):
+        if self._crowd_percent is None:
+            return
+        percent = max(CROWD_SPEED_MIN, min(CROWD_SPEED_MAX, self._crowd_percent + delta))
+        if percent == self._crowd_percent:
+            return
+        self._crowd_percent = percent
+        self._update_drive_controls()
+        self.send_websocket_message("set_drive_mode", crowd_speed_percent=percent)
+
+    def _update_drive_controls(self):
+        """Reflect the known crowd mode state; controls wait until the backend has answered"""
+        known = self._crowd_mode is not None and self._crowd_percent is not None
+        self.crowd_mode_btn.setEnabled(known)
+        self.crowd_mode_btn.setChecked(bool(self._crowd_mode))
+        self.crowd_mode_btn.setText("ON" if self._crowd_mode or not known else "OFF")
+        stepper_on = known and self._crowd_mode
+        self.crowd_minus_btn.setEnabled(bool(stepper_on))
+        self.crowd_plus_btn.setEnabled(bool(stepper_on))
+        self.crowd_speed_value.setText(f"{self._crowd_percent}%" if known else "--")
+        self.crowd_speed_value.setEnabled(bool(stepper_on))
 
     # ---------- Buttons row ----------
 
@@ -1238,8 +1304,7 @@ class SettingsScreen(BaseScreen):
             self._update_input_style(edit)
         for combo in self.debug_combos.values():
             self._update_combo_style(combo)
-        for spin in (self.sample_duration_spin, self.sample_rate_spin, self.stand_down_spin,
-                     self.battery_packs_spin, self.battery_parallel_spin,
+        for spin in (self.battery_packs_spin, self.battery_parallel_spin,
                      self.battery_cell_mah_spin, self.battery_ah_spin):
             self._update_spinbox_style(spin)
         self._update_combo_style(self.battery_series_combo)
@@ -1254,6 +1319,7 @@ class SettingsScreen(BaseScreen):
         self._update_battery_display()
 
         self._update_theme_button_styles()
+        self.crowd_mode_btn.setStyleSheet(button_style(checked_fill=green))
 
     def _update_input_style(self, input_field: QLineEdit):
         primary = theme_manager.get("primary_color")
@@ -1325,7 +1391,6 @@ class SettingsScreen(BaseScreen):
         """Load current configuration settings"""
         cfg = config_manager.get_config(self.config_path)
         current = cfg.get("current", {})
-        wave = current.get("wave_detection", {})
         module_debug = current.get("module_debug", {})
 
         # Network
@@ -1339,32 +1404,12 @@ class SettingsScreen(BaseScreen):
         self.debug_combos["servo_debug_combo"].setCurrentText(module_debug.get("servo", "INFO"))
         self.debug_combos["network_debug_combo"].setCurrentText(module_debug.get("network", "INFO"))
 
-        # Wave
-        self.sample_duration_spin.setValue(wave.get("sample_duration", 3))
-        self.sample_rate_spin.setValue(wave.get("sample_rate", 5))
-        conf_pct = int(wave.get("confidence_threshold", 0.7) * 100)
-        self.confidence_value.setText(f"{conf_pct}%")
-        self.stand_down_spin.setValue(wave.get("stand_down_time", 30))
-
         # Audio - Load volume
         volume = current.get("volume", 70)
         self.volume_value.setText(f"{volume}%")
 
         # Theme selector state - ensure buttons reflect current theme
         self._update_theme_button_styles()
-
-    def _adjust_confidence(self, delta: int):
-        """Adjust confidence value by delta (e.g., +5 or -5)"""
-        current = self._get_confidence_value()
-        new_value = max(0, min(100, current + delta))
-        self.confidence_value.setText(f"{new_value}%")
-    
-    def _get_confidence_value(self) -> int:
-        """Get current confidence value from label text"""
-        try:
-            return int(self.confidence_value.text().rstrip('%'))
-        except ValueError:
-            return 70  # Default value
 
     def _adjust_volume(self, delta: int):
         """Adjust volume value by delta (e.g., +5 or -5)"""
@@ -1405,12 +1450,9 @@ class SettingsScreen(BaseScreen):
                         if k not in {"camera", "servo", "network"}
                     }
                 },
-                "wave_detection": {
-                    "sample_duration": self.sample_duration_spin.value(),
-                    "sample_rate": self.sample_rate_spin.value(),
-                    "confidence_threshold": self._get_confidence_value() / 100.0,
-                    "stand_down_time": self.stand_down_spin.value(),
-                },
+                # Not editable here; keep whatever is saved
+                "wave_detection": existing.get("current", {}).get(
+                    "wave_detection", dict(DEFAULT_WAVE_DETECTION)),
                 "volume": self._get_volume_value()
             },
             "defaults": existing.get("defaults", {})
@@ -1498,7 +1540,11 @@ class SettingsScreen(BaseScreen):
         cfg = config_manager.get_config(self.config_path)
         defaults = cfg.get("defaults", {})
         if defaults:
+            # Wave detection is not edited on this screen, so a reset keeps it
+            wave = cfg.get("current", {}).get("wave_detection")
             cfg["current"] = defaults.copy()
+            if wave is not None:
+                cfg["current"]["wave_detection"] = wave
             if config_manager.save_config(self.config_path, cfg):
                 self.load_config()
                 show_message(self, "SETTINGS", "Reset complete", "Settings are back to their defaults.")
@@ -1656,11 +1702,6 @@ class SettingsScreen(BaseScreen):
         if not ws_url:
             errors.append("WebSocket URL is required")
 
-        if self.sample_duration_spin.value() < 1:
-            errors.append("Sample duration must be at least 1 second")
-        if self.sample_rate_spin.value() < 1:
-            errors.append("Sample rate must be at least 1 Hz")
-
         if errors:
             show_message(self, "SETTINGS", "Check these settings",
                          "\n".join(f"• {e}" for e in errors), kind="warning")
@@ -1687,12 +1728,7 @@ class SettingsScreen(BaseScreen):
                     "error": "ERROR",
                 },
                 "network_monitoring": {"update_interval": 5.0, "ping_samples": 3},
-                "wave_detection": {
-                    "sample_duration": 3,
-                    "sample_rate": 5,
-                    "confidence_threshold": 0.7,
-                    "stand_down_time": 30,
-                },
+                "wave_detection": dict(DEFAULT_WAVE_DETECTION),
                 "volume": 70,
             }
         }

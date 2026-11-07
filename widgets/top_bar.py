@@ -4,8 +4,8 @@
 Top bar drawn over the header band of every screen.
 
 Left to right: robot pack charge, live track and electronics current,
-the most serious active problem, the WiFi link to the robot, and the
-Steam Deck's own battery.
+the most serious active problem (or the drive mode when there is none),
+the WiFi link to the robot, and the Steam Deck's own battery.
 """
 
 import re
@@ -226,6 +226,37 @@ class WarningIcon(QWidget):
         painter.drawEllipse(QPointF(10, 14.7), 1.1, 1.1)
 
 
+class DriveModeIcon(QWidget):
+    """Two people for crowd mode, a speedometer for full speed"""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(20, 18)
+        self._color = AMBER
+        self._crowd = True
+
+    def set_mode(self, crowd: bool, color: str):
+        self._crowd = crowd
+        self._color = color
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(self._color), 1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if self._crowd:
+            painter.drawEllipse(QPointF(6.5, 5), 2.6, 2.6)
+            painter.drawEllipse(QPointF(13.5, 5), 2.6, 2.6)
+            painter.drawArc(QRectF(1.5, 10, 10, 12), 0, 180 * 16)
+            painter.drawArc(QRectF(8.5, 10, 10, 12), 0, 180 * 16)
+        else:
+            painter.drawArc(QRectF(2, 3, 16, 16), 0, 180 * 16)
+            painter.drawLine(QPointF(10, 11), QPointF(14.5, 6))
+
+
 class TopBar(QWidget):
     """Status bar in its own recess over the header band; parented to the main window"""
 
@@ -254,6 +285,7 @@ class TopBar(QWidget):
         self._backend_alerts = []
         self._maestro_alerts = []
         self._alert_color = None
+        self._drive_mode = None
 
         self._build()
         self._apply_theme()
@@ -398,6 +430,22 @@ class TopBar(QWidget):
         row.addWidget(self.alert_icon)
         row.addWidget(self.alert_text)
         row.addWidget(self.alert_count)
+
+        # Drive mode pill, shown in place of the alert when nothing is wrong
+        self.drive_pill = QFrame()
+        self.drive_pill.setObjectName("top_bar_drive")
+        self.drive_pill.setFixedHeight(32)
+        pill_row = QHBoxLayout(self.drive_pill)
+        pill_row.setContentsMargins(14, 0, 14, 0)
+        pill_row.setSpacing(8)
+        self.drive_icon = DriveModeIcon()
+        self.drive_text = QLabel()
+        self.drive_text.setFont(px_font(15, bold=True, spacing=1.0))
+        pill_row.addWidget(self.drive_icon)
+        pill_row.addWidget(self.drive_text)
+        self.drive_pill.setVisible(False)
+        row.addWidget(self.drive_pill)
+
         row.addStretch(1)
         return self.status_cell
 
@@ -443,6 +491,9 @@ class TopBar(QWidget):
         self._websocket = websocket
         websocket.connected.connect(self._on_websocket_connected)
         websocket.disconnected.connect(self._on_websocket_disconnected)
+        register_handler = getattr(websocket, "register_handler", None)
+        if register_handler:
+            register_handler("drive_mode", self._on_drive_mode)
         self._ws_connected = websocket.is_connected()
         self._refresh_all()
 
@@ -452,7 +503,16 @@ class TopBar(QWidget):
 
     def _on_websocket_disconnected(self):
         self._ws_connected = False
+        self._drive_mode = None
         self._refresh_all()
+
+    def _on_drive_mode(self, data: dict):
+        """Crowd mode state, from telemetry or from a change broadcast"""
+        crowd_mode = data.get("crowd_mode")
+        percent = data.get("crowd_speed_percent")
+        if isinstance(crowd_mode, bool) and isinstance(percent, (int, float)):
+            self._drive_mode = (crowd_mode, int(percent))
+            self._refresh_status()
 
     def update_telemetry(self, data: dict):
         """Apply a telemetry message; zero or missing readings keep the last value"""
@@ -475,6 +535,13 @@ class TopBar(QWidget):
             if isinstance(status, dict) and status.get("connected") is False:
                 maestro_alerts.append(("WARNING", f"{name} offline"))
         self._maestro_alerts = maestro_alerts
+
+        drive_mode = data.get("drive_mode")
+        if isinstance(drive_mode, dict):
+            crowd_mode = drive_mode.get("crowd_mode")
+            percent = drive_mode.get("crowd_speed_percent")
+            if isinstance(crowd_mode, bool) and isinstance(percent, (int, float)):
+                self._drive_mode = (crowd_mode, int(percent))
 
         self._refresh_robot()
         self._refresh_gauges()
@@ -627,9 +694,27 @@ class TopBar(QWidget):
                 f"background: {color}; color: #111111; border-radius: 11px; padding: 0 8px;"
             )
 
+        self._refresh_drive_pill(show=not visible)
+
         if color != self._alert_color:
             self._alert_color = color
             self._apply_theme()
+
+    def _refresh_drive_pill(self, show: bool):
+        """Crowd mode in green, full speed in amber; hidden while an alert is showing"""
+        if not show or not self._ws_connected or self._drive_mode is None:
+            self.drive_pill.setVisible(False)
+            return
+        crowd_mode, percent = self._drive_mode
+        color = theme_manager.get("green") if crowd_mode else AMBER
+        self.drive_text.setText(f"CROWD MODE · {percent}%" if crowd_mode else "FULL SPEED")
+        self.drive_text.setStyleSheet(f"color: {color}; background: transparent; border: none;")
+        self.drive_icon.set_mode(crowd_mode, color)
+        self.drive_pill.setStyleSheet(
+            f"QFrame#top_bar_drive {{ background: {rgba(color, 0.10)}; "
+            f"border: 1px solid {rgba(color, 0.55)}; border-radius: 16px; }}"
+        )
+        self.drive_pill.setVisible(True)
 
     # ---------- Steam Deck battery ----------
 
