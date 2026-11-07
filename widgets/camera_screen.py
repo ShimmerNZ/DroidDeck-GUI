@@ -30,6 +30,14 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # Minimum seconds between people updates sent to the backend (10 Hz)
 PEOPLE_SEND_INTERVAL = 0.1
 GESTURES = ("hands_up", "left_wave", "right_wave")
+DEFAULT_RESOLUTION_INDEX = 6  # VGA 640x480
+
+# ESP32 sketch defaults for the OV3660 sensor; Reset sends these
+CAMERA_DEFAULTS = {
+    "resolution": DEFAULT_RESOLUTION_INDEX, "quality": 10,
+    "brightness": 1, "contrast": 0, "saturation": -2,
+    "h_mirror": False, "v_flip": True,
+}
 
 # Card layout - matches the Health screen card style
 CARD_OBJECT_NAME = "camera_card"
@@ -250,6 +258,10 @@ class CameraControlsWidget(QWidget):
         # Setting name labels, kept for theme updates
         self._control_labels = []
 
+        # Slider the D-pad is adjusting, as an index into nav_sliders
+        self.nav_sliders = []
+        self.nav_index = 0
+
         # Initialize debouncer
         self.settings_debouncer = CameraSettingsDebouncer(
             proxy_base_url=self.proxy_base_url,
@@ -262,8 +274,7 @@ class CameraControlsWidget(QWidget):
 
         self.init_ui()
         self.initializing = False
-        # Load settings asynchronously; the ESP32 sync is chained from the
-        # load callback so it always runs against the values just loaded
+        # Load settings asynchronously
         self.load_current_settings()
 
     def _update_status_display(self, message: str, color: str):
@@ -327,12 +338,13 @@ class CameraControlsWidget(QWidget):
         res_label = self._make_control_label("Resolution")
 
         self.resolution_combo = QComboBox()
+        # Same sizes, in the same order, as the ESP32 sketch's resolution
+        # table; the settings API uses the position in this list
         self.resolution_combo.addItems([
             "QQVGA(160x120)", "QCIF(176x144)", "HQVGA(240x176)", "QVGA(320x240)",
-            "CIF(400x296)", "VGA(640x480)", "SVGA(800x600)", "XGA(1024x768)",
-            "SXGA(1280x1024)", "UXGA(1600x1200)"
+            "CIF(400x296)", "HVGA(480x320)", "VGA(640x480)", "SVGA(800x600)"
         ])
-        self.resolution_combo.setCurrentIndex(5)  # VGA
+        self.resolution_combo.setCurrentIndex(DEFAULT_RESOLUTION_INDEX)
         self.resolution_combo.setFont(px_font(14))
         self.resolution_combo.setFixedHeight(36)
         self._update_combobox_style(self.resolution_combo)
@@ -346,24 +358,22 @@ class CameraControlsWidget(QWidget):
         res_layout.setContentsMargins(0, 0, 0, 0)
         esp32_layout.addWidget(res_row)
 
-        # X CLK slider keeps its own attribute names for existing callers
-        self.xclk_slider, xclk_layout = self.create_slider_control("X CLK", 10, 20, 16, "xclk_freq")
-        self.xclk_value_label = getattr(self, 'xclk_freq_value_label')
-        esp32_layout.addWidget(self._wrap_row(xclk_layout, SLIDER_ROW_HEIGHT))
-
-        # Slider controls
+        # Slider controls; quality matches the 4-25 range the sketch accepts
         slider_controls = [
-            ("Quality", 4, 63, 12, "quality"),
-            ("Brightness", -2, 2, 0, "brightness"),
-            ("Contrast", -2, 2, 0, "contrast"),
-            ("Saturation", -2, 2, 0, "saturation")
+            ("Quality", 4, 25, "quality"),
+            ("Brightness", -2, 2, "brightness"),
+            ("Contrast", -2, 2, "contrast"),
+            ("Saturation", -2, 2, "saturation")
         ]
 
         self.sliders = {}
-        for label_text, min_val, max_val, default_val, setting_name in slider_controls:
-            slider, layout = self.create_slider_control(label_text, min_val, max_val, default_val, setting_name)
+        for label_text, min_val, max_val, setting_name in slider_controls:
+            slider, layout = self.create_slider_control(
+                label_text, min_val, max_val, CAMERA_DEFAULTS[setting_name], setting_name)
             self.sliders[setting_name] = slider
+            self.nav_sliders.append((setting_name, slider, self._control_labels[-1]))
             esp32_layout.addWidget(self._wrap_row(layout, SLIDER_ROW_HEIGHT))
+        self._update_nav_highlight()
 
         # Mirror controls
         mirror_layout = QHBoxLayout()
@@ -422,6 +432,27 @@ class CameraControlsWidget(QWidget):
         self._update_control_label_style(label)
         self._control_labels.append(label)
         return label
+
+    def handle_navigation(self, action: str):
+        """D-pad: up/down picks a slider, left/right steps its value"""
+        if not self.nav_sliders:
+            return
+        if action in ("up", "down"):
+            step = -1 if action == "up" else 1
+            self.nav_index = max(0, min(len(self.nav_sliders) - 1, self.nav_index + step))
+            self._update_nav_highlight()
+        elif action in ("left", "right"):
+            _, slider, _ = self.nav_sliders[self.nav_index]
+            slider.setValue(slider.value() + (-1 if action == "left" else 1))
+
+    def _update_nav_highlight(self):
+        """Show the D-pad's selected slider by colouring its label"""
+        for index, (_, _, label) in enumerate(self.nav_sliders):
+            if index == self.nav_index:
+                label.setStyleSheet(f"border: none; background: transparent; "
+                                    f"color: {theme_manager.get('primary_color')};")
+            else:
+                self._update_control_label_style(label)
 
     def _handle_setting_change(self, setting_name, value):
         """Handle setting changes, but only if not initializing"""
@@ -581,9 +612,9 @@ class CameraControlsWidget(QWidget):
             if hasattr(self, 'actions_header'):
                 self._update_section_header_style(self.actions_header)
 
+            self._update_nav_highlight()
+
             # Update value labels
-            if hasattr(self, 'xclk_value_label'):
-                self._update_value_label_style(self.xclk_value_label)
             for setting_name in getattr(self, 'sliders', {}):
                 if hasattr(self, f'{setting_name}_value_label'):
                     self._update_value_label_style(getattr(self, f'{setting_name}_value_label'))
@@ -602,8 +633,6 @@ class CameraControlsWidget(QWidget):
                 self._update_combobox_style(self.resolution_combo)
 
             # Update all sliders
-            if hasattr(self, 'xclk_slider'):
-                self._update_slider_style(self.xclk_slider)
             for slider in getattr(self, 'sliders', {}).values():
                 self._update_slider_style(slider)
 
@@ -617,7 +646,7 @@ class CameraControlsWidget(QWidget):
                               self._on_settings_loaded, timeout_ms=3000, owner=self)
 
     def _on_settings_loaded(self, response):
-        """Apply loaded settings to the UI, then sync them back to the ESP32"""
+        """Apply settings loaded from the camera to the UI"""
         if not response.ok or response.json is None:
             self._update_status_display("Failed to load settings", "#FF4444")
             self.logger.error(f"Failed to load camera settings: {response.error or response.status}")
@@ -630,7 +659,7 @@ class CameraControlsWidget(QWidget):
         # debouncer as user changes
         self.initializing = True
         try:
-            if "resolution" in settings:
+            if "resolution" in settings and 0 <= settings["resolution"] < self.resolution_combo.count():
                 self.resolution_combo.setCurrentIndex(settings["resolution"])
             if "quality" in settings and "quality" in self.sliders:
                 self.sliders["quality"].setValue(settings["quality"])
@@ -642,8 +671,6 @@ class CameraControlsWidget(QWidget):
                 self.sliders["saturation"].setValue(settings["saturation"])
             if "h_mirror" in settings:
                 self.h_mirror_btn.setChecked(settings["h_mirror"])
-            if "xclk_freq" in settings:
-                self.xclk_slider.setValue(settings["xclk_freq"])
             if "v_flip" in settings:
                 self.v_flip_btn.setChecked(settings["v_flip"])
         finally:
@@ -652,53 +679,13 @@ class CameraControlsWidget(QWidget):
         self._update_status_display("Settings loaded", "#44FF44")
         self.logger.info("Loaded camera settings")
 
-        self._sync_loaded_settings_to_esp32()
-
-    def _sync_loaded_settings_to_esp32(self):
-        """
-        After loading settings from the proxy, send them back to the ESP32 so
-        both ends hold the same values (asynchronous).
-        """
-        if not self.current_settings:
-            self.logger.warning("No current settings to sync to ESP32")
-            return
-
-        self._update_status_display("Syncing settings to ESP32...", "#0088FF")  # Blue
-
-        url = f"{self.proxy_base_url}/camera/settings"
-        get_http_client().post_json(url, self.current_settings,
-                                    self._on_sync_response, timeout_ms=5000, owner=self)
-
-    def _on_sync_response(self, response):
-        """Handle the ESP32 sync response"""
-        if response.ok and response.json:
-            message = response.json.get("message", "Settings synchronized")
-            self._update_status_display(message, "#00AA00")  # Green
-            self.logger.info(f"Settings synchronized with ESP32: {list(self.current_settings.keys())}")
-        else:
-            if response.json and "message" in response.json:
-                error_message = response.json["message"]
-            elif response.error:
-                error_message = response.error
-            else:
-                error_message = f"HTTP {response.status}"
-
-            self._update_status_display(f"Sync failed: {error_message[:30]}", "#FF0000")
-            self.logger.error(f"Settings sync failed: {error_message}")
-
-    @error_boundary
     def reset_to_defaults(self):
         """Reset all settings to default values"""
         self.settings_debouncer.clear_pending()
         
-        defaults = {
-            "xclk_freq": 16, "resolution": 5, "quality": 12,
-            "brightness": 0, "contrast": 0, "saturation": 0,
-            "h_mirror": False, "v_flip": False
-        }
+        defaults = dict(CAMERA_DEFAULTS)
 
         # Update UI controls
-        self.xclk_slider.setValue(defaults["xclk_freq"])
         self.resolution_combo.setCurrentIndex(defaults["resolution"])
         self.sliders["quality"].setValue(defaults["quality"])
         self.sliders["brightness"].setValue(defaults["brightness"])
@@ -793,6 +780,7 @@ class CameraFeedScreen(BaseScreen):
         # otherwise go stale until manually toggled.
         if self.websocket is not None:
             self.websocket.connected.connect(self.check_stream_status)
+            self.subscribe_while_visible("navigation", self._on_navigation)
 
     def init_ui(self):
         # Video display
@@ -1131,6 +1119,9 @@ class CameraFeedScreen(BaseScreen):
 
                 if running:
                     text = f"{fps:.1f} FPS · {int(frame_count):,} frames"
+                    frame_size = stats_dict.get('frame_size')
+                    if frame_size:
+                        text = f"{frame_size[0]}×{frame_size[1]} · " + text
                     if detect_ms is not None:
                         text += f" · detect {detect_ms:.0f} ms"
                     self._set_stats_text(text, active=True)
@@ -1185,6 +1176,11 @@ class CameraFeedScreen(BaseScreen):
                 self.logger.info(f"Gesture {gesture} from person {person_id} sent "
                                  f"(held {confidence:.0%} of {wave_config['sample_duration']}s)")
                 return
+
+    def _on_navigation(self, msg: dict):
+        """D-pad adjusts the ESP32 camera sliders"""
+        if hasattr(self, 'controls_widget'):
+            self.controls_widget.handle_navigation(msg.get("action"))
 
     def showEvent(self, event):
         super().showEvent(event)

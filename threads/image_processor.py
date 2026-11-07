@@ -107,6 +107,7 @@ class ImageProcessingThread(QThread):
         self.running = False
         self.should_connect = False
         self.frame_count = 0
+        self.source_size = None  # (width, height) of the camera's frames
         self.last_stats_time = time.time()
         self.tracking_enabled = False
 
@@ -320,7 +321,6 @@ class ImageProcessingThread(QThread):
 
         try:
             frame_count_local = 0
-            last_frame_time = time.time()
             last_stats_time = time.time()
 
             self.logger.info("Starting MJPEG frame processing...")
@@ -357,17 +357,11 @@ class ImageProcessingThread(QThread):
                             'fps': fps,
                             'frame_count': self.frame_count,
                             'detect_ms': detect_ms,
+                            'frame_size': self.source_size,
                             'running': True
                         })
                         frame_count_local = 0
                         last_stats_time = current_time
-
-                    # Limit frame rate to ~30 FPS
-                    frame_delay = 1.0 / 30.0
-                    elapsed = current_time - last_frame_time
-                    if elapsed < frame_delay:
-                        time.sleep(frame_delay - elapsed)
-                    last_frame_time = time.time()
 
             return not reader_failed.is_set()
 
@@ -417,6 +411,7 @@ class ImageProcessingThread(QThread):
 
             # Resize frame if too large (for performance)
             height, width = frame_rgb.shape[:2]
+            self.source_size = (width, height)
             if width > 800:
                 scale = 800 / width
                 new_width = int(width * scale)
