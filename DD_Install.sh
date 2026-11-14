@@ -332,7 +332,13 @@ ALSA_EOF
     export QT_DEVICE_PIXEL_RATIO=1
     export DISPLAY=:0
 
-    python -u main.py
+    export DROIDDECK_SUPERVISED=1
+    while true; do
+        python -u main.py
+        status=$?
+        [ "$status" -eq 75 ] || break
+        echo "DroidDeck restarting..."
+    done
 '
 EOF
 

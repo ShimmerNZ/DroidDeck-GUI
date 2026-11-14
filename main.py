@@ -11,6 +11,7 @@ import pygame
 from PyQt6.QtWidgets import QApplication
 
 from core.application import DroidDeckApplication
+from core.restart import restart_exit_code
 
 
 def setup_steamdeck_audio():
@@ -84,7 +85,7 @@ def main():
         droid_deck_app = DroidDeckApplication()
         
         print("DroidDeck application started successfully")
-        sys.exit(app.exec())
+        sys.exit(restart_exit_code(app.exec()))
         
     except Exception as e:
         print(f"Failed to start DroidDeck application: {e}")

@@ -23,6 +23,7 @@ from widgets.flow_dialog import show_message, ask_confirm
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+from core.restart import prepare_restart
 from widgets.controller_status_splash import show_controller_status_splash
 
 CONTROLLER_CONFIG_PATH = "resources/configs/controller_config.json"
@@ -418,10 +419,8 @@ class SystemControlHandler(BehaviorHandler):
                 sys.exit(0)
 
     def _handle_restart_app(self):
-        """Confirm, then close cleanly and relaunch the same command"""
+        """Confirm, then close cleanly; the app is relaunched once shutdown finishes"""
         try:
-            import sys
-            import atexit
             from widgets.flow_dialog import FlowDialog
 
             main_window = self._find_main_window()
@@ -438,20 +437,11 @@ class SystemControlHandler(BehaviorHandler):
             if self.logger:
                 self.logger.info("User confirmed app restart via controller")
 
-            argv = [sys.executable] + list(getattr(sys, "orig_argv", [sys.executable] + sys.argv)[1:])
-
-            def relaunch():
-                try:
-                    os.execv(sys.executable, argv)
-                except Exception as e:
-                    print(f"Restart failed, please start DroidDeck manually: {e}")
-
+            prepare_restart()
             if main_window is not None:
-                # Relaunch once the normal shutdown has finished
-                atexit.register(relaunch)
                 QTimer.singleShot(100, main_window.close)
             else:
-                QTimer.singleShot(100, relaunch)
+                QTimer.singleShot(100, QApplication.instance().quit)
 
         except Exception as e:
             if self.logger:

@@ -6,7 +6,6 @@ Settings Screen (Themed)
 import requests
 import socket
 import time
-import atexit
 import os
 import sys
 import zipfile
@@ -28,6 +27,7 @@ from core.version import save_build_info
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
+from core.restart import prepare_restart
 
 # Card layout - matches the Health screen card style
 CARD_OBJECT_NAME = "settings_card"
@@ -1832,16 +1832,8 @@ class SettingsScreen(BaseScreen):
         dialog.set_step(step if step >= 0 else 0, STEP_ERROR)
 
     def _restart_application(self):
-        """Close the app normally, then relaunch the same command in place once shutdown finishes"""
-        argv = [sys.executable] + list(getattr(sys, "orig_argv", [sys.executable] + sys.argv)[1:])
-
-        def relaunch():
-            try:
-                os.execv(sys.executable, argv)
-            except Exception as e:
-                print(f"Restart failed, please start DroidDeck manually: {e}")
-
-        atexit.register(relaunch)
+        """Close the app normally; it is relaunched once shutdown finishes"""
+        prepare_restart()
         self.logger.info("Restarting application after update")
         window = self.window()
         if window is not None:
