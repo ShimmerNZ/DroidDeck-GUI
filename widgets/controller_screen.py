@@ -1434,18 +1434,24 @@ class ControllerConfigScreen(BaseScreen):
     # ========================================
 
     def open_calibration_dialog(self):
-        """Open the controller calibration dialog"""
+        """Open the IMU calibration dialog"""
         try:
-            from widgets.controller_calibration_screen import ControllerCalibrationDialog
+            from widgets.imu_calibration_dialog import ImuCalibrationDialog
 
-            dialog = ControllerCalibrationDialog(websocket=self.websocket, parent=self)
-            dialog.calibration_completed.connect(self.on_calibration_completed)
-            result = dialog.exec()
+            controller_thread = None
+            for widget in QApplication.instance().topLevelWidgets():
+                if hasattr(widget, 'controller_thread'):
+                    controller_thread = widget.controller_thread
+                    break
 
-            if result == QDialog.DialogCode.Accepted:
-                self.logger.info("Controller calibration completed successfully")
-            else:
-                self.logger.info("Controller calibration cancelled")
+            if controller_thread is None:
+                self.logger.warning("No controller thread available for IMU calibration")
+                self.show_error_message("Calibration Error",
+                                        "The Steam Deck controller is not running, so there is no IMU data to calibrate.")
+                return
+
+            dialog = ImuCalibrationDialog(self, controller_thread)
+            dialog.exec()
 
         except ImportError as e:
             self.logger.error(f"Failed to import calibration dialog: {e}")
@@ -1455,13 +1461,6 @@ class ControllerConfigScreen(BaseScreen):
             self.logger.error(f"Failed to open calibration dialog: {e}")
             self.show_error_message("Calibration Error",
                                     f"Failed to open calibration dialog: {str(e)}")
-
-    def on_calibration_completed(self, calibration_data: dict):
-        """Handle completion of controller calibration"""
-        self.logger.info("Controller calibration data received")
-        self.show_info_message("Calibration Complete",
-                               "Controller calibration completed successfully!\n"
-                               "New settings have been applied.")
 
     def show_error_message(self, title: str, message: str):
         show_message(self, "CONTROLLER", title, message, kind="error")
@@ -1891,6 +1890,30 @@ class ControllerConfigScreen(BaseScreen):
         layout.addWidget(plus)
         return frame
 
+    def _readout_tile(self, caption: str, value) -> QFrame:
+        """Read-only caption and value tile, the same size as a compact stepper tile"""
+        frame = QFrame()
+        frame.setObjectName("readout_tile")
+        frame.setFixedHeight(40)
+        frame.setStyleSheet(
+            f"QFrame#readout_tile {{ background-color: {TILE_BG}; border: 1px solid #3a3a3a; border-radius: 8px; }}"
+            "QLabel { background: transparent; border: none; }")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(2, 0, 10, 0)
+        layout.setSpacing(2)
+        cap = QLabel(caption)
+        cap.setFont(px_font(10, spacing=0.5))
+        cap.setFixedWidth(36)
+        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cap.setStyleSheet(f"color: {LABEL_GREY};")
+        layout.addWidget(cap)
+        label = QLabel(str(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else "--")
+        label.setFont(px_font(15, bold=True, family="Consolas"))
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(f"color: {LABEL_GREY};")
+        layout.addWidget(label, 1)
+        return frame
+
     def _timing_segment(self, row_data: Dict, options=("on_press", "on_release"), enabled: bool = True):
         labels = {"on_press": "Press", "on_release": "Release", "continuous": "Continuous"}
         current = row_data['config'].get('trigger_timing', 'on_press')
@@ -2193,8 +2216,12 @@ class ControllerConfigScreen(BaseScreen):
         self._create_behavior_parameters(row_data)
 
     def _create_imu_tilt_params(self, row_data: Dict):
-        """Up to two servos, each with channel, invert and min / home / max"""
+        """Up to two servos, each with channel and invert; min / home / max are shown from the servo config"""
         servos = row_data['config'].setdefault('servos', [])
+        try:
+            servo_config = config_manager.get_config(SERVO_CONFIG_PATH) or {}
+        except Exception:
+            servo_config = {}
         header = QHBoxLayout()
         header.addWidget(self._caption("SERVOS · TILT MAPS MIN → HOME → MAX", track=False), 1)
         add_btn = QPushButton("+ ADD SERVO")
@@ -2218,12 +2245,11 @@ class ControllerConfigScreen(BaseScreen):
             block_layout.addLayout(self._create_imu_servo_row(row_data, index, servo))
             pulses = QHBoxLayout()
             pulses.setSpacing(6)
-            for caption, key, default in (("MIN", "min_pulse", 992), ("HOME", "home_pulse", 1500),
-                                          ("MAX", "max_pulse", 2000)):
-                pulses.addWidget(self._stepper_tile(
-                    servo.get(key, default), 500, 2500,
-                    lambda v, i=index, k=key: self._update_imu_servo(row_data, i, k, v),
-                    caption=caption, compact=True), 1)
+            channel_config = servo_config.get(servo.get('channel', ''), {})
+            if not isinstance(channel_config, dict):
+                channel_config = {}
+            for caption, key in (("MIN", "min"), ("HOME", "home"), ("MAX", "max")):
+                pulses.addWidget(self._readout_tile(caption, channel_config.get(key)), 1)
             block_layout.addLayout(pulses)
             self.params_layout.addWidget(block)
         if not servos:
@@ -2256,11 +2282,12 @@ class ControllerConfigScreen(BaseScreen):
             self._mark_dirty()
             if key == 'channel':
                 self._refresh_list_row(self.selected_row_index)
+                self._create_behavior_parameters(row_data)
 
     def _add_imu_servo(self, row_data: Dict):
         servos = row_data['config'].setdefault('servos', [])
         if len(servos) < MAX_IMU_SERVOS:
-            servos.append({'channel': '', 'invert': False, 'min_pulse': 992, 'home_pulse': 1500, 'max_pulse': 2000})
+            servos.append({'channel': '', 'invert': False})
             self._mark_dirty()
             self._create_behavior_parameters(row_data)
 

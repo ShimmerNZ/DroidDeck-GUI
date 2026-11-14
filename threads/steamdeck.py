@@ -20,6 +20,7 @@ Byte offsets verified by hardware sweep testing (test_motion_standalone.py):
 """
 
 import json
+import os
 import struct
 import time
 from typing import Dict, Any, Optional
@@ -54,6 +55,24 @@ ACCEL_MAX = 16384
 STICK_DEADZONE   = 0.05
 TRIGGER_DEADZONE = 0.02
 IMU_DEADZONE     = 0.12
+
+# Calibrated tilt limits, in accelerometer counts away from level
+IMU_CALIBRATION_PATH = "resources/configs/imu_calibration.json"
+IMU_LIMIT_KEYS = ("roll_left", "roll_right", "pitch_forward", "pitch_back")
+IMU_LIMIT_MIN = int(ACCEL_MAX * 0.2)
+IMU_LIMIT_MAX = ACCEL_MAX * 2
+
+
+def normalise_imu_accel(counts: float, full_scale: float = ACCEL_MAX) -> float:
+    """Normalise accelerometer counts to +/-1.0 with deadzone, rescaled for a smooth ramp from zero.
+    full_scale counts map to +/-1.0 full servo travel.
+    """
+    v = counts / full_scale
+    mag = abs(v)
+    if mag < IMU_DEADZONE:
+        return 0.0
+    scaled = (mag - IMU_DEADZONE) / (1.0 - IMU_DEADZONE)
+    return max(-1.0, min(1.0, scaled if v >= 0 else -scaled))
 
 # SteamDeckExtended field name → DroidDeck control name
 BUTTON_MAP = {
@@ -124,6 +143,7 @@ class SteamDeckControllerThread(QThread):
         self._accel_zero_y    = 0
         self._prev_buttons    = {}
         self.imu_toggle_buttons: set = set()
+        self._imu_limits      = {key: ACCEL_MAX for key in IMU_LIMIT_KEYS}
 
         # HID handles
         self._hid_device    = None
@@ -191,9 +211,35 @@ class SteamDeckControllerThread(QThread):
         except Exception:
             pass
 
+    def load_imu_calibration(self):
+        """Read the calibrated tilt limits from disk; missing or invalid values fall back to 1g."""
+        limits = {key: ACCEL_MAX for key in IMU_LIMIT_KEYS}
+        try:
+            saved = config_manager.get_config(IMU_CALIBRATION_PATH) if os.path.exists(IMU_CALIBRATION_PATH) else {}
+            for key in IMU_LIMIT_KEYS:
+                value = saved.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    limits[key] = int(max(IMU_LIMIT_MIN, min(IMU_LIMIT_MAX, value)))
+        except Exception as e:
+            self.logger.error(f"Could not load IMU calibration: {e}")
+        self._imu_limits = limits
+        self.logger.info(f"IMU tilt limits: {limits}")
+
+    def get_imu_calibration(self) -> Dict[str, int]:
+        """Tilt limits currently applied, in accelerometer counts away from level."""
+        return dict(self._imu_limits)
+
+    def get_imu_raw(self) -> Optional[Dict[str, int]]:
+        """Latest raw accelerometer and gyro values, or None when the Deck reader is not running."""
+        deck = self._bitsteam_deck
+        if not deck or not deck.is_running:
+            return None
+        return deck.get_motion_values()
+
     def start_monitoring(self):
         if not self.running:
             self._load_controller_config()
+            self.load_imu_calibration()
             self.running = True
             self.stats["start_time"] = time.time()
             self.start()
@@ -367,8 +413,8 @@ class SteamDeckControllerThread(QThread):
         ax = m.get('accel_x', 0) - self._accel_zero_x
         ay = m.get('accel_y', 0) - self._accel_zero_y
 
-        roll  = self._norm_imu_accel(ax)
-        pitch = self._norm_imu_accel(ay)
+        roll  = self.imu_axis_output('roll', ax)
+        pitch = self.imu_axis_output('pitch', ay)
 
         return {
             'imu_roll':  roll,
@@ -428,16 +474,15 @@ class SteamDeckControllerThread(QThread):
         """
         return max(-1.0, min(1.0, (raw_uint16 / TRIGGER_MAX) * 2.0 - 1.0))
 
-    def _norm_imu_accel(self, counts: int) -> float:
-        """Normalise raw accelerometer counts to ±1.0 with deadzone, rescaled for a smooth ramp from zero.
-        ACCEL_MAX counts (1g) maps to ±1.0 full servo travel.
+    def imu_axis_output(self, axis: str, counts: float) -> float:
+        """Normalise tilt counts away from level to ±1.0 using the calibrated limit for that side.
+        Roll is positive to the left, pitch is positive tilting back.
         """
-        v = counts / ACCEL_MAX
-        mag = abs(v)
-        if mag < IMU_DEADZONE:
-            return 0.0
-        scaled = (mag - IMU_DEADZONE) / (1.0 - IMU_DEADZONE)
-        return max(-1.0, min(1.0, scaled if v >= 0 else -scaled))
+        if axis == 'roll':
+            key = 'roll_left' if counts >= 0 else 'roll_right'
+        else:
+            key = 'pitch_back' if counts >= 0 else 'pitch_forward'
+        return normalise_imu_accel(counts, self._imu_limits.get(key, ACCEL_MAX))
 
     def _send_controller_websocket(self, input_data: ControllerInputData):
         """Emit controller data as a thread-safe Qt signal for the websocket"""
