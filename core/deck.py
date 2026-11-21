@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import hid
 import threading
 import struct
@@ -372,16 +374,6 @@ class SteamDeck:
         if self._thread and self._thread.is_alive():
             self._thread.join()
 
-    def get_button_state(self, button_name):
-        """
-        Gets the state of a specific button.
-
-        :param button_name: The name of the button.
-        :return: True if pressed, False otherwise.
-        """
-        with self._lock:
-            return self.buttons.get(button_name, False)
-
     def get_analog_values(self):
         """
         Gets the current values of all analog inputs.
@@ -390,15 +382,6 @@ class SteamDeck:
         """
         with self._lock:
             return self.analog.copy()
-
-    def get_imu_rates(self):
-        """
-        Gets the current IMU rotation rates.
-
-        :return: A dictionary with the pitch, yaw, and roll rates.
-        """
-        with self._lock:
-            return self.imu.copy()
 
     def get_motion_values(self):
         """

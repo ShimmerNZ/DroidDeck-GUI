@@ -429,7 +429,7 @@ class HomeScreen(BaseScreen):
             scene_name = scene.get("label", "Unknown")
 
             # Send WebSocket command to backend
-            success = self.send_websocket_message("scene", emotion=scene_name)
+            success = self.send_websocket_message("scene", scene_name=scene_name)
 
             if success:
                 # Emit signal and update UI
@@ -1064,8 +1064,8 @@ class HomeScreen(BaseScreen):
             self.logger.error(f"Error updating theme: {e}")
 
     @error_boundary
-    def reload_emotions(self):
-        """Backward-compatible: refresh categories when SceneScreen updates."""
+    def reload_categories(self):
+        """Rebuild the category pills when the Scene screen changes the scene list"""
         # Remove the existing category pills
         if hasattr(self, 'category_widget') and self.category_widget:
             self.category_holder.removeWidget(self.category_widget)
@@ -1132,7 +1132,7 @@ class HomeScreen(BaseScreen):
 
     def connect_scene_screen_signals(self, scene_screen):
         """Connect signals from SceneScreen to update categories when changed."""
-        scene_screen.scenes_updated.connect(self.reload_emotions)
+        scene_screen.scenes_updated.connect(self.reload_categories)
 
     def __del__(self):
         """Clean up theme manager callback on destruction"""

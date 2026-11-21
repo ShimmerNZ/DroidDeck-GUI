@@ -174,7 +174,7 @@ python main.py
 │   ├── health_screen.py
 │   ├── servo_screen.py
 │   ├── controller_screen.py
-│   ├── controller_calibration_screen.py
+│   ├── imu_calibration_dialog.py   # IMU tilt calibration popup
 │   ├── controller_status_splash.py
 │   ├── scene_screen.py
 │   ├── settings_screen.py
@@ -194,7 +194,6 @@ python main.py
 │   ├── images/
 │   ├── models/pose_landmarker_lite.task   # MediaPipe person detection model
 │   └── theme/                     # Wall-e and Star Wars images, icons and audio
-├── configs/
 ├── logs/                          # Created by launch.sh
 ├── version_info.json              # Written by the GUI updater
 └── launch.sh                      # Created by the installer
@@ -212,7 +211,6 @@ All app settings live in `resources/configs/`. Most can be changed from the GUI,
 | `controller_mappings.json` | Controller button/axis definitions | — |
 | `scenes_config.json` | Scene list, categories and timing | Scene screen |
 | `theme_config.json` | Current theme | Settings screen |
-| `motion_config.json`, `movement_controls.json` | Motion groups and movement controls | — |
 
 ### Network Settings
 

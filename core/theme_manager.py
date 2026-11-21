@@ -1,8 +1,7 @@
-# core/theme_manager.py
-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
 import json
-from pathlib import Path
 from typing import Callable, Dict, Any, List
 from .logger import get_logger
 
@@ -161,105 +160,6 @@ class ThemeManager:
             return cls._current_theme.get("background", "resources/images/background.png")
         else:
             return cls._current_theme.get(image_key, f"resources/images/{image_key}.png")
-
-    @classmethod
-    def get_button_style(cls, style_type: str = "default", checked: bool = False) -> str:
-        """Get themed button stylesheet"""
-        primary = cls.get("primary_color")
-        primary_light = cls.get("primary_light")
-        primary_gradient = cls.get("primary_gradient")
-        grey = cls.get("grey")
-        
-        if style_type == "primary":
-            if checked:
-                return f"""
-                QPushButton {{
-                    background: {primary_gradient};
-                    border: 2px solid {primary};
-                    border-radius: 8px;
-                    color: black;
-                    font-weight: bold;
-                    padding: 8px 16px;
-                }}
-                QPushButton:hover {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {primary_light}, stop:1 {primary});
-                }}
-                """
-            else:
-                return f"""
-                QPushButton {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #4a4a4a, stop:1 #2a2a2a);
-                    border: 2px solid #666;
-                    border-radius: 8px;
-                    color: #ccc;
-                    font-weight: bold;
-                    padding: 8px 16px;
-                }}
-                QPushButton:hover {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #5a5a5a, stop:1 #3a3a3a);
-                    border: 2px solid {primary};
-                    color: {primary};
-                }}
-                """
-        
-        # Default style
-        return f"""
-        QPushButton {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #4a4a4a, stop:1 #2a2a2a);
-            color: white;
-            border: 1px solid #666;
-            border-radius: 6px;
-            padding: 6px;
-            text-align: center;
-            font-weight: bold;
-        }}
-        QPushButton:hover {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #5a5a5a, stop:1 #3a3a3a);
-            border-color: #888;
-        }}
-        QPushButton:pressed {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #3a3a3a, stop:1 #1a1a1a);
-            border-color: {primary};
-        }}
-        """
-
-    @classmethod
-    def get_panel_style(cls, style_type: str = "main") -> str:
-        """Get themed panel stylesheet"""
-        primary = cls.get("primary_color")
-        panel_bg = cls.get("panel_bg")
-        panel_dark = cls.get("panel_dark")
-        
-        if style_type == "main":
-            return f"""
-            QWidget {{
-                background-color: {panel_dark};
-                border: 2px solid {primary};
-                border-radius: 12px;
-                color: white;
-            }}
-            """
-        elif style_type == "section":
-            return f"""
-            QWidget {{
-                border: 1px solid #555;
-                border-radius: 8px;
-                background-color: rgba(0, 0, 0, 0.3);
-            }}
-            """
-        
-        return f"""
-        QWidget {{
-            background-color: {panel_bg};
-            color: white;
-        }}
-        """
 
     @classmethod
     def register_callback(cls, callback: Callable[[], None]):

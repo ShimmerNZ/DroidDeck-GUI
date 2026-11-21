@@ -554,10 +554,3 @@ class ImageProcessingThread(QThread):
             return "left_wave"
         return None
 
-    def stop(self):
-        """Legacy method for compatibility - calls stop_processing"""
-        self.stop_processing()
-
-    def _emit_stats(self):
-        """Legacy method for compatibility - stats are now emitted in _process_mjpeg_stream"""
-        pass

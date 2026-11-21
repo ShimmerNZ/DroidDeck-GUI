@@ -21,7 +21,6 @@ Byte offsets verified by hardware sweep testing (test_motion_standalone.py):
 
 import json
 import os
-import struct
 import time
 from typing import Dict, Any, Optional
 
@@ -337,10 +336,6 @@ class SteamDeckControllerThread(QThread):
             self.controller_active = False
             self.controller_disconnected.emit("HID device closed")
 
-    def _drain_hid(self) -> Optional[bytes]:
-        """Not used — all data comes from bitsteam. Returns a sentinel value."""
-        return b'\x00' * 64
-
     _STICK_AXES = ('left_stick_x', 'left_stick_y', 'right_stick_x', 'right_stick_y')
 
     def _read_and_send(self, current_time: float):
@@ -530,11 +525,3 @@ class SteamDeckControllerThread(QThread):
             "poll_rate":       self.poll_rate_hz,
         }
 
-    def set_poll_rate(self, hz: int):
-        if 10 <= hz <= 120:
-            self.poll_rate_hz  = hz
-            self.poll_interval = 1.0 / hz
-            self.logger.info(f"Controller poll rate set to {hz} Hz")
-
-    def enable_safety_monitoring(self, enabled: bool):
-        self.logger.info(f"Safety monitoring {'enabled' if enabled else 'disabled'}")

@@ -547,7 +547,7 @@ class TopBar(QWidget):
         self._refresh_gauges()
         self._refresh_status()
 
-    def _on_wifi(self, signal_percent: int, _status: str, _unused: float):
+    def _on_wifi(self, signal_percent: int, _status: str):
         self._signal = signal_percent
         self._refresh_wifi()
         self._refresh_status()

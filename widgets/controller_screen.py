@@ -7,7 +7,6 @@ Controller input is processed by the backend; this screen edits the mapping
 config and runs system actions (exit / restart) the backend routes back here.
 """
 
-import os
 import time
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
@@ -22,7 +21,6 @@ from widgets.base_screen import BaseScreen
 from widgets.flow_dialog import show_message, ask_confirm
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
-from core.utils import error_boundary
 from core.restart import prepare_restart
 from widgets.controller_status_splash import show_controller_status_splash
 
@@ -647,21 +645,6 @@ class ControllerConfigScreen(BaseScreen):
         super().__init__(websocket)
         theme_manager.register_callback(self.update_theme)
 
-    def _detect_maestros(self):
-        """Request maestro detection and controller config from backend"""
-        if self.websocket and self.websocket.is_connected():
-            self.send_websocket_message("get_maestro_info", maestro=1)
-            self.send_websocket_message("get_maestro_info", maestro=2)
-            self.send_websocket_message("get_controller_config")
-            self.request_controller_info()
-            self.logger.info("Requesting maestro detection and controller config from backend")
-        else:
-            self.logger.warning("WebSocket not connected - loading config from local file")
-            QTimer.singleShot(2000, self._load_existing_configuration)
-            return
-
-        QTimer.singleShot(4000, self._ensure_config_loaded)
-
     def _ensure_config_loaded(self):
         """Load config with fallback channels if maestro info never arrived"""
         if not self._config_loaded:
@@ -893,13 +876,6 @@ class ControllerConfigScreen(BaseScreen):
                 self.scene_names = [scene.get("label", "Unknown") for scene in scenes_config if scene.get("label")]
         except Exception:
             pass
-
-        if not self.scene_names:
-            try:
-                motion_config = config_manager.get_config("resources/configs/motion_config.json")
-                self.scene_names = motion_config.get("emotions", [])
-            except Exception:
-                self.scene_names = ["Happy", "Sad", "Curious", "Excited", "Alert"]
 
     def _setup_screen(self):
         """Initialize controller configuration screen"""
@@ -1454,9 +1430,6 @@ class ControllerConfigScreen(BaseScreen):
 
     def show_error_message(self, title: str, message: str):
         show_message(self, "CONTROLLER", title, message, kind="error")
-
-    def show_info_message(self, title: str, message: str):
-        show_message(self, "CONTROLLER", title, message)
 
     # ========================================
     # MAPPING LIST

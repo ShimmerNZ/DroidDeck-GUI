@@ -8,7 +8,6 @@ import platform
 import re
 import subprocess
 import time
-from typing import Optional, Tuple
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -19,15 +18,13 @@ class NetworkMonitorThread(QThread):
     """Background thread for monitoring WiFi signal strength and Pi connectivity"""
 
     # WiFi signal — emitted every 2 seconds
-    wifi_updated = pyqtSignal(int, str, float)  # signal_percent, status_text, unused(0.0)
+    wifi_updated = pyqtSignal(int, str)  # signal_percent, status_text
 
     # Name of the connected WiFi network - emitted when it changes ("" when not connected)
     ssid_updated = pyqtSignal(str)
 
     # Pi backend connectivity — emitted every 5 seconds independently
     connectivity_updated = pyqtSignal(float, bool)  # ping_ms, is_connected
-
-    bandwidth_tested = pyqtSignal(float, float, str)  # download_mbps, upload_mbps, status_text
 
     def __init__(self, pi_ip: str = "10.42.0.1", update_interval: float = 5.0):
         super().__init__()
@@ -38,7 +35,6 @@ class NetworkMonitorThread(QThread):
         self.connectivity_interval = 5.0
 
         self.running = False
-        self.bandwidth_test_requested = False
         self._last_ssid = None
 
         self.logger.info(f"Network monitor initialized for {pi_ip} on {self.platform}")
@@ -53,7 +49,7 @@ class NetworkMonitorThread(QThread):
                 # WiFi signal — always on every cycle
                 wifi_percent = self.get_wifi_signal_strength()
                 status_text = self.format_wifi_status(wifi_percent)
-                self.wifi_updated.emit(wifi_percent, status_text, 0.0)
+                self.wifi_updated.emit(wifi_percent, status_text)
 
                 ssid = self.get_wifi_ssid()
                 if ssid != self._last_ssid:
@@ -66,11 +62,6 @@ class NetworkMonitorThread(QThread):
                     last_connectivity_check = now
                     ping_ms, is_connected = self._check_pi_connectivity()
                     self.connectivity_updated.emit(ping_ms, is_connected)
-
-                # Handle bandwidth test if requested
-                if self.bandwidth_test_requested:
-                    self.bandwidth_test_requested = False
-                    self.run_bandwidth_test()
 
                 self.msleep(int(self.wifi_interval * 1000))
 
@@ -277,80 +268,6 @@ class NetworkMonitorThread(QThread):
             return "█▒▒▒"  # 1 bar
         else:
             return "▒▒▒▒"  # 0 bars
-
-    def request_bandwidth_test(self):
-        """Request bandwidth test on next monitoring cycle"""
-        self.bandwidth_test_requested = True
-        self.logger.info("Bandwidth test requested")
-
-    def run_bandwidth_test(self):
-        """Run bandwidth test to Raspberry Pi with both download and upload"""
-        try:
-            self.logger.info("Starting bandwidth test...")
-
-            # Download test
-            test_size_mb = 5
-            start_time = time.time()
-
-            response = requests.get(
-                f"http://{self.pi_ip}:8081/bandwidth_test",
-                params={"size": test_size_mb * 1024 * 1024},
-                timeout=30,
-                stream=True
-            )
-
-            if response.status_code == 200:
-                total_bytes = 0
-                for chunk in response.iter_content(chunk_size=8192):
-                    total_bytes += len(chunk)
-
-                download_time = time.time() - start_time
-                download_mbps = (total_bytes * 8) / (download_time * 1000000)
-
-                # Upload test
-                upload_mbps = 0
-                try:
-                    upload_data = b'0' * (test_size_mb * 1024 * 1024)  # 5MB of data
-                    upload_start = time.time()
-
-                    upload_response = requests.post(
-                        f"http://{self.pi_ip}:8081/bandwidth_upload",
-                        data=upload_data,
-                        headers={'Content-Type': 'application/octet-stream'},
-                        timeout=30
-                    )
-
-                    if upload_response.status_code == 200:
-                        upload_result = upload_response.json()
-                        upload_mbps = upload_result.get("upload_mbps", 0)
-                        self.logger.info(f"Upload test successful: {upload_mbps:.1f} Mbps")
-                    else:
-                        self.logger.warning(f"Upload test failed: HTTP {upload_response.status_code}")
-
-                except Exception as e:
-                    self.logger.warning(f"Upload test error: {e}")
-                    upload_mbps = 0
-
-                # Report results
-                status_text = f"Download: {download_mbps:.1f} Mbps"
-                if upload_mbps > 0:
-                    status_text += f", Upload: {upload_mbps:.1f} Mbps"
-                else:
-                    status_text += ", Upload: Not available"
-
-                self.bandwidth_tested.emit(download_mbps, upload_mbps, status_text)
-                self.logger.info(f"Bandwidth test complete: {status_text}")
-
-            else:
-                self.bandwidth_tested.emit(0, 0, f"Test failed: HTTP {response.status_code}")
-                self.logger.error(f"Bandwidth test failed: HTTP {response.status_code}")
-
-        except requests.exceptions.Timeout:
-            self.bandwidth_tested.emit(0, 0, "Test failed: timeout")
-            self.logger.error("Bandwidth test timeout")
-        except Exception as e:
-            self.bandwidth_tested.emit(0, 0, f"Test failed: {str(e)[:50]}")
-            self.logger.error(f"Bandwidth test error: {e}")
 
     def stop(self):
         """Stop the network monitoring thread"""

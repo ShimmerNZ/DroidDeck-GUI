@@ -8,7 +8,7 @@ from collections import deque
 import pygame
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout
 from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
-from PyQt6.QtGui import QFont, QPalette, QColor
+from PyQt6.QtGui import QFont
 from core.theme_manager import theme_manager
 from core.logger import get_logger
 from core.battery import battery_profile
@@ -307,27 +307,6 @@ class VoltageAlertSplash(QWidget):
             }
         """)
         layout.addWidget(self.countdown_label)
-    
-    def _get_main_style(self):
-        """Get clean main window styling"""
-        if self.alert_type == "CRITICAL":
-            return """
-                VoltageAlertSplash {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #2d1b1b, stop:1 #1a0f0f);
-                    border: 2px solid #ff4757;
-                    border-radius: 12px;
-                }
-            """
-        else:
-            return """
-                VoltageAlertSplash {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #2d2d2d, stop:1 #1a1a1a);
-                    border: 2px solid #ffa502;
-                    border-radius: 12px;
-                }
-            """
     
     def _center_on_screen(self):
         """Center the splash screen on the display"""

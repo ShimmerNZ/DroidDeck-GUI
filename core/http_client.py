@@ -79,21 +79,6 @@ class HttpClient(QObject):
         reply = self._manager.post(request, body)
         self._track(reply, callback, owner)
 
-    def post_form(self, url: str, data: Dict[str, Any],
-                  callback: Optional[Callable] = None,
-                  timeout_ms: int = DEFAULT_TIMEOUT_MS, owner: Optional[QObject] = None):
-        """Asynchronous POST with form-encoded body."""
-        request = self._build_request(url, timeout_ms)
-        request.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
-                          "application/x-www-form-urlencoded")
-        encoded = "&".join(
-            f"{QUrl.toPercentEncoding(str(k)).data().decode()}="
-            f"{QUrl.toPercentEncoding(str(v)).data().decode()}"
-            for k, v in data.items()
-        )
-        reply = self._manager.post(request, QByteArray(encoded.encode("utf-8")))
-        self._track(reply, callback, owner)
-
     def post(self, url: str, callback: Optional[Callable] = None,
              timeout_ms: int = DEFAULT_TIMEOUT_MS, owner: Optional[QObject] = None):
         """Asynchronous POST with an empty body (e.g. /stream/start)."""

@@ -1104,7 +1104,7 @@ class HealthScreen(BaseScreen):
         network_monitor.wifi_updated.connect(self._update_wifi_display)
         network_monitor.connectivity_updated.connect(self._update_ping_display)
 
-    def _update_wifi_display(self, signal_percent: int, status_text: str, _unused: float):
+    def _update_wifi_display(self, signal_percent: int, status_text: str):
         """Update the Steam Deck WiFi signal value"""
         green = theme_manager.get("green")
         red = theme_manager.get("red")

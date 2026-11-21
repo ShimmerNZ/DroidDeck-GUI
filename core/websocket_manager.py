@@ -58,8 +58,6 @@ class WebSocketManager(QWebSocket):
     # stale realtime input after a reconnect would move the robot unexpectedly
     _NEVER_QUEUE_TYPES = {
         "steamdeck_controller",
-        "controller_input",
-        "frontend_controller",
         "people",
     }
 

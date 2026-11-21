@@ -12,11 +12,10 @@ from collections import deque
 from typing import Dict, Any, Callable, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QSpinBox,
-    QCheckBox, QWidget, QSizePolicy, QFrame
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QWidget, QSizePolicy, QFrame
 )
 from PyQt6.QtGui import QFont, QImage, QPixmap, QColor
-from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
 
 from widgets.base_screen import BaseScreen
 from threads.image_processor import ImageProcessingThread

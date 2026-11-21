@@ -6,14 +6,13 @@ Bandwidth Test Progress Splash Screen
 
 import sys
 import time
-import threading
 import requests
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                             QProgressBar, QWidget, QFrame, QApplication, QDialog,
-                            QSpinBox, QComboBox)
-from PyQt6.QtGui import QFont, QPainter, QBrush, QColor, QLinearGradient
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QRect
-from typing import Optional, Callable
+                            QComboBox)
+from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from typing import Callable
 
 
 class _ProgressUploadReader:

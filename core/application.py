@@ -109,9 +109,7 @@ class DroidDeckApplication(QMainWindow):
             self.logger.info(f"DroidDeck Control System initialized - Pi IP: {self.pi_ip}, Theme: {theme_manager.get_display_name()}")
     
     def _handle_init_error(self, error):
-        """Handle initialization errors"""
-        # Could show error dialog or attempt recovery
-        # For now, just close the application
+        """Close the application when initialization fails"""
         QApplication.quit()
     
     def _setup_logging(self):

@@ -400,7 +400,7 @@ class SceneList(QListWidget):
 
 
 class SceneScreen(BaseScreen):
-    """Interface for managing emotion scenes and their audio / animation"""
+    """Interface for managing scenes and their audio / animation"""
 
     scenes_updated = pyqtSignal()  # Signal to notify HomeScreen of changes
 
@@ -954,9 +954,6 @@ class SceneScreen(BaseScreen):
         self._update_dirty_label()
         self._show_summary()
 
-    def _is_dirty(self) -> bool:
-        return bool(self._dirty_ids) or self._structure_changed
-
     def _clear_dirty(self):
         self._dirty_ids.clear()
         self._structure_changed = False
@@ -1356,41 +1353,6 @@ class SceneScreen(BaseScreen):
             del self.refresh_status
 
     @error_boundary
-    def load_local_config(self):
-        """Load from standardized path that matches backend"""
-        primary = theme_manager.get("primary_color")
-        config = config_manager.get_config(SCENES_CONFIG_PATH)
-        if isinstance(config, list) and config:
-            self.scenes_data = config
-            self.update_scene_rows()
-            self.update_status(f"Loaded {len(self.scenes_data)} scenes from local cache", primary)
-            self.logger.debug(f"Loaded {len(self.scenes_data)} scenes from {SCENES_CONFIG_PATH}")
-            return
-
-        self.scenes_data = []
-        self.update_scene_rows()
-        self.update_status("No local config found - starting empty", primary)
-        self.logger.info("No local config found - starting with empty scene list")
-
-    def convert_old_format(self, old_scenes):
-        """Convert old emotion_buttons.json format to new Bottango-based format"""
-        converted = []
-        for scene in old_scenes:
-            new_scene = {
-                "label": scene.get("label", ""),
-                "emoji": "🎭",
-                "categories": scene.get("categories", []),
-                "audio_enabled": scene.get("audio_enabled", False),
-                "audio_file": scene.get("audio_file", ""),
-                "script_enabled": scene.get("script_enabled", False),
-                "bottango_scene": scene.get("bottango_scene", ""),
-                "duration": scene.get("duration", 1.0),
-                "delay": scene.get("delay", 0)
-            }
-            converted.append(new_scene)
-        return converted
-
-    @error_boundary
     def update_scene_rows(self):
         """Rebuild the list from scenes_data, keeping the selected scene by name"""
         previous = self.selected_scene.get("label") if self.selected_scene else None
@@ -1518,10 +1480,6 @@ class SceneScreen(BaseScreen):
             self.update_status("Saved locally only", "orange")
             self.scenes_updated.emit()
 
-    def reload_scenes(self):
-        """Public method to reload scenes (called by HomeScreen)"""
-        self.send_websocket_message("get_scenes")
-
     @error_boundary
     def update_audio_files(self):
         """Refresh the editor's audio file list"""
@@ -1542,11 +1500,3 @@ class SceneScreen(BaseScreen):
         finally:
             self._loading_editor = False
 
-    def get_scene_summary(self):
-        """Get summary of current scene configuration"""
-        return {
-            "total_scenes": len(self.scenes_data),
-            "categories": list(set(cat for scene in self.scenes_data for cat in scene.get("categories", []))),
-            "audio_scenes": len([s for s in self.scenes_data if s.get("audio_enabled")]),
-            "script_scenes": len([s for s in self.scenes_data if s.get("script_enabled")])
-        }

@@ -6,7 +6,7 @@ WALL-E Control System - Configuration Management
 
 import json
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from .logger import get_logger
 
@@ -92,18 +92,6 @@ class ConfigManager:
             "stand_down_time": wave_settings.get("stand_down_time", 30)
         }
     
-    def get_network_config(self) -> Dict[str, Any]:
-        """Get network monitoring configuration with defaults"""
-        config = self.get_config("resources/configs/steamdeck_config.json")
-        current = config.get("current", {})
-        network_settings = current.get("network_monitoring", {})
-        
-        return {
-            "update_interval": network_settings.get("update_interval", 5.0),
-            "ping_samples": network_settings.get("ping_samples", 3),
-            "pi_ip": self.extract_pi_ip_from_config(current)
-        }
-    
     def extract_pi_ip_from_config(self, config: Dict[str, Any]) -> str:
         """Extract Pi IP from camera proxy URL"""
         proxy_url = config.get("camera_proxy_url", f"http://{DEFAULT_PI_IP}:8081")
@@ -141,32 +129,5 @@ class ConfigManager:
         return config.get("current", {}).get(
             "control_websocket_url", f"localhost:8766")
     
-    def clear_cache(self):
-        """Drop all cached configs so the next read re-parses from disk"""
-        self._configs.clear()
-        self._last_modified.clear()
-        self.logger.debug("Configuration cache cleared")
-    
-    def load_servo_names(self) -> list:
-        """Load servo friendly names from configuration"""
-        try:
-            config = self.get_config("resources/configs/servo_config.json")
-            return [v["name"] for v in config.values() if "name" in v and v["name"]]
-        except Exception as e:
-            self.logger.error(f"Failed to load servo names: {e}")
-            return []
-    
-    def load_movement_controls(self) -> tuple:
-        """Load movement controls from configuration"""
-        try:
-            config = self.get_config("resources/configs/movement_controls.json")
-            return (
-                config.get("steam_controls", [])
-            )
-        except Exception as e:
-            self.logger.error(f"Failed to load movement controls: {e}")
-            return [], []
-
-
 # Global config manager instance
 config_manager = ConfigManager()

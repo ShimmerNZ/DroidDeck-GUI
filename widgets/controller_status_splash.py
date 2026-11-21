@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Controller Status Display Splash
 Matches the exact styling of controller calibration screen
 """
 
-import json
 import time
-from typing import Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QFrame,
-    QGridLayout, QProgressBar, QApplication
+    QGridLayout, QApplication
 )
 from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRect
+from PyQt6.QtCore import Qt, QTimer, QRect
 
 from core.logger import get_logger
-from core.theme_manager import theme_manager
 from threads.steamdeck import ControllerInputData
 
 

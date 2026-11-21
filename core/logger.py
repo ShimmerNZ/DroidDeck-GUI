@@ -1,19 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 WALL-E Control System - Centralized Logging System
 """
 
 import logging
-from enum import Enum
 from typing import Dict, Optional
-
-
-class LogLevel(Enum):
-    """Available logging levels"""
-    CRITICAL = 50
-    ERROR = 40
-    WARNING = 30
-    INFO = 20
-    DEBUG = 10
 
 
 class WalleLogger:

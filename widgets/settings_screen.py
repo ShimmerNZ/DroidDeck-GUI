@@ -6,7 +6,6 @@ Settings Screen (Themed)
 import requests
 import socket
 import time
-import os
 import sys
 import zipfile
 import shutil
@@ -15,8 +14,8 @@ from pathlib import Path
 from urllib.parse import urlparse 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QSpinBox, QSlider, QPushButton,
-    QComboBox, QGroupBox, QFrame, QScrollArea, QWidget, QApplication
+    QLineEdit, QSpinBox, QPushButton,
+    QComboBox, QFrame, QWidget, QApplication
 )
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -430,26 +429,6 @@ class NetworkTestThread(QThread):
         except Exception as e:
             self.results['websocket_connection'] = {'status': 'error', 'message': f'WebSocket test failed: {str(e)}'}
 
-    def cancel_network_test(self):
-        """Cancel the running network test with better cleanup"""
-        try:
-            if hasattr(self, 'test_thread') and self.test_thread.isRunning():
-                # Request thread to finish gracefully
-                self.test_thread.requestInterruption()
-                
-                # Give thread a moment to finish naturally
-                if not self.test_thread.wait(1000):  # Wait 1 second
-                    # Force termination if needed
-                    self.test_thread.terminate()
-                    self.test_thread.wait(2000)  # Wait up to 2 more seconds
-            
-            if hasattr(self, 'progress_dialog'):
-                self.progress_dialog.close()
-                
-        except Exception as e:
-            self.logger.warning(f"Error during test cleanup: {e}")
-
-
 class UpdateThread(QThread):
     """Background thread for downloading and installing GUI updates from GitHub"""
 
@@ -472,13 +451,10 @@ class UpdateThread(QThread):
         "resources/configs/",
         "resources/configs/controller_config.json",
         "resources/configs/controller_mappings.json",
-        "resources/configs/motion_config.json",
-        "resources/configs/movement_controls.json",
         "resources/configs/scenes_config.json",
         "resources/configs/servo_config.json",
         "resources/configs/steamdeck_config.json",
         "resources/configs/theme_config.json",
-        "resources/configs/voltage_alert_config.json",
     ]
     
     def _get_app_root(self) -> Path:
@@ -1464,24 +1440,8 @@ class SettingsScreen(BaseScreen):
             success = False
 
         if success:
-            # ALSO save volume to hardware_config.json so it persists on backend restart
-            try:
-                volume_float = self._get_volume_value() / 100.0  # Convert to 0.0-1.0
-                hw_config = config_manager.get_config("configs/hardware_config.json")
-                if "hardware" not in hw_config:
-                    hw_config["hardware"] = {}
-                if "audio" not in hw_config["hardware"]:
-                    hw_config["hardware"]["audio"] = {}
-                    
-                hw_config["hardware"]["audio"]["volume"] = volume_float
-                
-                if config_manager.save_config("configs/hardware_config.json", hw_config):
-                    self.logger.info(f"Volume {volume_float:.2f} saved to hardware_config.json")
-            except Exception as e:
-                self.logger.warning(f"Could not save volume to hardware_config: {e}")
-            
             if self.websocket:
-                # Send volume update to backend
+                # Send volume update to backend; the backend saves it to its own hardware_config.json
                 volume_val = self._get_volume_value()
                 self.logger.info(f"Sending volume update to backend: {volume_val}%")
                 self.send_websocket_message(
