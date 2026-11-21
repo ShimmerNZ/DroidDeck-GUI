@@ -152,6 +152,9 @@ class SteamDeckControllerThread(QThread):
         self._last_sent_axes = None
         self._last_sent_buttons = None
 
+        # While paused, frames still go out but carry every input at rest
+        self.robot_input_paused = False
+
         self.stats = {
             "inputs_processed": 0,
             "inputs_sent":      0,
@@ -223,6 +226,55 @@ class SteamDeckControllerThread(QThread):
             self.logger.error(f"Could not load IMU calibration: {e}")
         self._imu_limits = limits
         self.logger.info(f"IMU tilt limits: {limits}")
+
+    def set_robot_input_paused(self, paused: bool):
+        """Send every input at rest instead of the live controller state"""
+        if paused != self.robot_input_paused:
+            self.robot_input_paused = paused
+            self.logger.info(f"Robot input {'paused' if paused else 'resumed'}")
+
+    def _rest_axes(self) -> Dict[str, float]:
+        """Sticks centred and triggers released"""
+        axes = {key: 0.0 for key in self._STICK_AXES}
+        axes['left_trigger'] = -1.0
+        axes['right_trigger'] = -1.0
+        return axes
+
+    def get_input_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Live controller state for display, independent of what is sent to the robot.
+
+        axes: normalised sticks and triggers, plus imu_roll / imu_pitch (tilt from
+        the IMU zero when IMU is on, otherwise from flat).
+        buttons: DroidDeck control names.
+        touch: stick and trackpad touch flags.
+        trackpads: trackpad positions normalised to +/-1.0.
+        """
+        deck = self._bitsteam_deck
+        if not deck or not deck.is_running:
+            return None
+        axes = self._parse_analog()
+        motion = deck.get_motion_values()
+        zero_x, zero_y = (self._accel_zero_x, self._accel_zero_y) if self.imu_enabled else (0, 0)
+        axes['imu_roll'] = self.imu_axis_output('roll', motion.get('accel_x', 0) - zero_x)
+        axes['imu_pitch'] = self.imu_axis_output('pitch', motion.get('accel_y', 0) - zero_y)
+
+        raw_buttons = dict(deck.buttons)
+        analog = deck.get_analog_values()
+        return {
+            "axes": axes,
+            "buttons": {our: bool(raw_buttons.get(bs, False)) for bs, our in BUTTON_MAP.items()},
+            "touch": {
+                "left_stick": bool(raw_buttons.get('l_stick_touch', False)),
+                "right_stick": bool(raw_buttons.get('r_stick_touch', False)),
+                "left_pad": bool(raw_buttons.get('l_trackpad_touch', False)),
+                "right_pad": bool(raw_buttons.get('r_trackpad_touch', False)),
+            },
+            "trackpads": {
+                key: max(-1.0, min(1.0, analog.get(key, 0) / STICK_MAX))
+                for key in ('left_trackpad_x', 'left_trackpad_y', 'right_trackpad_x', 'right_trackpad_y')
+            },
+            "imu_enabled": self.imu_enabled,
+        }
 
     def get_imu_calibration(self) -> Dict[str, int]:
         """Tilt limits currently applied, in accelerometer counts away from level."""
@@ -345,8 +397,15 @@ class SteamDeckControllerThread(QThread):
         axes    = self._parse_analog()
         buttons = self._parse_buttons()
 
-        # Toggle IMU on button press edge; add gyro axes if enabled
-        self._check_imu_toggle(buttons)
+        if self.robot_input_paused:
+            # Keep the link alive with every input at rest so the robot holds
+            # still; the IMU toggle is ignored until input is resumed
+            self._prev_buttons = buttons
+            axes = self._rest_axes()
+            buttons = {name: False for name in buttons}
+        else:
+            # Toggle IMU on button press edge; add gyro axes if enabled
+            self._check_imu_toggle(buttons)
 
         # Skip frames identical to the last one sent. Sticks deadzone to exactly
         # 0.0 at rest and buttons are discrete, so at idle this drops almost all
@@ -357,14 +416,14 @@ class SteamDeckControllerThread(QThread):
         # frames, and the backend stops the drive tracks if input goes quiet for
         # longer than its 0.4s watchdog.
         stick_deflected = any(axes.get(k, 0.0) != 0.0 for k in self._STICK_AXES)
-        if (not self.imu_enabled
+        if ((not self.imu_enabled or self.robot_input_paused)
                 and not stick_deflected
                 and axes == self._last_sent_axes
                 and buttons == self._last_sent_buttons
                 and current_time - self.last_input_sent < 1.0):
             return
 
-        if self.imu_enabled:
+        if self.imu_enabled and not self.robot_input_paused:
             axes.update(self._parse_imu())
 
         self._last_sent_axes = dict(axes)

@@ -7,13 +7,13 @@
     "module_debug": {
       "camera": "ERROR",
       "servo": "ERROR",
+      "controller": "ERROR",
+      "scenes": "ERROR",
+      "attention": "ERROR",
       "network": "ERROR",
-      "websocket": "ERROR",
-      "telemetry": "ERROR",
       "ui": "INFO",
       "config": "WARNING",
       "main": "INFO",
-      "controller": "ERRO",
       "error": "ERROR"
     },
     "wave_detection": {
@@ -32,12 +32,13 @@
     "module_debug": {
       "camera": "INFO",
       "servo": "INFO",
-      "websocket": "WARNING",
-      "telemetry": "INFO",
+      "controller": "INFO",
+      "scenes": "INFO",
+      "attention": "INFO",
+      "network": "INFO",
       "ui": "INFO",
       "config": "WARNING",
       "main": "INFO",
-      "controller": "INFO",
       "error": "ERROR"
     },
     "wave_detection": {

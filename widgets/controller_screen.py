@@ -7,7 +7,6 @@ Controller input is processed by the backend; this screen edits the mapping
 config and runs system actions (exit / restart) the backend routes back here.
 """
 
-import time
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QFrame,
@@ -22,7 +21,6 @@ from widgets.flow_dialog import show_message, ask_confirm
 from core.config_manager import config_manager
 from core.theme_manager import theme_manager
 from core.restart import prepare_restart
-from widgets.controller_status_splash import show_controller_status_splash
 
 CONTROLLER_CONFIG_PATH = "resources/configs/controller_config.json"
 SERVO_CONFIG_PATH = "resources/configs/servo_config.json"
@@ -701,67 +699,48 @@ class ControllerConfigScreen(BaseScreen):
             if self.logger:
                 self.logger.error(f"Error handling system control command: {e}")
 
-    def open_controller_status(self):
-        """Open controller status display splash"""
+    def open_input_tester(self):
+        """Open the live controller input test"""
         try:
-            from PyQt6.QtWidgets import QApplication
+            from widgets.input_tester_dialog import InputTesterDialog
 
-            self.controller_status_splash = show_controller_status_splash(self)
-
-            app = QApplication.instance()
-            main_window = None
-            for widget in app.topLevelWidgets():
+            controller_thread = None
+            for widget in QApplication.instance().topLevelWidgets():
                 if hasattr(widget, 'controller_thread'):
-                    main_window = widget
+                    controller_thread = widget.controller_thread
                     break
 
-            if main_window and hasattr(main_window, 'controller_thread'):
-                controller_thread = main_window.controller_thread
+            if controller_thread is None:
+                self.show_error_message("Input Test", "The Steam Deck controller is not running.")
+                return
 
-                try:
-                    controller_thread.controller_input.disconnect(self.controller_status_splash.update_controller_input)
-                except Exception:
-                    pass
-                try:
-                    controller_thread.controller_connected.disconnect()
-                except Exception:
-                    pass
-                try:
-                    controller_thread.controller_disconnected.disconnect()
-                except Exception:
-                    pass
-
-                controller_thread.controller_input.connect(
-                    self.controller_status_splash.update_controller_input
-                )
-                controller_thread.controller_connected.connect(
-                    lambda name, id: self.controller_status_splash.set_controller_info(name, True)
-                )
-                controller_thread.controller_disconnected.connect(
-                    lambda reason: self.controller_status_splash.set_controller_info(f"Disconnected: {reason}", False)
-                )
-
-                controller_info = controller_thread.get_controller_info()
-                self.controller_status_splash.set_controller_info(
-                    controller_info.get("controller_name", "Steam Deck Controller"),
-                    controller_info.get("connected", False)
-                )
-
-                self.logger.info("Controller status splash connected to controller thread")
-            else:
-                self.logger.warning("No controller thread available for status display")
-                self.controller_status_splash.set_controller_info("No Controller Thread", False)
+            dialog = InputTesterDialog(
+                self, controller_thread,
+                display_name=input_display_name,
+                describe_mapping=self._describe_input_mapping,
+                mapped_controls=lambda: {row['input'] for row in self.mapping_rows if row.get('input')},
+            )
+            dialog.exec()
 
         except Exception as e:
-            self.logger.error(f"Failed to open controller status splash: {e}")
+            self.logger.error(f"Failed to open input tester: {e}")
+
+    def _describe_input_mapping(self, control: str) -> str:
+        """What a control drives, as shown in the mapping list; empty when not mapped"""
+        names = self._servo_names()
+        parts = []
+        for row in self.mapping_rows:
+            if row.get('input') != control:
+                continue
+            tag = BEHAVIOR_TAGS.get(row['behavior'], row['behavior'])
+            target = self._get_target_display_text(row['behavior'], row['config'], names)
+            parts.append(f"{tag} · {target}" if target else tag)
+        return "; ".join(parts)
 
     def handle_controller_input_signal(self, input_data):
         """Controller input from the controller thread (thread-safe)"""
         try:
             self._show_controller_state("Connected & Active", True)
-            if (hasattr(self, 'controller_status_splash') and self.controller_status_splash
-                    and self.controller_status_splash.isVisible()):
-                self.controller_status_splash.update_controller_input(input_data)
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Error handling controller input signal: {e}")
@@ -770,29 +749,9 @@ class ControllerConfigScreen(BaseScreen):
         """Update controller status display (thread-safe)"""
         try:
             self._show_controller_state(status_text, connected)
-            if (hasattr(self, 'controller_status_splash') and self.controller_status_splash
-                    and self.controller_status_splash.isVisible()):
-                controller_name = status_text.replace("Connected: ", "").replace("Disconnected: ", "")
-                self.controller_status_splash.set_controller_info(controller_name, connected)
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Error updating controller status: {e}")
-
-    def handle_controller_input_for_status(self, msg: dict):
-        """Feed steamdeck controller input to the status splash while it is open"""
-        try:
-            if hasattr(self, 'controller_status_splash') and self.controller_status_splash.isVisible():
-                from threads.steamdeck import ControllerInputData
-
-                input_data = ControllerInputData(
-                    axes=msg.get("axes", {}),
-                    buttons=msg.get("buttons", {}),
-                    timestamp=msg.get("timestamp", time.time()),
-                    sequence=msg.get("sequence", 0)
-                )
-                self.controller_status_splash.update_controller_input(input_data)
-        except Exception as e:
-            self.logger.error(f"Error handling controller input for status: {e}")
 
     def _show_controller_state(self, text: str, connected: bool):
         label = self.controller_status_label
@@ -897,8 +856,7 @@ class ControllerConfigScreen(BaseScreen):
         self._init_ui()
 
         if self.websocket:
-            # The status splash stream and D-pad only matter while shown
-            self.subscribe_while_visible("steamdeck_controller", self.handle_controller_input_for_status)
+            # D-pad navigation only matters while shown
             self.subscribe_while_visible("navigation", self._on_navigation)
             self.subscribe("maestro_info", self._handle_maestro_info)
             self.subscribe("controller_info", self.handle_controller_info_response)
@@ -1332,9 +1290,9 @@ class ControllerConfigScreen(BaseScreen):
         self.calibration_button = QPushButton("CALIBRATE")
         self.calibration_button.setFixedSize(130, BAR_HEIGHT)
         self.calibration_button.clicked.connect(self.open_calibration_dialog)
-        self.status_button = QPushButton("STATUS")
-        self.status_button.setFixedSize(120, BAR_HEIGHT)
-        self.status_button.clicked.connect(self.open_controller_status)
+        self.status_button = QPushButton("INPUT TEST")
+        self.status_button.setFixedSize(150, BAR_HEIGHT)
+        self.status_button.clicked.connect(self.open_input_tester)
         for button in (self.add_btn, self.calibration_button, self.status_button):
             button.setFont(px_font(15, bold=True))
             self._plain_buttons.append(button)

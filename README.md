@@ -175,7 +175,7 @@ python main.py
 │   ├── servo_screen.py
 │   ├── controller_screen.py
 │   ├── imu_calibration_dialog.py   # IMU tilt calibration popup
-│   ├── controller_status_splash.py
+│   ├── input_tester_dialog.py      # Live controller input test
 │   ├── scene_screen.py
 │   ├── settings_screen.py
 │   ├── flow_dialog.py             # Themed dialogs: updates, network test, exit/restart

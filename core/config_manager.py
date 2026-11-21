@@ -112,13 +112,13 @@ class ConfigManager:
             "module_debug": current.get("module_debug", {
                 "camera": "INFO",
                 "servo": "INFO",
+                "controller": "INFO",
+                "scenes": "INFO",
+                "attention": "INFO",
                 "network": "INFO",
-                "websocket": "WARNING", 
-                "telemetry": "INFO",
                 "ui": "INFO",
                 "config": "WARNING",
                 "main": "INFO",
-                "controller": "INFO",
                 "error": "ERROR"
             })
         }

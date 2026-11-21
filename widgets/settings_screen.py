@@ -24,6 +24,7 @@ from widgets.base_screen import BaseScreen
 from widgets.flow_dialog import FlowDialog, STEP_ERROR, show_message, ask_confirm
 from core.version import save_build_info
 from core.config_manager import config_manager
+from core.logger import LOG_GROUPS, logger_manager
 from core.theme_manager import theme_manager
 from core.utils import error_boundary
 from core.restart import prepare_restart
@@ -852,34 +853,26 @@ class SettingsScreen(BaseScreen):
         return card
 
     def _build_logging(self) -> QFrame:
-        """Logging card: one debug level per row"""
+        """Logging card: global level here, group levels in a popup"""
         card, layout = self._make_card("LOGGING", MIDDLE_CARD_HEIGHT)
 
-        items = [
-            ("Global debug", "debug_combo"),
-            ("Camera debug", "camera_debug_combo"),
-            ("Servo debug", "servo_debug_combo"),
-            ("Network debug", "network_debug_combo"),
-        ]
-        self.debug_combos = {}
+        layout.addWidget(self._make_caption("GLOBAL LEVEL"))
+        combo = QComboBox()
+        combo.setFont(px_font(15))
+        combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
+        combo.setFixedHeight(38)
+        self.debug_combos = {"debug_combo": combo}
+        layout.addWidget(combo)
 
-        for label_text, key in items:
-            row = QHBoxLayout()
-            row.setSpacing(10)
-            lab = self._make_soft_label(label_text, 15)
-
-            combo = QComboBox()
-            combo.setFont(px_font(15))
-            combo.addItems(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"])
-            combo.setFixedHeight(38)
-            combo.setFixedWidth(110)
-
-            self.debug_combos[key] = combo
-            row.addWidget(lab, 1)
-            row.addWidget(combo)
-            layout.addLayout(row)
-
+        self._group_levels = {}
+        self.group_levels_summary = self._make_soft_label("", 13)
+        self.group_levels_summary.setWordWrap(True)
+        layout.addWidget(self.group_levels_summary)
         layout.addStretch(1)
+
+        self.group_levels_btn = self._make_button("GROUP LEVELS", 44, 15)
+        self.group_levels_btn.clicked.connect(self._open_log_levels)
+        layout.addWidget(self.group_levels_btn)
         return card
 
     def _build_drive(self) -> QFrame:
@@ -1376,9 +1369,8 @@ class SettingsScreen(BaseScreen):
 
         # Logging
         self.debug_combos["debug_combo"].setCurrentText(current.get("debug_level", "INFO"))
-        self.debug_combos["camera_debug_combo"].setCurrentText(module_debug.get("camera", "INFO"))
-        self.debug_combos["servo_debug_combo"].setCurrentText(module_debug.get("servo", "INFO"))
-        self.debug_combos["network_debug_combo"].setCurrentText(module_debug.get("network", "INFO"))
+        self._group_levels = {group: str(module_debug.get(group, "INFO")).upper() for group in LOG_GROUPS}
+        self._update_group_levels_summary()
 
         # Audio - Load volume
         volume = current.get("volume", 70)
@@ -1418,13 +1410,8 @@ class SettingsScreen(BaseScreen):
                 "control_websocket_url": self.network_inputs["control_ws"].text().strip(),
                 "debug_level": self.debug_combos["debug_combo"].currentText(),
                 "module_debug": {
-                    "camera": self.debug_combos["camera_debug_combo"].currentText(),
-                    "servo": self.debug_combos["servo_debug_combo"].currentText(),
-                    "network": self.debug_combos["network_debug_combo"].currentText(),
-                    **{
-                        k: v for k, v in existing.get("current", {}).get("module_debug", {}).items()
-                        if k not in {"camera", "servo", "network"}
-                    }
+                    **existing.get("current", {}).get("module_debug", {}),
+                    **self._shown_log_levels(),
                 },
                 # Not editable here; keep whatever is saved
                 "wave_detection": existing.get("current", {}).get(
@@ -1458,15 +1445,12 @@ class SettingsScreen(BaseScreen):
                         esp32_url=esp32_url
                     )
 
-                # Apply debug level changes live on the backend
+                # Apply log levels live on the backend, which keeps them for its next start
+                saved_levels = new_config["current"]["module_debug"]
                 self.send_websocket_message(
                     "update_debug_levels",
-                    debug_level=self.debug_combos["debug_combo"].currentText(),
-                    module_debug={
-                        "camera": self.debug_combos["camera_debug_combo"].currentText(),
-                        "servo":  self.debug_combos["servo_debug_combo"].currentText(),
-                        "network": self.debug_combos["network_debug_combo"].currentText(),
-                    }
+                    debug_level=new_config["current"]["debug_level"],
+                    module_debug={group: saved_levels[group] for group in LOG_GROUPS if group in saved_levels}
                 )
 
                 # Battery settings live on the Pi; only send them when changed,
@@ -1479,8 +1463,9 @@ class SettingsScreen(BaseScreen):
             else:
                 self.logger.warning("WebSocket not available - settings not sent to backend")
 
-            show_message(self, "SETTINGS", "Settings saved",
-                         "Some changes, such as the global log level, take effect after a restart.")
+            logger_manager.apply_levels(new_config["current"]["debug_level"],
+                                        new_config["current"]["module_debug"])
+            show_message(self, "SETTINGS", "Settings saved", "Your changes have been applied.")
             self.logger.info("Configuration updated successfully")
             self._notify_config_changes()
         else:
@@ -1648,6 +1633,44 @@ class SettingsScreen(BaseScreen):
 
     # ---------- Validation / Notifications ----------
 
+    def _shown_log_levels(self) -> dict:
+        """Group levels last chosen in the log levels popup"""
+        return dict(self._group_levels)
+
+    def _update_group_levels_summary(self):
+        counts = {}
+        for level in self._group_levels.values():
+            counts[level] = counts.get(level, 0) + 1
+        order = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        parts = [f"{counts[level]} at {level}" for level in order if level in counts]
+        self.group_levels_summary.setText(f"{len(self._group_levels)} groups: {', '.join(parts)}")
+
+    @error_boundary
+    def _open_log_levels(self, checked=False):
+        """Edit the group levels; SAVE applies them on the Deck and the robot straight away"""
+        from widgets.log_levels_dialog import LogLevelsDialog
+
+        dialog = LogLevelsDialog(self, self._group_levels)
+        if not dialog.exec():
+            return
+        self._group_levels = dialog.levels()
+        self._update_group_levels_summary()
+
+        cfg = config_manager.get_config(self.config_path)
+        current = cfg.setdefault("current", {})
+        module_debug = current.setdefault("module_debug", {})
+        module_debug.update(self._group_levels)
+        if not config_manager.save_config(self.config_path, cfg):
+            show_message(self, "SETTINGS", "Save failed",
+                         "The log levels could not be saved. Check the file permissions and try again.",
+                         kind="error")
+            return
+
+        logger_manager.apply_levels(current.get("debug_level", "INFO"), module_debug)
+        if self.websocket:
+            self.send_websocket_message("update_debug_levels", module_debug=dict(self._group_levels))
+        self.logger.info(f"Group log levels saved: {self._group_levels}")
+
     def _validate_inputs(self) -> bool:
         errors = []
 
@@ -1678,13 +1701,13 @@ class SettingsScreen(BaseScreen):
                 "module_debug": {
                     "camera": "INFO",
                     "servo": "INFO",
+                    "controller": "INFO",
+                    "scenes": "INFO",
+                    "attention": "INFO",
                     "network": "INFO",
-                    "websocket": "WARNING",
-                    "telemetry": "INFO",
                     "ui": "INFO",
                     "config": "WARNING",
                     "main": "INFO",
-                    "controller": "INFO",
                     "error": "ERROR",
                 },
                 "network_monitoring": {"update_interval": 5.0, "ping_samples": 3},
