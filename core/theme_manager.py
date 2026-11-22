@@ -34,6 +34,8 @@ class ThemeManager:
                 "home_pressed": "resources/theme/Wall-e/icons/Home_pressed.png",
                 "camera": "resources/theme/Wall-e/icons/Camera.png",
                 "camera_pressed": "resources/theme/Wall-e/icons/Camera_pressed.png",
+                "lidar": "resources/theme/Wall-e/icons/Lidar.png",
+                "lidar_pressed": "resources/theme/Wall-e/icons/Lidar_pressed.png",
                 "health": "resources/theme/Wall-e/icons/Health.png",
                 "health_pressed": "resources/theme/Wall-e/icons/Health_pressed.png",
                 "servo": "resources/theme/Wall-e/icons/ServoConfig.png",

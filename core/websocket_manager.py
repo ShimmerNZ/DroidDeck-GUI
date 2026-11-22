@@ -83,6 +83,9 @@ class WebSocketManager(QWebSocket):
         # Per-type message handlers: msg_type -> list of callables(dict)
         self._type_handlers: Dict[str, List[Callable]] = {}
 
+        # Binary frame handlers: 4-byte magic -> list of callables(bytes)
+        self._binary_handlers: Dict[bytes, List[Callable]] = {}
+
         # Commands queued while disconnected: (timestamp, json_string)
         self._pending_commands: List[tuple] = []
 
@@ -90,6 +93,7 @@ class WebSocketManager(QWebSocket):
         self.disconnected.connect(self.on_disconnected)
         self.error.connect(self.on_error)
         self.textMessageReceived.connect(self._dispatch_message)
+        self.binaryMessageReceived.connect(self._dispatch_binary)
         self.pong.connect(self._on_pong)
 
         self.connect_to_server()
@@ -112,6 +116,29 @@ class WebSocketManager(QWebSocket):
             handlers.remove(handler)
             if not handlers:
                 del self._type_handlers[msg_type]
+
+    def register_binary_handler(self, magic: bytes, handler: Callable) -> None:
+        """Register a handler for binary frames that start with the given 4-byte magic."""
+        handlers = self._binary_handlers.setdefault(magic, [])
+        if handler not in handlers:
+            handlers.append(handler)
+
+    def unregister_binary_handler(self, magic: bytes, handler: Callable) -> None:
+        handlers = self._binary_handlers.get(magic)
+        if handlers and handler in handlers:
+            handlers.remove(handler)
+            if not handlers:
+                del self._binary_handlers[magic]
+
+    def _dispatch_binary(self, message) -> None:
+        """Route a binary frame to the handlers registered for its magic."""
+        self._last_rx = time.monotonic()
+        data = bytes(message)
+        for handler in self._binary_handlers.get(data[:4], ()):
+            try:
+                handler(data)
+            except Exception as e:
+                self.logger.error(f"Binary handler error: {e}")
 
     def _dispatch_message(self, message: str) -> None:
         """Parse an incoming message once and route it to registered handlers."""

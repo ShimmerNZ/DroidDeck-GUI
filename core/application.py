@@ -24,6 +24,7 @@ from widgets.servo_screen import ServoConfigScreen
 from widgets.controller_screen import ControllerConfigScreen
 from widgets.settings_screen import SettingsScreen
 from widgets.scene_screen import SceneScreen
+from widgets.lidar_screen import LidarScreen
 from widgets.splash_screen import DroidDeckSplashScreen, show_shutdown_splash
 from widgets.voltage_alert_splash import VoltageAlarmMonitor
 from threads.steamdeck import SteamDeckControllerThread
@@ -171,6 +172,8 @@ class DroidDeckApplication(QMainWindow):
         QApplication.processEvents()
         self.camera_screen = CameraFeedScreen(self.websocket)
         QApplication.processEvents()
+        self.lidar_screen = LidarScreen(self.websocket)
+        QApplication.processEvents()
         self.health_screen = HealthScreen(self.websocket)
         QApplication.processEvents()
         self.servo_screen = ServoConfigScreen(self.websocket)
@@ -183,11 +186,14 @@ class DroidDeckApplication(QMainWindow):
 
         self.stack.addWidget(self.home_screen)
         self.stack.addWidget(self.camera_screen)
+        self.stack.addWidget(self.lidar_screen)
         self.stack.addWidget(self.health_screen)
         self.stack.addWidget(self.servo_screen)
         self.stack.addWidget(self.controller_screen)
         self.stack.addWidget(self.settings_screen)
         self.stack.addWidget(self.scene_screen)
+
+        self.lidar_screen.set_camera_source(self.camera_screen)
 
         if hasattr(self.scene_screen, 'scenes_updated') and hasattr(self.home_screen, 'connect_scene_screen_signals'):
             self.home_screen.connect_scene_screen_signals(self.scene_screen)
@@ -355,12 +361,13 @@ class DroidDeckApplication(QMainWindow):
     def _setup_navigation(self):
         """Setup navigation bar with screen buttons using themed icons"""
         self.nav_bar = QHBoxLayout()
-        self.nav_bar.addSpacing(100)
+        self.nav_bar.addSpacing(76)
         
         # Define navigation buttons
         navigation_items = [
             ("Home", self.home_screen, "home"),
             ("Camera", self.camera_screen, "camera"),
+            ("Lidar", self.lidar_screen, "lidar"),
             ("Health", self.health_screen, "health"),
             ("ServoConfig", self.servo_screen, "servo"),
             ("Controller", self.controller_screen, "controller"),
@@ -398,12 +405,12 @@ class DroidDeckApplication(QMainWindow):
             
             # Add spacing between navigation buttons (but not after the last one)
             if i < len(navigation_items) - 1:
-                self.nav_bar.addSpacing(5)  # Adjust this value for more/less spacing
+                self.nav_bar.addSpacing(2)
             
             self.nav_buttons[name] = {"button": btn, "icon_key": icon_key}
         
         # Add more space before the failsafe button
-        self.nav_bar.addSpacing(60)  # Larger space before failsafe
+        self.nav_bar.addSpacing(36)
         
         # Failsafe button with proper sizing and styling
         self.failsafe_button = QPushButton()
@@ -416,23 +423,11 @@ class DroidDeckApplication(QMainWindow):
         
         # Style the failsafe button properly
         self.failsafe_button.setStyleSheet("""
-            QPushButton {
+            QPushButton, QPushButton:hover, QPushButton:pressed, QPushButton:checked {
                 background-color: transparent;
-                border: 2px solid rgba(255, 0, 0, 0.3);
-                border-radius: 8px;
+                border: none;
                 padding: 0px;
                 margin: 0px;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 0, 0, 0.1);
-                border-color: rgba(255, 0, 0, 0.5);
-            }
-            QPushButton:pressed, QPushButton:checked {
-                background-color: rgba(255, 0, 0, 0.2);
-                border-color: rgba(255, 0, 0, 0.8);
-            }
-            QPushButton:checked {
-                background-color: rgba(255, 0, 0, 0.3);
             }
         """)
         
@@ -597,6 +592,7 @@ class DroidDeckApplication(QMainWindow):
         """Handle application shutdown with shutdown splash"""
         # Show shutdown splash
         self.shutdown_splash = show_shutdown_splash()
+        self.shutdown_splash.move(self.geometry().topLeft())
         QApplication.processEvents()
         
         if hasattr(self, 'logger'):
