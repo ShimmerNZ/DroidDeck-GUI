@@ -410,7 +410,7 @@ class DroidDeckApplication(QMainWindow):
             self.nav_buttons[name] = {"button": btn, "icon_key": icon_key}
         
         # Add more space before the failsafe button
-        self.nav_bar.addSpacing(36)
+        self.nav_bar.addSpacing(6)
         
         # Failsafe button with proper sizing and styling
         self.failsafe_button = QPushButton()
@@ -434,7 +434,7 @@ class DroidDeckApplication(QMainWindow):
         self.failsafe_button.clicked.connect(self._toggle_failsafe)
         
         self.nav_bar.addWidget(self.failsafe_button)
-        self.nav_bar.addSpacing(40)
+        self.nav_bar.addSpacing(70)
 
 
     def _setup_layout(self):
