@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-SENSOR_POS = np.array([0.0, 0.5, 0.22])
+SENSOR_POS = np.array([0.0, 0.38, 0.22])
 MAX_RANGE = 15.0
 DOME_HALF_ANGLE_DEG = 96.0
 CAMERA_HALF_FOV_DEG = 35.0

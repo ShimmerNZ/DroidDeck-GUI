@@ -39,10 +39,11 @@ HEADER_HEIGHT = 30
 HEADER_INSET = 8
 
 MODEL_PATH = "resources/models/robot.obj"
-MODEL_UP_AXIS = "y"
-MODEL_YAW_DEG = 0.0
+MODEL_UP_AXIS = "z"
+MODEL_YAW_DEG = 180.0
 MODEL_MAX_TRIANGLES = 3000
-MODEL_MAX_TRIANGLES_GL = 60000
+MODEL_MAX_TRIANGLES_GL = 200000
+MODEL_DEFAULT_COLOUR = (0.78, 0.67, 0.43)
 USE_OPENGL = True
 
 FRAME_INTERVAL_MS = 16
@@ -60,7 +61,7 @@ VIEW_PRESETS = {
     "eye": {"pitch": 0.12},
 }
 VIEW_ORDER = ("chase", "top", "eye")
-HEAD_POS = np.array([0.0, 0.15, 1.15])
+HEAD_POS = np.array([0.0, 0.15, 0.82])
 CAMERA_HFOV_DEG = 66.0
 ATTENTION_MATCH_DEG = 12.0
 ATTENTION_TIMEOUT_S = 1.5
@@ -82,7 +83,7 @@ TRACK_TIMEOUT_S = 1.0
 TRAIL_SECONDS = 3.0
 POP_SECONDS = 0.8
 GLOW_DOWNSAMPLE = 4
-GLOW_STRENGTH = 0.35
+GLOW_STRENGTH = 0.15
 TIMING_LOG_INTERVAL_S = 3.0
 
 PALETTES = {
@@ -103,11 +104,27 @@ PALETTE = PALETTES["cyan"]
 BLIND_COL = (232, 64, 42)
 
 
+def _read_mtl_colours(path: str) -> Dict[str, tuple]:
+    """Material name -> diffuse colour (Kd, 0-1) from an MTL file."""
+    colours, name = {}, None
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            parts = line.strip().split(None, 1)
+            if not parts:
+                continue
+            if parts[0] == "newmtl" and len(parts) > 1:
+                name = parts[1].strip()
+            elif parts[0] == "Kd" and name is not None and len(parts) > 1:
+                colours[name] = tuple(float(x) for x in parts[1].split()[:3])
+    return colours
+
+
 def load_obj_mesh(path: str, max_triangles: int = MODEL_MAX_TRIANGLES) -> Optional[Dict]:
-    """Load an OBJ, convert to the robot frame, scale to metres and simplify."""
+    """Load an OBJ with its material colours, convert to the robot frame, scale to metres and simplify."""
     if not os.path.exists(path):
         return None
-    verts, faces = [], []
+    verts, faces, face_mtl, names = [], [], [], [None]
+    current, mtllib = 0, None
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith("v "):
@@ -120,8 +137,24 @@ def load_obj_mesh(path: str, max_triangles: int = MODEL_MAX_TRIANGLES) -> Option
                     idx.append(i - 1 if i > 0 else len(verts) + i)
                 for k in range(1, len(idx) - 1):
                     faces.append((idx[0], idx[k], idx[k + 1]))
+                    face_mtl.append(current)
+            elif line.startswith("usemtl"):
+                name = line[6:].strip()
+                if name not in names:
+                    names.append(name)
+                current = names.index(name)
+            elif line.startswith("mtllib") and mtllib is None:
+                mtllib = line[6:].strip()
     if not verts or not faces:
         return None
+
+    table = {}
+    for candidate in ([os.path.join(os.path.dirname(path), mtllib)] if mtllib else []) + [os.path.splitext(path)[0] + ".mtl"]:
+        if os.path.exists(candidate):
+            table = _read_mtl_colours(candidate)
+            break
+    palette = np.array([table.get(n, MODEL_DEFAULT_COLOUR) if n else MODEL_DEFAULT_COLOUR for n in names])
+    colours = palette[np.array(face_mtl, dtype=np.int64)]
 
     v = np.array(verts, dtype=np.float64)
     if MODEL_UP_AXIS == "y":
@@ -152,8 +185,10 @@ def load_obj_mesh(path: str, max_triangles: int = MODEL_MAX_TRIANGLES) -> Option
         inverse = inverse.reshape(-1)
         nf = inverse[f]
         ok = (nf[:, 0] != nf[:, 1]) & (nf[:, 1] != nf[:, 2]) & (nf[:, 0] != nf[:, 2])
-        nf = np.unique(np.sort(nf[ok], axis=1), axis=0)
-        v, f = v[first], nf
+        nf, nc = nf[ok], colours[ok]
+        _, rows = np.unique(np.sort(nf, axis=1), axis=0, return_index=True)
+        rows = np.sort(rows)
+        v, f, colours = v[first], nf[rows], nc[rows]
         cell *= 1.4
 
     a, b, cc = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
@@ -162,7 +197,7 @@ def load_obj_mesh(path: str, max_triangles: int = MODEL_MAX_TRIANGLES) -> Option
     valid = norm > 1e-12
     light = np.array([0.4, -0.6, 0.8]) / np.linalg.norm([0.4, -0.6, 0.8])
     shade = 0.35 + 0.65 * np.abs((n[valid] / norm[valid, None]) @ light)
-    return {"vertices": v, "faces": f[valid], "shade": shade}
+    return {"vertices": v, "faces": f[valid], "shade": shade, "colours": colours[valid]}
 
 
 def _rgb(c, alpha: int = 255) -> QColor:
@@ -869,6 +904,7 @@ class LidarView(LidarSceneMixin, QWidget):
                            QColor(225, 175, 70, 250), QColor(196, 140, 40, 250), rim)
         else:
             v, f, shade = self.model["vertices"], self.model["faces"], self.model["shade"]
+            colours = self.model["colours"] * 255
             sx, sy, z, _, valid = self._project(cam, v)
             tri_ok = valid[f].all(axis=1)
             order = np.argsort(-z[f].mean(axis=1))
@@ -878,7 +914,8 @@ class LidarView(LidarSceneMixin, QWidget):
                     continue
                 a, b, c = f[i]
                 s = shade[i]
-                painter.setBrush(QColor(int(200 * s), int(170 * s), int(110 * s)))
+                r, g, bl = colours[i] * s
+                painter.setBrush(QColor(int(r), int(g), int(bl)))
                 painter.drawPolygon(QPolygonF([QPointF(sx[a], sy[a]), QPointF(sx[b], sy[b]), QPointF(sx[c], sy[c])]))
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
@@ -924,7 +961,7 @@ VERTEX_STRIDE = 32
 MESH_STRIDE = 40
 
 BLOOM = True
-BLOOM_STRENGTH = 0.9
+BLOOM_STRENGTH = 0.5
 FLOOR_REFLECTION = True
 REFLECTION_DIM = 0.22
 CAMERA_CONE_LENGTH_M = 6.5
@@ -1200,7 +1237,8 @@ class LidarGLView(LidarSceneMixin, QOpenGLWidget):
             for i in range(3):
                 np.add.at(vn, f[:, i], fn)
             vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-9)
-            meshes.append(_mesh_verts(v[f].reshape(-1, 3), vn[f].reshape(-1, 3), (0.78, 0.67, 0.43, 1.0)))
+            rgba = np.concatenate([self.model["colours"], np.ones((len(f), 1))], axis=1)
+            meshes.append(_mesh_verts(v[f].reshape(-1, 3), vn[f].reshape(-1, 3), np.repeat(rgba, 3, axis=0)))
         sp = SENSOR_POS
         m, e = _box_mesh((sp[0] - 0.05, sp[1] - 0.05, sp[2] - 0.06), (sp[0] + 0.05, sp[1] + 0.05, sp[2] + 0.06),
                          (0.08, 0.08, 0.09, 1.0), (95 / 255, 211 / 255, 1.0, 0.9))
