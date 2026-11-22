@@ -4,7 +4,9 @@
 WALL-E Control System - Simulated 3D Lidar Scene
 
 Raycasts a convention-hall corner the way a forward-facing Unitree L2 sees it,
-so the Lidar screen can be developed and demonstrated without hardware.
+then thins the points to one per 5 cm cube as the backend does before
+streaming, so the Lidar screen can be developed and demonstrated without
+hardware and looks the same as it will with the real sensor.
 Coordinates are metres in the robot frame: x right, y forward, z up.
 """
 
@@ -13,11 +15,12 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-SENSOR_POS = np.array([0.0, 0.38, 0.22])
+SENSOR_POS = np.array([0.0, 0.5, 0.22])
 MAX_RANGE = 15.0
 DOME_HALF_ANGLE_DEG = 96.0
 CAMERA_HALF_FOV_DEG = 35.0
 CAMERA_MAX_RANGE = 9.0
+THIN_VOXEL_M = 0.05
 
 STATIC_BOXES = [
     ((-7.2, -4.0, 0.0), (-7.0, 10.0, 3.0)),
@@ -157,6 +160,10 @@ class LidarSimulator:
         keep = (best < MAX_RANGE) & (best > 0.05)
         points = o + d[keep] * best[keep, None]
         owner = owner[keep]
+        if len(points):
+            _, first = np.unique(np.floor(points / THIN_VOXEL_M).astype(np.int32), axis=0, return_index=True)
+            first = np.sort(first)
+            points, owner = points[first], owner[first]
 
         detections = []
         half_fov = math.radians(CAMERA_HALF_FOV_DEG)
