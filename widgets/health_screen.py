@@ -421,9 +421,9 @@ class HealthScreen(BaseScreen):
         tiles = QGridLayout()
         tiles.setSpacing(8)
         self.power_values = {}
-        for index, (key, caption) in enumerate((("current_tracks", "TRACKS"),
-                                                ("current_total", "TOTAL"),
-                                                ("current_electronics", "ELECTRONICS"),
+        for index, (key, caption) in enumerate((("current_tracks", "TRACKS PEAK"),
+                                                ("current_total", "TOTAL PEAK"),
+                                                ("current_electronics", "ELECTRONICS PEAK"),
                                                 ("sabertooth_temp", "SABERTOOTH"))):
             tile = self._make_tile()
             tile_layout = QVBoxLayout(tile)
@@ -810,6 +810,7 @@ class HealthScreen(BaseScreen):
                 self.current_a2_data.popleft()
 
             self._update_graphs()
+            self._update_peak_currents()
 
         except Exception as e:
             self.logger.error(f"Telemetry processing failed: {e}")
@@ -817,6 +818,26 @@ class HealthScreen(BaseScreen):
     # ------------------------------------------------------------------
     # Display updates
     # ------------------------------------------------------------------
+
+    def _update_peak_currents(self):
+        """Peak track, total and electronics current over the graph window"""
+        if not self.current_a1_data or self._currents_pending():
+            return
+        green = theme_manager.get("green")
+        tracks_peak = max(self.current_a1_data)
+        total_peak = max(self.current_a2_data)
+        electronics_peak = max(
+            max(total - tracks, 0.0)
+            for tracks, total in zip(self.current_a1_data, self.current_a2_data)
+        )
+        self._set_value(self.power_values["current_tracks"], f"{tracks_peak:.1f} A", green)
+        self._set_value(self.power_values["current_total"], f"{total_peak:.1f} A", green)
+        self._set_value(self.power_values["current_electronics"], f"{electronics_peak:.1f} A", green)
+
+    def _currents_pending(self) -> bool:
+        """True until both currents have had at least one valid reading"""
+        return (self._last_graph_values["tracks"] is None
+                or self._last_graph_values["total"] is None)
 
     def _pack_state(self, voltage: float):
         """Return (state text, colour) for a pack voltage"""
@@ -880,16 +901,7 @@ class HealthScreen(BaseScreen):
             if value is not None and value != 0.0:
                 self._last_system_stats[key] = value
 
-        tracks = self._last_system_stats["current_tracks"]
-        total = self._last_system_stats["current_total"]
         sabertooth = self._last_system_stats["sabertooth_temp"]
-        if tracks is not None:
-            self._set_value(self.power_values["current_tracks"], f"{tracks:.1f} A", green)
-        if total is not None:
-            self._set_value(self.power_values["current_total"], f"{total:.1f} A", green)
-        if tracks is not None and total is not None:
-            electronics = max(total - tracks, 0.0)
-            self._set_value(self.power_values["current_electronics"], f"{electronics:.1f} A", green)
         if sabertooth is not None:
             self._set_value(self.power_values["sabertooth_temp"], f"{sabertooth:.1f} °C", green)
 
